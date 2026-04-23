@@ -382,3 +382,70 @@ async def test_licitacoes_e_download_raises_credentials_required():
     with pytest.raises(LicitacoesECredentialsRequired):
         await client.download_edital_pdf(edital_id="x")
     assert await client.health_check() is False
+
+
+# ---------- regressions: reviewed bugs fixed after merge ----------
+
+
+@pytest.mark.anyio
+async def test_stream_arquivo_closes_response_on_http_error():
+    """Regression: raise_for_status() in stream_arquivo used to leak the
+    streamed response when the server returned a non-2xx status."""
+    closed: list[bool] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="boom")
+
+    transport = httpx.MockTransport(handler)
+
+    # Wrap transport so we can observe aclose() on the response.
+    class _Recorder(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):  # type: ignore[override]
+            resp = await transport.handle_async_request(request)
+            original_aclose = resp.aclose
+
+            async def _track():
+                closed.append(True)
+                await original_aclose()
+
+            resp.aclose = _track  # type: ignore[method-assign]
+            return resp
+
+    portal = httpx.AsyncClient(
+        transport=_Recorder(), base_url="https://pncp.gov.br/api/pncp"
+    )
+    client = PncpClient(portal_client=portal)
+    try:
+        with pytest.raises(httpx.HTTPStatusError):
+            await client.stream_arquivo("https://pncp.gov.br/api/pncp/whatever")
+    finally:
+        await client.aclose()
+
+    assert closed, "stream_arquivo must aclose() the response on HTTP error"
+
+
+@pytest.mark.anyio
+async def test_download_edital_skips_arquivo_with_empty_url(db_session, tmp_path):
+    """Regression: a PncpArquivo with empty url raised ValueError, aborting
+    the batch and losing progress on previously successful files."""
+    arquivos_with_empty = [
+        {**SAMPLE_ARQUIVOS[0], "url": "", "uri": ""},  # empty url -> ValueError
+        SAMPLE_ARQUIVOS[1],                             # valid -> must still be saved
+    ]
+
+    licitacao = await _seed_licitacao(db_session)
+    client = _make_pncp_client(_portal_transport(arquivos=arquivos_with_empty))
+    storage = LocalStorage(tmp_path)
+
+    result = await download_edital_for_licitacao(
+        db_session, licitacao_id=licitacao.id, pncp=client, storage=storage
+    )
+    await client.aclose()
+
+    # Bad arquivo skipped, good one persisted + committed.
+    assert result.status == "completed"
+    assert result.new_anexos == 1
+    assert result.anexos_count == 1
+
+    anexos = (await db_session.execute(select(AnexoEdital))).scalars().all()
+    assert {a.sequencial_documento for a in anexos} == {2}
