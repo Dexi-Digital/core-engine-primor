@@ -77,6 +77,34 @@ async def test_render_digest_html_contains_object_and_dashboard_link(
 
 
 @pytest.mark.asyncio
+async def test_render_digest_html_url_encodes_search_with_spaces_and_accents(
+    db_session: AsyncSession,
+) -> None:
+    seeded = await _seed_licitacoes(
+        db_session,
+        [_row(external_id="ext-1", objeto="Obra teste", uf="SP")],
+    )
+    query = await create_saved_query(
+        db_session,
+        nome="teste url",
+        user_email="x@y.com",
+        recipients=["x@y.com"],
+        uf="SP",
+        search="pavimentação asfáltica",
+    )
+
+    html = render_digest_html(
+        query, seeded, public_base_url="https://motorcentral.example"
+    )
+
+    # Must contain URL-encoded search, not raw spaces/accents.
+    # `quote()` encodes space as %20 and ã as %C3%A3, ç as %C3%A7.
+    assert "search=pavimenta%C3%A7%C3%A3o%20asf%C3%A1ltica" in html
+    # And the raw broken form must NOT appear.
+    assert "search=pavimentação asfáltica" not in html
+
+
+@pytest.mark.asyncio
 async def test_dispatch_sends_email_and_advances_cursor(
     db_session: AsyncSession,
 ) -> None:

@@ -17,6 +17,7 @@ import logging
 from collections.abc import Iterable
 from datetime import datetime
 from html import escape
+from urllib.parse import quote
 
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -119,11 +120,13 @@ def render_digest_html(
         )
 
     dashboard_url = f"{public_base_url.rstrip('/')}/licitacoes"
+    # URL-encode UF / search -- search frequently contains spaces, accents
+    # or ampersands (pt-BR procurement text) and would otherwise break links.
     if query.uf:
-        dashboard_url += f"?uf={query.uf}"
+        dashboard_url += f"?uf={quote(query.uf, safe='')}"
     if query.search:
         sep = "&" if "?" in dashboard_url else "?"
-        dashboard_url += f"{sep}search={query.search}"
+        dashboard_url += f"{sep}search={quote(query.search, safe='')}"
 
     return f"""
     <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 720px; margin: 0 auto; color: #0f172a;">
