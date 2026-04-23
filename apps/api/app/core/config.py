@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     resend_from_email: str = Field(default="Motor Central <boletins@motorcentral.dev>")
     public_base_url: str = Field(default="http://localhost:3000")
 
+    # Edital storage root (D.4). Local filesystem in dev, mounted volume
+    # in docker, and replaced by a MinIO/S3 backend when we drop the
+    # LocalStorage impl for a remote one.
+    editais_storage_path: str = Field(default="/tmp/motor-central/editais")
+
 
 @lru_cache
 def get_settings() -> Settings:

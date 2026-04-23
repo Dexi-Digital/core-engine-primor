@@ -13,6 +13,7 @@ crawling for a full window.
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
@@ -23,6 +24,9 @@ from tenacity import retry, stop_after_attempt, wait_exponential
 from app.integrations.base import IntegrationClient
 
 PNCP_BASE_URL = "https://pncp.gov.br/api/consulta"
+# The consulta API doesn't list documents; the separate portal API does.
+# Pattern (verified live 2026-04): https://pncp.gov.br/api/pncp/v1/orgaos/{cnpj}/compras/{ano}/{seq}/arquivos
+PNCP_PORTAL_BASE_URL = "https://pncp.gov.br/api/pncp"
 
 # Subset of PNCP modalidades (see PNCP manual section "Tabelas de Dominio").
 # Kept as a tuple so consumers can iterate when scraping a whole window.
@@ -140,6 +144,31 @@ class PncpPage:
     empty: bool
 
 
+@dataclass(slots=True)
+class PncpArquivo:
+    """One document attached to a contratacao (edital, projeto, termo etc)."""
+
+    sequencial_documento: int
+    titulo: str | None
+    tipo_documento_descricao: str | None
+    url: str
+    status_ativo: bool
+    data_publicacao_pncp: str | None
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> PncpArquivo:
+        return cls(
+            sequencial_documento=int(data.get("sequencialDocumento") or 0),
+            titulo=data.get("titulo"),
+            tipo_documento_descricao=(
+                data.get("tipoDocumentoDescricao") or data.get("tipoDocumentoNome")
+            ),
+            url=data.get("url") or data.get("uri") or "",
+            status_ativo=bool(data.get("statusAtivo", True)),
+            data_publicacao_pncp=data.get("dataPublicacaoPncp"),
+        )
+
+
 def _as_float(value: Any) -> float | None:
     if value is None:
         return None
@@ -165,20 +194,34 @@ class PncpClient(IntegrationClient):
         base_url: str = PNCP_BASE_URL,
         timeout: float = 30.0,
         client: httpx.AsyncClient | None = None,
+        portal_base_url: str = PNCP_PORTAL_BASE_URL,
+        portal_client: httpx.AsyncClient | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
+        self._portal_base_url = portal_base_url.rstrip("/")
         self._timeout = timeout
         self._client = client
+        self._portal_client = portal_client
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
             self._client = httpx.AsyncClient(base_url=self._base_url, timeout=self._timeout)
         return self._client
 
+    async def _get_portal_client(self) -> httpx.AsyncClient:
+        if self._portal_client is None:
+            self._portal_client = httpx.AsyncClient(
+                base_url=self._portal_base_url, timeout=self._timeout
+            )
+        return self._portal_client
+
     async def aclose(self) -> None:
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+        if self._portal_client is not None:
+            await self._portal_client.aclose()
+            self._portal_client = None
 
     async def health_check(self) -> bool:
         try:
@@ -279,3 +322,70 @@ class PncpClient(IntegrationClient):
             if max_paginas and pagina >= max_paginas:
                 return
             pagina += 1
+
+    @retry(
+        stop=stop_after_attempt(4),
+        wait=wait_exponential(multiplier=1, max=10),
+        reraise=True,
+    )
+    async def list_arquivos(
+        self, *, cnpj: str, ano: int, sequencial: int
+    ) -> list[PncpArquivo]:
+        """List the documents PNCP has stored for this contratacao.
+
+        Returns an empty list when PNCP responds 204 or 404. Other errors
+        bubble up so the caller can fall back to a different portal.
+        """
+        client = await self._get_portal_client()
+        path = f"/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}/arquivos"
+        resp = await client.get(path)
+        if resp.status_code in (204, 404):
+            return []
+        resp.raise_for_status()
+        body = resp.json() or []
+        return [PncpArquivo.from_api(d) for d in body if d]
+
+    async def stream_arquivo(self, url: str) -> tuple[AsyncIterator[bytes], str, str | None]:
+        """Stream one arquivo; returns `(iterator, filename, content_type)`.
+
+        The caller is responsible for closing the underlying response via
+        the `aclose` method on the returned iterator's `.response`. To keep
+        the API simple we return a lightweight async iterator that owns
+        the response and closes it on exhaustion / exception.
+        """
+        client = await self._get_portal_client()
+        # We must open a streaming request; httpx exposes `.stream` on the
+        # client which returns an async context manager. We wrap it in an
+        # iterator so the service layer can treat it as a generic source.
+        req = client.build_request("GET", url)
+        resp = await client.send(req, stream=True)
+        resp.raise_for_status()
+        filename = _extract_filename(resp.headers) or "anexo.pdf"
+        content_type = resp.headers.get("content-type")
+
+        async def _iter() -> AsyncIterator[bytes]:
+            try:
+                async for chunk in resp.aiter_bytes():
+                    yield chunk
+            finally:
+                await resp.aclose()
+
+        return _iter(), filename, content_type
+
+
+def _extract_filename(headers: httpx.Headers) -> str | None:
+    """Pull a filename out of a Content-Disposition header (best-effort)."""
+    raw = headers.get("content-disposition")
+    if not raw:
+        return None
+    # Very small parser: look for filename="..." or filename=...
+    marker = "filename="
+    idx = raw.lower().find(marker)
+    if idx == -1:
+        return None
+    value = raw[idx + len(marker) :].strip()
+    if value.startswith('"'):
+        end = value.find('"', 1)
+        if end > 0:
+            return value[1:end]
+    return value.split(";")[0].strip() or None

@@ -14,7 +14,9 @@ Chaves de acesso vivem em variáveis de ambiente; **nunca no código**.
 | `onedrive`      | OneDrive / SharePoint             | Graph API    | A, B, C |
 | `easyjur`       | EasyJur (jurídico)                | API          | C |
 | `solides`       | Sólides (R&S)                     | API          | A (avaliação) |
-| `pncp`          | PNCP (Consulta v1)                | API pública  | D |
+| `pncp`          | PNCP (Consulta v1 + Portal)       | API pública  | D |
+| `comprasnet`    | ComprasNet (SIASG legacy)         | Scraping HTML| D (fallback) |
+| `licitacoes_e`  | Licitações-e (Banco do Brasil)    | Scraping+SSO | D (fallback) |
 | `conlicitacao`  | Conlicitação + Diários Oficiais   | Scraping     | D |
 | `resend`        | Resend (email transacional)       | API          | D |
 | `whatsapp`      | WhatsApp Business API             | API          | A, E |
@@ -56,6 +58,47 @@ celery -A worker.main call worker.tasks.licitacoes.crawler_pncp \
 
 Idempotência: rows são upsertadas por `external_id = cnpj-ano-sequencial`
 (`ON CONFLICT` no Postgres). Rodar o mesmo comando N vezes não duplica dados.
+
+### Download de editais (D.4)
+
+Além da Consulta, o adapter usa o **Portal PNCP** para listar e baixar os
+arquivos publicados por licitação. Pattern confirmado em 2026-04:
+
+- `GET https://pncp.gov.br/api/pncp/v1/orgaos/{cnpj}/compras/{ano}/{seq}/arquivos`
+  → lista JSON `[{ sequencialDocumento, titulo, tipoDocumentoDescricao, url, ... }]`
+- `GET {url}` → PDF bruto com `Content-Disposition: attachment; filename="..."`
+
+A base do Portal é configurável via `PNCP_PORTAL_BASE_URL` (default
+`https://pncp.gov.br/api/pncp`). Arquivos baixados vão para
+`editais_storage_path` (`/tmp/motor-central/editais` em dev) via
+`LocalStorage`; troque por um backend MinIO/S3 em produção implementando
+o `Protocol` `EditaisStorage` em `app/modules/licitacoes/storage.py`.
+
+## ComprasNet / SIASG legacy (scaffold — fallback)
+
+Adapter: `app.integrations.comprasnet.client.ComprasnetClient`.
+Base URL: `https://comprasnet.gov.br`.
+
+A página `/ConsultaLicitacoes/download/download_editais_detalhe.asp?coduasg=...&modprp=...&numprp=...`
+é HTML puro e pode ser lida sem captcha. Já o download do PDF em si
+(`/ConsultaLicitacoes/Download/Download.asp`) está protegido por
+captcha javascript (função `ValidaCodigo()`), portanto o adapter levanta
+`ComprasnetCaptchaRequired` quando chamado para baixar o PDF. A
+estratégia atual é **cair no PNCP primeiro** (ver D.4 acima) e deixar
+este cliente para metadata e para uma próxima iteração com Playwright
+ou solver humano-no-loop.
+
+## Licitações-e Banco do Brasil (scaffold — fallback)
+
+Adapter: `app.integrations.licitacoes_e.client.LicitacoesEClient`.
+Base URL: `https://www.licitacoes-e.com.br`.
+
+Portal ASP.NET pesado em JS, com sessão autenticada (CPF + senha de um
+fornecedor cadastrado no BB) para acessar o download dos editais não-públicos.
+Este adapter é um **esqueleto**: o construtor aceita `cpf`/`senha`
+prevendo um flow Playwright futuro, mas qualquer operação real levanta
+`LicitacoesECredentialsRequired`. Callers devem fazer fallback para
+PNCP enquanto o flow não estiver implementado.
 
 ## Resend (implementado)
 

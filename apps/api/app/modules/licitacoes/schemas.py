@@ -88,3 +88,40 @@ class BoletimDispatchSummary(BaseModel):
     skipped_empty: int
     failed: int
     results: list[BoletimDispatchResult]
+
+
+class AnexoEditalRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    sequencial_documento: int
+    titulo: str | None
+    tipo_documento: str | None
+    source_url: str
+    filename: str
+    size_bytes: int | None
+    content_type: str | None
+    downloaded_at: datetime
+
+
+class EditalRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    licitacao_id: int
+    source: str
+    status: str
+    anexos_count: int
+    error_message: str | None
+    created_at: datetime
+    updated_at: datetime
+    anexos: list[AnexoEditalRead] = []
+
+
+class EditalDownloadResult(BaseModel):
+    licitacao_id: int
+    source: str
+    status: str  # "completed" | "failed" | "empty"
+    anexos_count: int
+    new_anexos: int
+    error_message: str | None = None
