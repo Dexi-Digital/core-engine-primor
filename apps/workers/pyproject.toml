@@ -1,0 +1,31 @@
+[project]
+name = "core-engine-primor-workers"
+version = "0.1.0"
+description = "Motor Central ZAG/PRIMOR - Celery workers (scrapers, OCR, RPA)."
+requires-python = ">=3.11"
+dependencies = [
+    "celery>=5.4.0",
+    "redis>=5.1.1",
+    "httpx>=0.27.2",
+    "pydantic>=2.9.0",
+    "pydantic-settings>=2.6.0",
+    "structlog>=24.4.0",
+    "tenacity>=9.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.3",
+    "ruff>=0.7.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["worker*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"

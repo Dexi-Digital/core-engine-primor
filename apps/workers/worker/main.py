@@ -1,0 +1,44 @@
+"""Celery app entrypoint.
+
+Queues:
+    - `dp_sesmt`      : varredura OCR, onboarding sync.
+    - `manutencao`    : RPA despachante, OCR manuscrito.
+    - `financeiro`    : OCR/XML de NFs, conciliacao.
+    - `licitacoes`    : scrapers B2G (Conlicitacao, PNCP).
+    - `ia`            : reconhecimento facial, LLM compras WhatsApp.
+"""
+from __future__ import annotations
+
+import os
+
+from celery import Celery
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+
+celery_app = Celery(
+    "primor",
+    broker=REDIS_URL,
+    backend=REDIS_URL,
+    include=[
+        "worker.tasks.dp_sesmt",
+        "worker.tasks.manutencao",
+        "worker.tasks.financeiro",
+        "worker.tasks.licitacoes",
+        "worker.tasks.ia",
+    ],
+)
+
+celery_app.conf.update(
+    task_default_queue="default",
+    task_routes={
+        "worker.tasks.dp_sesmt.*": {"queue": "dp_sesmt"},
+        "worker.tasks.manutencao.*": {"queue": "manutencao"},
+        "worker.tasks.financeiro.*": {"queue": "financeiro"},
+        "worker.tasks.licitacoes.*": {"queue": "licitacoes"},
+        "worker.tasks.ia.*": {"queue": "ia"},
+    },
+    task_acks_late=True,
+    worker_prefetch_multiplier=1,
+    timezone="America/Sao_Paulo",
+    enable_utc=True,
+)
