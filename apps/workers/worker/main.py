@@ -42,3 +42,23 @@ celery_app.conf.update(
     timezone="America/Sao_Paulo",
     enable_utc=True,
 )
+
+# Celery Beat schedule. Boletins 3x/dia (07h, 13h, 19h America/Sao_Paulo).
+# Keep cron expressions here (not in code) so infra can tune cadence without
+# redeploy. To run beat: `celery -A worker.main beat -l info`.
+from celery.schedules import crontab  # noqa: E402
+
+celery_app.conf.beat_schedule = {
+    "boletins-morning": {
+        "task": "worker.tasks.licitacoes.dispatch_boletins",
+        "schedule": crontab(hour="7", minute="0"),
+    },
+    "boletins-midday": {
+        "task": "worker.tasks.licitacoes.dispatch_boletins",
+        "schedule": crontab(hour="13", minute="0"),
+    },
+    "boletins-evening": {
+        "task": "worker.tasks.licitacoes.dispatch_boletins",
+        "schedule": crontab(hour="19", minute="0"),
+    },
+}

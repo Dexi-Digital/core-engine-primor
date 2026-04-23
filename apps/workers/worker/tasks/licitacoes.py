@@ -61,3 +61,39 @@ async def _run(
 @celery_app.task(name="worker.tasks.licitacoes.analise_saude_municipal")
 def analise_saude_municipal(municipio_id: str) -> dict[str, object]:
     return {"stub": True, "municipio_id": municipio_id}
+
+
+@celery_app.task(name="worker.tasks.licitacoes.dispatch_boletins")
+def dispatch_boletins(saved_query_id: int | None = None) -> dict[str, object]:
+    """Despacha boletins por email. Rodada por Celery beat 3x/dia.
+
+    Se `saved_query_id` for informado, processa apenas essa query (util para
+    reenvio manual). Caso contrario, itera todas as queries ativas.
+    """
+    return asyncio.run(_run_boletins(saved_query_id))
+
+
+async def _run_boletins(saved_query_id: int | None) -> dict[str, object]:
+    try:
+        from app.core.config import get_settings
+        from app.core.db import SessionLocal
+        from app.integrations.resend.client import ResendClient
+        from app.modules.licitacoes.boletins import dispatch_boletins as dispatch_service
+    except ImportError as exc:  # pragma: no cover
+        return {"error": f"API package not available in worker: {exc}"}
+
+    settings = get_settings()
+    if not settings.resend_api_key:
+        return {"error": "RESEND_API_KEY not configured; skipping boletins dispatch"}
+
+    async with SessionLocal() as db:
+        resend = ResendClient(api_key=settings.resend_api_key)
+        try:
+            summary = await dispatch_service(
+                db,
+                resend,
+                saved_query_ids=[saved_query_id] if saved_query_id else None,
+            )
+        finally:
+            await resend.aclose()
+    return summary.model_dump()

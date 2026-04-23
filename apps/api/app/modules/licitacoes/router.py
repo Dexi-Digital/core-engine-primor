@@ -13,13 +13,24 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.db import get_db
 from app.integrations.pncp.client import PncpClient
+from app.integrations.resend.client import ResendClient
 from app.modules.dp_sesmt.schemas import ModuleStatus
+from app.modules.licitacoes.boletins import (
+    create_saved_query,
+    delete_saved_query,
+    dispatch_boletins,
+    list_saved_queries,
+)
 from app.modules.licitacoes.schemas import (
+    BoletimDispatchSummary,
     IngestResult,
     LicitacaoListResponse,
     LicitacaoRead,
+    SavedQueryCreate,
+    SavedQueryRead,
 )
 from app.modules.licitacoes.service import (
     get_licitacao,
@@ -112,3 +123,73 @@ async def ingest_endpoint(
         )
     finally:
         await client.aclose()
+
+
+# --- D.3: boletins ---
+
+
+@router.get("/boletins/saved-queries", response_model=list[SavedQueryRead])
+async def list_saved_queries_endpoint(
+    user_email: str | None = Query(None, max_length=255),
+    db: AsyncSession = Depends(get_db),
+) -> list[SavedQueryRead]:
+    rows = await list_saved_queries(db, user_email=user_email)
+    return [SavedQueryRead.model_validate(r) for r in rows]
+
+
+@router.post("/boletins/saved-queries", response_model=SavedQueryRead, status_code=201)
+async def create_saved_query_endpoint(
+    payload: SavedQueryCreate,
+    db: AsyncSession = Depends(get_db),
+) -> SavedQueryRead:
+    row = await create_saved_query(
+        db,
+        nome=payload.nome,
+        user_email=str(payload.user_email),
+        recipients=[str(r) for r in payload.recipients],
+        uf=payload.uf,
+        modalidade=payload.modalidade,
+        search=payload.search,
+        orgao_cnpj=payload.orgao_cnpj,
+        active=payload.active,
+    )
+    return SavedQueryRead.model_validate(row)
+
+
+@router.delete("/boletins/saved-queries/{saved_query_id}", status_code=204)
+async def delete_saved_query_endpoint(
+    saved_query_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    ok = await delete_saved_query(db, saved_query_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Saved query nao encontrada")
+
+
+@router.post("/boletins/dispatch", response_model=BoletimDispatchSummary)
+async def dispatch_boletins_endpoint(
+    saved_query_id: int | None = Query(
+        None, description="Se informado, despacha apenas essa query"
+    ),
+    db: AsyncSession = Depends(get_db),
+) -> BoletimDispatchSummary:
+    """On-demand dispatch. Normally triggered by Celery beat 3x/dia.
+
+    Requires RESEND_API_KEY; returns 503 if not configured.
+    """
+    settings = get_settings()
+    if not settings.resend_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="RESEND_API_KEY nao configurada; configure em settings para enviar boletins.",
+        )
+
+    resend = ResendClient(api_key=settings.resend_api_key)
+    try:
+        return await dispatch_boletins(
+            db,
+            resend,
+            saved_query_ids=[saved_query_id] if saved_query_id else None,
+        )
+    finally:
+        await resend.aclose()
