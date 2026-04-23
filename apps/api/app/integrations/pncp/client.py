@@ -359,7 +359,14 @@ class PncpClient(IntegrationClient):
         # iterator so the service layer can treat it as a generic source.
         req = client.build_request("GET", url)
         resp = await client.send(req, stream=True)
-        resp.raise_for_status()
+        try:
+            resp.raise_for_status()
+        except BaseException:
+            # raise_for_status raises before _iter() is created, so the
+            # caller has no chance to aclose() the streamed response.
+            # Close it here to avoid leaking one connection per failed file.
+            await resp.aclose()
+            raise
         filename = _extract_filename(resp.headers) or "anexo.pdf"
         content_type = resp.headers.get("content-type")
 

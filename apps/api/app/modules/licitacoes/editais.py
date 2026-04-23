@@ -139,7 +139,7 @@ async def download_edital_for_licitacao(
                 pncp=pncp, storage=storage, arquivo=arq,
             )
             new_count += 1
-        except httpx.HTTPError as exc:
+        except (httpx.HTTPError, ValueError, OSError) as exc:
             logger.warning(
                 "pncp download failed for licitacao %s seq %s: %s",
                 licitacao_id,
@@ -147,6 +147,7 @@ async def download_edital_for_licitacao(
                 exc,
             )
             # Keep going -- other files for the same contratacao may work.
+            # ValueError handles empty arquivo.url; OSError handles storage I/O.
             continue
 
     total = await _existing_sequenciais(db, edital.id)
