@@ -14,7 +14,8 @@ Chaves de acesso vivem em variáveis de ambiente; **nunca no código**.
 | `onedrive`      | OneDrive / SharePoint             | Graph API    | A, B, C |
 | `easyjur`       | EasyJur (jurídico)                | API          | C |
 | `solides`       | Sólides (R&S)                     | API          | A (avaliação) |
-| `conlicitacao`  | Conlicitação + PNCP + Diários     | Scraping     | D |
+| `pncp`          | PNCP (Consulta v1)                | API pública  | D |
+| `conlicitacao`  | Conlicitação + Diários Oficiais   | Scraping     | D |
 | `whatsapp`      | WhatsApp Business API             | API          | A, E |
 
 ## Padrões
@@ -30,3 +31,27 @@ Chaves de acesso vivem em variáveis de ambiente; **nunca no código**.
 
 A ser documentado conforme cada integração for implementada. Template em
 `apps/api/.env.example`.
+
+## PNCP (implementado)
+
+Base URL: `https://pncp.gov.br/api/consulta` (configurável via `PNCP_BASE_URL`).
+**Sem autenticação** — API pública, read-only.
+
+Endpoint usado:
+- `GET /v1/contratacoes/publicacao` — lista contratações publicadas em uma
+  janela de datas. Requer `codigoModalidadeContratacao` (iteramos todas as
+  modalidades conhecidas para cobrir a janela inteira).
+
+Como disparar uma ingestão manual:
+
+```bash
+# via API (pequeno):
+curl -X POST "http://localhost:8000/api/v1/licitacoes/ingest/pncp?uf=SP&max_paginas=2"
+
+# via Celery (janela grande, agendada):
+celery -A worker.main call worker.tasks.licitacoes.crawler_pncp \
+  --args='["2025-04-01","2025-04-07","SP",null]'
+```
+
+Idempotência: rows são upsertadas por `external_id = cnpj-ano-sequencial`
+(`ON CONFLICT` no Postgres). Rodar o mesmo comando N vezes não duplica dados.

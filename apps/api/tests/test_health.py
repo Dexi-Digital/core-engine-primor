@@ -13,15 +13,15 @@ def test_health() -> None:
 
 def test_module_status_endpoints() -> None:
     client = TestClient(app)
-    for prefix, module in [
-        ("dp-sesmt", "dp_sesmt"),
-        ("manutencao-frota", "manutencao_frota"),
-        ("financeiro", "financeiro_contratos"),
-        ("licitacoes", "licitacoes"),
-        ("ia", "ia_tools"),
+    for prefix, module, implemented in [
+        ("dp-sesmt", "dp_sesmt", False),
+        ("manutencao-frota", "manutencao_frota", False),
+        ("financeiro", "financeiro_contratos", False),
+        ("licitacoes", "licitacoes", True),
+        ("ia", "ia_tools", False),
     ]:
         resp = client.get(f"/api/v1/{prefix}/status")
         assert resp.status_code == 200, prefix
         body = resp.json()
         assert body["module"] == module
-        assert body["stub"] is True
+        assert body["implemented"] is implemented

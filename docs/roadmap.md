@@ -31,7 +31,7 @@ Baseado nas 12 demandas do briefing (`demandas programação - rev01.docx`).
 
 | # | Demanda | Entrega |
 |---|---------|---------|
-| 9 | Inteligência de licitações | Conlicitação como filtro; crawler próprio (Playwright/Scrapy) entra no processo e baixa edital, ata, documentos de concorrentes. Acompanhamento de mercado (órgãos federais/estaduais): editais, vencedores, descontos. Análise municipal: TCE, transparência, limite de 95% de endividamento, inadimplência, ações ajuizadas. Adesões e credenciamento. |
+| 9 | Inteligência de licitações | **[Em andamento]** Ingestão PNCP (✓ implementado): crawler por data de publicação, UF, modalidade; upsert idempotente; listagem + filtros na UI. **Próximos passos:** Conlicitação como filtro; crawler próprio (Playwright/Scrapy) para baixar edital/ata/docs de concorrentes; análise municipal (TCE, transparência, limite 95% endividamento); adesões e credenciamento. |
 
 ## Módulo E — IA / Ferramentas avançadas
 
