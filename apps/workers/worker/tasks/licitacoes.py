@@ -97,3 +97,31 @@ async def _run_boletins(saved_query_id: int | None) -> dict[str, object]:
         finally:
             await resend.aclose()
     return summary.model_dump()
+
+
+@celery_app.task(name="worker.tasks.licitacoes.download_edital")
+def download_edital(licitacao_id: int) -> dict[str, object]:
+    """Baixa o edital + anexos (D.4) de uma licitacao via PNCP."""
+    return asyncio.run(_run_download_edital(licitacao_id))
+
+
+async def _run_download_edital(licitacao_id: int) -> dict[str, object]:
+    try:
+        from app.core.config import get_settings
+        from app.core.db import SessionLocal
+        from app.integrations.pncp.client import PncpClient
+        from app.modules.licitacoes.editais import download_edital_for_licitacao
+        from app.modules.licitacoes.storage import LocalStorage
+    except ImportError as exc:  # pragma: no cover
+        return {"error": f"API package not available in worker: {exc}"}
+
+    storage = LocalStorage(get_settings().editais_storage_path)
+    async with SessionLocal() as db:
+        pncp = PncpClient()
+        try:
+            result = await download_edital_for_licitacao(
+                db, licitacao_id=licitacao_id, pncp=pncp, storage=storage
+            )
+        finally:
+            await pncp.aclose()
+    return result.model_dump()

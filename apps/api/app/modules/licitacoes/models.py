@@ -4,7 +4,19 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import JSON, Boolean, DateTime, ForeignKey, Index, Integer, Numeric, String, func
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    Numeric,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.db import Base
@@ -118,4 +130,70 @@ class BoletimLog(Base):
 
     __table_args__ = (
         Index("ix_boletins_log_saved_query", "saved_query_id", "sent_at"),
+    )
+
+
+class Edital(Base):
+    """Aggregated status of edital download for a given licitacao (D.4).
+
+    One row per licitacao. `source` tells whether the files came from PNCP
+    or from one of the fallback portals (comprasnet / licitacoes_e). The
+    actual files go in `AnexoEdital` rows.
+    """
+
+    __tablename__ = "licitacoes_editais"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    licitacao_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("licitacoes.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+    )
+    # Where the files came from. "pncp" is the primary path; the others are
+    # reserved for the fallback portals (see AGENTS.md / docs/integrations.md).
+    source: Mapped[str] = mapped_column(String(32), default="pncp")
+    status: Mapped[str] = mapped_column(String(32), default="pending", index=True)
+    anexos_count: Mapped[int] = mapped_column(Integer, default=0)
+    error_message: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AnexoEdital(Base):
+    """One downloaded file (Edital, Termo de Referencia, Projetos, etc).
+
+    `storage_path` is the opaque identifier returned by the storage
+    backend -- a local filesystem path in dev, an S3/MinIO key in prod.
+    Uniqueness on (edital_id, sequencial_documento) keeps the download
+    step idempotent: re-running the task does not create duplicate rows.
+    """
+
+    __tablename__ = "licitacoes_editais_anexos"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    edital_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("licitacoes_editais.id", ondelete="CASCADE"),
+        index=True,
+    )
+    sequencial_documento: Mapped[int] = mapped_column(Integer)
+    titulo: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    tipo_documento: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    source_url: Mapped[str] = mapped_column(String(1024))
+    filename: Mapped[str] = mapped_column(String(255))
+    storage_path: Mapped[str] = mapped_column(String(1024))
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    content_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    downloaded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint("edital_id", "sequencial_documento", name="uq_anexo_seq"),
     )

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { revalidatePath } from "next/cache";
 
 import { apiFetch } from "@/lib/api";
 
@@ -33,6 +34,21 @@ async function fetchLicitacoes(params: URLSearchParams): Promise<ListResponse | 
   } catch {
     return null;
   }
+}
+
+async function downloadEdital(formData: FormData): Promise<void> {
+  "use server";
+  const id = formData.get("licitacao_id");
+  if (!id) return;
+  try {
+    await apiFetch(`/api/v1/licitacoes/${id}/edital/download`, { method: "POST" });
+  } catch (err) {
+    // Keep the page usable even if the download fails; the detail page
+    // surfaces the error message from the API response.
+    console.error("[licitacoes] edital download failed", err);
+  }
+  revalidatePath("/licitacoes");
+  revalidatePath(`/licitacoes/${id}`);
 }
 
 function formatCurrency(value: string | null): string {
@@ -151,6 +167,7 @@ export default async function LicitacoesPage(props: {
                   <th className="px-4 py-3">Modalidade</th>
                   <th className="px-4 py-3">Objeto</th>
                   <th className="px-4 py-3 text-right">Valor estimado</th>
+                  <th className="px-4 py-3">Edital</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -172,6 +189,26 @@ export default async function LicitacoesPage(props: {
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-slate-700">
                       {formatCurrency(lic.valor_total_estimado)}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      <div className="flex items-center gap-2">
+                        <form action={downloadEdital}>
+                          <input type="hidden" name="licitacao_id" value={lic.id} />
+                          <button
+                            type="submit"
+                            className="rounded-md border border-slate-300 bg-white px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50"
+                            title="Baixa o edital + anexos do PNCP (idempotente)"
+                          >
+                            Baixar
+                          </button>
+                        </form>
+                        <Link
+                          href={`/licitacoes/${lic.id}`}
+                          className="text-xs text-slate-500 hover:underline"
+                        >
+                          detalhes
+                        </Link>
+                      </div>
                     </td>
                   </tr>
                 ))}

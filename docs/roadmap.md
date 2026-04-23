@@ -31,7 +31,7 @@ Baseado nas 12 demandas do briefing (`demandas programação - rev01.docx`).
 
 | # | Demanda | Entrega |
 |---|---------|---------|
-| 9 | Inteligência de licitações | **[Em andamento]** Ingestão PNCP (✓ implementado), busca full-text no objeto com pg_trgm + índice GIN (✓ implementado), boletins por email 3x/dia via Resend com dedup por cursor `last_licitacao_id` (✓ implementado). **Próximos passos:** scraper Playwright para baixar edital + anexos (ComprasNet + Licitações-e); análise de edital via LLM (Claude + OpenAI fallback); gestão de CNDs/atestados com alertas de vencimento; análise de saúde municipal (TCE-MG/SP/GO + Siconfi + limite 95% LRF); adesões/atas de RP. |
+| 9 | Inteligência de licitações | **[Em andamento]** Ingestão PNCP (✓ D.1), busca full-text no objeto com pg_trgm + índice GIN (✓ D.2), boletins por email 3x/dia via Resend com dedup por cursor `last_licitacao_id` (✓ D.3), download de edital + anexos via PNCP Portal (✓ D.4; ComprasNet/Licitações-e ficaram como scaffold por exigirem captcha / SSO). **Próximos passos:** análise de edital via LLM (Claude + OpenAI fallback, D.5); gestão de CNDs/atestados com alertas de vencimento (D.6); análise de saúde municipal (TCE-MG/SP/GO + Siconfi + limite 95% LRF, D.7); adesões/atas de RP (D.9). |
 
 ## Módulo E — IA / Ferramentas avançadas
 

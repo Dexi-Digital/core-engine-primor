@@ -24,8 +24,16 @@ from app.modules.licitacoes.boletins import (
     dispatch_boletins,
     list_saved_queries,
 )
+from app.modules.licitacoes.editais import (
+    download_edital_for_licitacao,
+    get_edital,
+    list_anexos,
+)
 from app.modules.licitacoes.schemas import (
+    AnexoEditalRead,
     BoletimDispatchSummary,
+    EditalDownloadResult,
+    EditalRead,
     IngestResult,
     LicitacaoListResponse,
     LicitacaoRead,
@@ -37,12 +45,18 @@ from app.modules.licitacoes.service import (
     ingest_publicacoes,
     list_licitacoes,
 )
+from app.modules.licitacoes.storage import EditaisStorage, LocalStorage
 
 router = APIRouter()
 
 
 def get_pncp_client() -> PncpClient:
     return PncpClient()
+
+
+def get_editais_storage() -> EditaisStorage:
+    """Default storage: local filesystem under `editais_storage_path`."""
+    return LocalStorage(get_settings().editais_storage_path)
 
 
 @router.get("/status", response_model=ModuleStatus)
@@ -193,3 +207,44 @@ async def dispatch_boletins_endpoint(
         )
     finally:
         await resend.aclose()
+
+
+# --- D.4: edital download ---
+
+
+@router.get("/{licitacao_id}/edital", response_model=EditalRead)
+async def get_edital_endpoint(
+    licitacao_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> EditalRead:
+    edital = await get_edital(db, licitacao_id)
+    if edital is None:
+        raise HTTPException(status_code=404, detail="Edital ainda nao baixado")
+    anexos = await list_anexos(db, edital.id)
+    payload = EditalRead.model_validate(edital)
+    payload.anexos = [AnexoEditalRead.model_validate(a) for a in anexos]
+    return payload
+
+
+@router.post(
+    "/{licitacao_id}/edital/download",
+    response_model=EditalDownloadResult,
+)
+async def download_edital_endpoint(
+    licitacao_id: int,
+    db: AsyncSession = Depends(get_db),
+    pncp: PncpClient = Depends(get_pncp_client),
+    storage: EditaisStorage = Depends(get_editais_storage),
+) -> EditalDownloadResult:
+    """Fetch edital + anexos from PNCP for `licitacao_id`. Idempotent.
+
+    Triggers a synchronous download; for large windows use the worker task.
+    """
+    try:
+        return await download_edital_for_licitacao(
+            db, licitacao_id=licitacao_id, pncp=pncp, storage=storage
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        await pncp.aclose()
