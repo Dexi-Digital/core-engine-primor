@@ -44,6 +44,11 @@ async def list_endpoint(
     uf: str | None = Query(None, max_length=2),
     modalidade: str | None = None,
     orgao_cnpj: str | None = None,
+    search: str | None = Query(
+        None,
+        description="Busca textual no objeto da compra (trigram no Postgres, ilike no SQLite).",
+        max_length=200,
+    ),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -53,6 +58,7 @@ async def list_endpoint(
         uf=uf,
         modalidade=modalidade,
         orgao_cnpj=orgao_cnpj,
+        search=search,
         page=page,
         page_size=page_size,
     )

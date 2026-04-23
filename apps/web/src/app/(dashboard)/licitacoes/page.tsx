@@ -54,9 +54,11 @@ export default async function LicitacoesPage(props: {
   const params = new URLSearchParams();
   const uf = typeof searchParams.uf === "string" ? searchParams.uf : "";
   const modalidade = typeof searchParams.modalidade === "string" ? searchParams.modalidade : "";
+  const search = typeof searchParams.search === "string" ? searchParams.search : "";
   const page = typeof searchParams.page === "string" ? searchParams.page : "1";
   if (uf) params.set("uf", uf);
   if (modalidade) params.set("modalidade", modalidade);
+  if (search) params.set("search", search);
   params.set("page", page);
   params.set("page_size", "20");
 
@@ -94,6 +96,16 @@ export default async function LicitacoesPage(props: {
             defaultValue={modalidade}
             placeholder="ex: Pregão"
             className="mt-1 w-56 rounded-md border border-slate-300 px-2 py-1 text-sm"
+          />
+        </label>
+        <label className="flex flex-1 flex-col text-xs font-medium text-slate-600">
+          Busca no objeto
+          <input
+            name="search"
+            defaultValue={search}
+            placeholder="ex: pavimentação asfáltica"
+            maxLength={200}
+            className="mt-1 w-full min-w-64 rounded-md border border-slate-300 px-2 py-1 text-sm"
           />
         </label>
         <button
@@ -158,7 +170,14 @@ export default async function LicitacoesPage(props: {
               </tbody>
             </table>
           </div>
-          <Pagination page={resp.page} pageSize={resp.page_size} total={resp.total} uf={uf} modalidade={modalidade} />
+          <Pagination
+            page={resp.page}
+            pageSize={resp.page_size}
+            total={resp.total}
+            uf={uf}
+            modalidade={modalidade}
+            search={search}
+          />
         </>
       )}
     </div>
@@ -171,12 +190,14 @@ function Pagination({
   total,
   uf,
   modalidade,
+  search,
 }: {
   page: number;
   pageSize: number;
   total: number;
   uf: string;
   modalidade: string;
+  search: string;
 }) {
   const lastPage = Math.max(1, Math.ceil(total / pageSize));
   if (lastPage <= 1) return null;
@@ -185,6 +206,7 @@ function Pagination({
     const params = new URLSearchParams();
     if (uf) params.set("uf", uf);
     if (modalidade) params.set("modalidade", modalidade);
+    if (search) params.set("search", search);
     params.set("page", String(p));
     return `?${params.toString()}`;
   };
