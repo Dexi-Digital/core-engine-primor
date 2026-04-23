@@ -1,10 +1,12 @@
 """Business logic for the Licitacoes module."""
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict, is_dataclass
 from datetime import date, datetime
 from typing import Any
 
+import httpx
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Dialect
@@ -13,6 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.integrations.pncp.client import MODALIDADES, PncpClient, PncpPublicacao
 from app.modules.licitacoes.models import Licitacao
 from app.modules.licitacoes.schemas import IngestResult
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_dt(value: str | None) -> datetime | None:
@@ -109,22 +113,32 @@ async def ingest_publicacoes(
     """
     total_fetched = 0
     pending: list[dict[str, Any]] = []
+    failed: list[int] = []
 
     for modalidade in modalidades:
-        async for pub in client.iter_contratacoes_por_publicacao(
-            data_inicial=data_inicial,
-            data_final=data_final,
-            codigo_modalidade=modalidade,
-            uf=uf,
-            tamanho_pagina=tamanho_pagina,
-            max_paginas=max_paginas,
-        ):
-            total_fetched += 1
-            pending.append(_publicacao_to_row(pub))
-            # flush in batches to keep memory bounded for very large windows
-            if len(pending) >= 500:
-                await _upsert(db, pending)
-                pending.clear()
+        try:
+            async for pub in client.iter_contratacoes_por_publicacao(
+                data_inicial=data_inicial,
+                data_final=data_final,
+                codigo_modalidade=modalidade,
+                uf=uf,
+                tamanho_pagina=tamanho_pagina,
+                max_paginas=max_paginas,
+            ):
+                total_fetched += 1
+                pending.append(_publicacao_to_row(pub))
+                # flush in batches to keep memory bounded for very large windows
+                if len(pending) >= 500:
+                    await _upsert(db, pending)
+                    pending.clear()
+        except httpx.HTTPError as exc:
+            # Isolate flakiness: if the PNCP times out or returns 5xx for one
+            # modalidade, record it and keep going so the other modalidades
+            # still land in the DB. Callers can re-queue the failed ones.
+            logger.warning(
+                "pncp modalidade %s failed: %s", modalidade, exc, exc_info=False
+            )
+            failed.append(modalidade)
 
     written = 0
     if pending:
@@ -139,6 +153,7 @@ async def ingest_publicacoes(
         updated=0,
         skipped=total_fetched - written,
         total_fetched=total_fetched,
+        failed_modalidades=failed,
     )
 
 

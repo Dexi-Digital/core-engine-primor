@@ -188,7 +188,11 @@ class PncpClient(IntegrationClient):
         except httpx.HTTPError:
             return False
 
-    @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, max=10))
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, max=15),
+        reraise=True,
+    )
     async def list_contratacoes_por_publicacao(
         self,
         *,

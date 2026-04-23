@@ -43,3 +43,4 @@ class IngestResult(BaseModel):
     updated: int
     skipped: int
     total_fetched: int
+    failed_modalidades: list[int] = []
