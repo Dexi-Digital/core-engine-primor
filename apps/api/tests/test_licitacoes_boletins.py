@@ -1,7 +1,7 @@
 """Tests for the boletins por email dispatcher (D.3)."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import httpx
@@ -15,7 +15,7 @@ from app.modules.licitacoes.boletins import (
     dispatch_boletins,
     render_digest_html,
 )
-from app.modules.licitacoes.models import BoletimLog, Licitacao, SavedQuery
+from app.modules.licitacoes.models import BoletimLog, Licitacao
 
 
 async def _seed_licitacoes(db: AsyncSession, rows: list[dict]) -> list[Licitacao]:
@@ -44,7 +44,7 @@ def _row(
         "orgao_razao_social": "Prefeitura Teste",
         "orgao_cnpj": "12345678000100",
         "valor_total_estimado": valor,
-        "data_publicacao_pncp": datetime(2026, 4, 22, 12, 0, tzinfo=timezone.utc),
+        "data_publicacao_pncp": datetime(2026, 4, 22, 12, 0, tzinfo=UTC),
     }
 
 
