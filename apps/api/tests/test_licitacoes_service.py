@@ -8,6 +8,7 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.pncp.client import PncpClient
+from app.modules.licitacoes.models import Licitacao
 from app.modules.licitacoes.service import ingest_publicacoes, list_licitacoes
 
 
@@ -152,3 +153,56 @@ async def test_list_filters_by_uf(db_session: AsyncSession) -> None:
     assert items_rj == []
 
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_list_filters_by_search_term(db_session: AsyncSession) -> None:
+    """`search` must narrow results to rows whose objeto_compra matches (ilike)."""
+    rows = [
+        Licitacao(
+            external_id="ext-asfalto",
+            source="pncp",
+            objeto_compra="Contratacao de empresa para pavimentacao asfaltica de vias urbanas",
+            modalidade_nome="Pregao Eletronico",
+            uf_sigla="SP",
+        ),
+        Licitacao(
+            external_id="ext-merenda",
+            source="pncp",
+            objeto_compra="Aquisicao de generos alimenticios para merenda escolar",
+            modalidade_nome="Pregao Eletronico",
+            uf_sigla="SP",
+        ),
+        Licitacao(
+            external_id="ext-asfalto-2",
+            source="pncp",
+            objeto_compra="Recapeamento asfaltico em estradas vicinais",
+            modalidade_nome="Concorrencia",
+            uf_sigla="MG",
+        ),
+    ]
+    for row in rows:
+        db_session.add(row)
+    await db_session.commit()
+
+    # No filter -> all 3.
+    _, total_all = await list_licitacoes(db_session)
+    assert total_all == 3
+
+    # Search "asfalt" -> 2 matches (ilike is case-insensitive).
+    items, total = await list_licitacoes(db_session, search="asfalt")
+    assert total == 2
+    assert len(items) == 2
+    assert {i.external_id for i in items} == {"ext-asfalto", "ext-asfalto-2"}
+
+    # Search combined with UF filter narrows further.
+    _, total_sp = await list_licitacoes(db_session, search="asfalt", uf="SP")
+    assert total_sp == 1
+
+    # Empty string is treated as "no filter" (same as omitting the param).
+    _, total_empty = await list_licitacoes(db_session, search="   ")
+    assert total_empty == 3
+
+    # Non-matching term -> 0.
+    _, total_none = await list_licitacoes(db_session, search="zzzzz")
+    assert total_none == 0

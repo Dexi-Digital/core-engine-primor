@@ -57,6 +57,33 @@ async def test_list_and_get_detail(api_client: AsyncClient, db_session) -> None:
 
 
 @pytest.mark.asyncio
+async def test_list_search_param(api_client: AsyncClient, db_session) -> None:
+    db_session.add_all(
+        [
+            Licitacao(
+                external_id="srch-1",
+                source="pncp",
+                objeto_compra="Pavimentacao de estradas rurais",
+                uf_sigla="MG",
+            ),
+            Licitacao(
+                external_id="srch-2",
+                source="pncp",
+                objeto_compra="Merenda escolar para rede municipal",
+                uf_sigla="MG",
+            ),
+        ]
+    )
+    await db_session.commit()
+
+    r = await api_client.get("/api/v1/licitacoes?search=estradas")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["total"] == 1
+    assert body["data"][0]["external_id"] == "srch-1"
+
+
+@pytest.mark.asyncio
 async def test_list_filter_no_match(api_client: AsyncClient, db_session) -> None:
     db_session.add(
         Licitacao(

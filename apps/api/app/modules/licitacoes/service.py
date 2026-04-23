@@ -163,6 +163,7 @@ async def list_licitacoes(
     uf: str | None = None,
     modalidade: str | None = None,
     orgao_cnpj: str | None = None,
+    search: str | None = None,
     page: int = 1,
     page_size: int = 20,
 ) -> tuple[list[Licitacao], int]:
@@ -179,11 +180,26 @@ async def list_licitacoes(
         stmt = stmt.where(Licitacao.orgao_cnpj == orgao_cnpj)
         count_stmt = count_stmt.where(Licitacao.orgao_cnpj == orgao_cnpj)
 
-    stmt = (
-        stmt.order_by(Licitacao.data_publicacao_pncp.desc().nulls_last())
-        .offset((page - 1) * page_size)
-        .limit(page_size)
-    )
+    search_term = (search or "").strip()
+    if search_term:
+        like_pattern = f"%{search_term}%"
+        stmt = stmt.where(Licitacao.objeto_compra.ilike(like_pattern))
+        count_stmt = count_stmt.where(Licitacao.objeto_compra.ilike(like_pattern))
+
+    dialect_name = db.bind.dialect.name  # type: ignore[union-attr]
+    if search_term and dialect_name == "postgresql":
+        # On Postgres, rank results by trigram similarity. The pg_trgm GIN
+        # index on `objeto_compra` (migration 3fbc4a1e8d57) makes this fast
+        # even on millions of rows.
+        similarity = func.similarity(Licitacao.objeto_compra, search_term)
+        stmt = stmt.order_by(
+            similarity.desc(),
+            Licitacao.data_publicacao_pncp.desc().nulls_last(),
+        )
+    else:
+        stmt = stmt.order_by(Licitacao.data_publicacao_pncp.desc().nulls_last())
+
+    stmt = stmt.offset((page - 1) * page_size).limit(page_size)
 
     total = (await db.execute(count_stmt)).scalar_one()
     items = list((await db.execute(stmt)).scalars().all())

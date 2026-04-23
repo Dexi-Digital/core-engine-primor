@@ -31,7 +31,7 @@ Baseado nas 12 demandas do briefing (`demandas programação - rev01.docx`).
 
 | # | Demanda | Entrega |
 |---|---------|---------|
-| 9 | Inteligência de licitações | **[Em andamento]** Ingestão PNCP (✓ implementado): crawler por data de publicação, UF, modalidade; upsert idempotente; listagem + filtros na UI. **Próximos passos:** Conlicitação como filtro; crawler próprio (Playwright/Scrapy) para baixar edital/ata/docs de concorrentes; análise municipal (TCE, transparência, limite 95% endividamento); adesões e credenciamento. |
+| 9 | Inteligência de licitações | **[Em andamento]** Ingestão PNCP (✓ implementado), busca full-text no objeto com pg_trgm + índice GIN (✓ implementado). **Próximos passos:** boletins email 3x/dia; scraper Playwright para baixar edital + anexos (ComprasNet + Licitações-e); análise de edital via LLM (Claude + OpenAI fallback); gestão de CNDs/atestados com alertas de vencimento; análise de saúde municipal (TCE-MG/SP/GO + Siconfi + limite 95% LRF); adesões/atas de RP. |
 
 ## Módulo E — IA / Ferramentas avançadas
 
