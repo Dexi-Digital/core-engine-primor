@@ -73,9 +73,17 @@ export default async function LicitacoesPage(props: {
             Fonte: <strong>PNCP</strong> — Portal Nacional de Contratações Públicas.
           </p>
         </div>
-        <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">
-          Implementado
-        </span>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/licitacoes/boletins"
+            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Boletins por email →
+          </Link>
+          <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">
+            Implementado
+          </span>
+        </div>
       </header>
 
       <form className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">

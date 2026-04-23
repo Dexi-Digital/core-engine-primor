@@ -16,6 +16,7 @@ Chaves de acesso vivem em variáveis de ambiente; **nunca no código**.
 | `solides`       | Sólides (R&S)                     | API          | A (avaliação) |
 | `pncp`          | PNCP (Consulta v1)                | API pública  | D |
 | `conlicitacao`  | Conlicitação + Diários Oficiais   | Scraping     | D |
+| `resend`        | Resend (email transacional)       | API          | D |
 | `whatsapp`      | WhatsApp Business API             | API          | A, E |
 
 ## Padrões
@@ -55,3 +56,27 @@ celery -A worker.main call worker.tasks.licitacoes.crawler_pncp \
 
 Idempotência: rows são upsertadas por `external_id = cnpj-ano-sequencial`
 (`ON CONFLICT` no Postgres). Rodar o mesmo comando N vezes não duplica dados.
+
+## Resend (implementado)
+
+Base URL: `https://api.resend.com`. Usado pelo Módulo D para disparar
+**boletins por email 3x/dia** (ver `app/modules/licitacoes/boletins.py`).
+
+Env vars:
+
+| Variável              | Obrigatória | Descrição                                    |
+|-----------------------|-------------|----------------------------------------------|
+| `RESEND_API_KEY`      | sim         | Chave `re_…` emitida em https://resend.com/api-keys |
+| `RESEND_FROM_EMAIL`   | não         | Default: `Motor Central <boletins@motorcentral.dev>` (domínio precisa estar verificado na Resend). |
+| `PUBLIC_BASE_URL`     | não         | Default: `http://localhost:3000`. URL pública do dashboard (usada no link "Abrir no Motor Central" no digest). |
+
+Endpoint usado:
+- `POST /emails` — envia um email transacional (`from`, `to[]`, `subject`, `html`).
+
+O cliente faz retry com backoff exponencial em 429/5xx (tenacity, 4 tentativas,
+max 8s) e levanta `ResendError` em 4xx não-recuperáveis (ex: domínio não
+verificado). Chamada feita dentro de `ResendClient.send_email(...)`.
+
+Cadência: `worker/main.py` configura `celery_app.conf.beat_schedule` para
+disparar `worker.tasks.licitacoes.dispatch_boletins` às **07h, 13h, 19h**
+(America/Sao_Paulo).

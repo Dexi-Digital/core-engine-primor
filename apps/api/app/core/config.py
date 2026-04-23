@@ -30,6 +30,12 @@ class Settings(BaseSettings):
     s3_secret_key: str = Field(default="minio123")
     s3_bucket: str = Field(default="primor-docs")
 
+    # Outbound email (Resend). When resend_api_key is unset, the adapter
+    # raises instead of silently dropping -- avoids losing boletins in prod.
+    resend_api_key: str | None = Field(default=None)
+    resend_from_email: str = Field(default="Motor Central <boletins@motorcentral.dev>")
+    public_base_url: str = Field(default="http://localhost:3000")
+
 
 @lru_cache
 def get_settings() -> Settings:
