@@ -125,3 +125,32 @@ class EditalDownloadResult(BaseModel):
     anexos_count: int
     new_anexos: int
     error_message: str | None = None
+
+
+class AtestadoCatRead(BaseModel):
+    descricao: str
+    quantidade_minima: str | None = None
+
+
+class EditalAnaliseRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    edital_id: int
+    status: str  # "pending" | "completed" | "empty" | "failed"
+    provider: str | None
+    model: str | None
+    prazo_execucao_dias: int | None
+    garantia_percentual: Decimal | None
+    bdi_maximo_percentual: Decimal | None
+    visita_tecnica_obrigatoria: bool | None
+    valor_estimado: Decimal | None
+    data: dict | None
+    anexos_analisados: int
+    total_pages: int
+    prompt_tokens: int | None
+    completion_tokens: int | None
+    cost_usd: Decimal | None
+    error_message: str | None
+    created_at: datetime
+    updated_at: datetime

@@ -19,6 +19,8 @@ Chaves de acesso vivem em variáveis de ambiente; **nunca no código**.
 | `licitacoes_e`  | Licitações-e (Banco do Brasil)    | Scraping+SSO | D (fallback) |
 | `conlicitacao`  | Conlicitação + Diários Oficiais   | Scraping     | D |
 | `resend`        | Resend (email transacional)       | API          | D |
+| `llm/anthropic` | Anthropic Messages (tool_use)     | API          | D (análise edital) |
+| `llm/openai`    | OpenAI Chat Completions (json_schema) | API      | D (análise edital) |
 | `whatsapp`      | WhatsApp Business API             | API          | A, E |
 
 ## Padrões
@@ -123,3 +125,39 @@ verificado). Chamada feita dentro de `ResendClient.send_email(...)`.
 Cadência: `worker/main.py` configura `celery_app.conf.beat_schedule` para
 disparar `worker.tasks.licitacoes.dispatch_boletins` às **07h, 13h, 19h**
 (America/Sao_Paulo).
+
+## LLM providers — análise de edital (D.5)
+
+Os adapters em `app/integrations/llm/` implementam um Protocol
+`LLMProvider` com um único método `analyze(text, schema, system_prompt)`
+que devolve um `LLMResult` (`data` = JSON extraído, `cost_usd`, tokens,
+modelo). `CostRoutedProvider` encapsula N providers, ordena por
+`input_price_per_mtok` e tenta o mais barato primeiro; em `LLMError`
+faz fallback para o próximo. Se um provider levantar
+`LLMUnavailableError` (chave ausente), ele é simplesmente pulado.
+
+Env vars:
+
+| Variável              | Obrigatória | Descrição                                    |
+|-----------------------|-------------|----------------------------------------------|
+| `ANTHROPIC_API_KEY`   | opcional    | Chave `sk-ant-…`. Se ausente, o provider é pulado. |
+| `ANTHROPIC_MODEL`     | opcional    | Default: `claude-3-5-haiku-20241022`         |
+| `OPENAI_API_KEY`      | opcional    | Chave `sk-…`. Se ausente, o provider é pulado. |
+| `OPENAI_MODEL`        | opcional    | Default: `gpt-4.1-nano`                      |
+
+Pelo menos **uma** das chaves precisa estar configurada; caso contrário
+o endpoint `POST /api/v1/licitacoes/{id}/edital/analise` responde
+`503 Service Unavailable`.
+
+Extração estruturada:
+
+- **Anthropic**: usa `tool_use` com uma tool `extract_edital` cuja
+  `input_schema` é o schema de saída. Claude é forçado a responder com
+  um `tool_use` block preenchendo o schema.
+- **OpenAI**: usa `response_format.json_schema` com `strict=true`, que
+  força o output a casar exatamente com o schema declarado.
+
+Os PDFs baixados em D.4 são concatenados via `pypdf` em um único prompt
+(anexos não-PDF, acima de 25 MiB, ou com erro de leitura são pulados e
+reportados em `analise.data.anexos`). Truncamos em 400k caracteres
+antes de enviar ao modelo para conter custo.

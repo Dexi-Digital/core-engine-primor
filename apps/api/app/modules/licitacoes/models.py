@@ -197,3 +197,63 @@ class AnexoEdital(Base):
     __table_args__ = (
         UniqueConstraint("edital_id", "sequencial_documento", name="uq_anexo_seq"),
     )
+
+
+class EditalAnalise(Base):
+    """Result of LLM-based structured extraction of an edital (D.5).
+
+    One row per edital. Re-running the analysis updates the existing row
+    in place (analise is idempotent by design: re-running against the
+    same anexos should return roughly the same result).
+
+    `data` keeps the whole extracted payload as JSON so new fields can be
+    added without schema migrations. Top-level columns mirror the most
+    queried fields for indexing / quick dashboards.
+    """
+
+    __tablename__ = "licitacoes_editais_analises"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    edital_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("licitacoes_editais.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+    )
+    status: Mapped[str] = mapped_column(
+        String(32), default="pending", index=True
+    )  # "pending" | "completed" | "failed" | "empty"
+    provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+
+    # Promoted fields (queryable) -- kept in sync with `data`.
+    prazo_execucao_dias: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    garantia_percentual: Mapped[Decimal | None] = mapped_column(
+        Numeric(8, 4), nullable=True
+    )
+    bdi_maximo_percentual: Mapped[Decimal | None] = mapped_column(
+        Numeric(8, 4), nullable=True
+    )
+    visita_tecnica_obrigatoria: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True
+    )
+    valor_estimado: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 2), nullable=True
+    )
+
+    data: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    anexos_analisados: Mapped[int] = mapped_column(Integer, default=0)
+    total_pages: Mapped[int] = mapped_column(Integer, default=0)
+
+    prompt_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(10, 6), nullable=True)
+
+    error_message: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
