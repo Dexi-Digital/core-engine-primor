@@ -13,11 +13,19 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.db import get_db
+from app.integrations.llm.anthropic_client import AnthropicProvider
+from app.integrations.llm.base import LLMError, LLMProvider, LLMUnavailableError
+from app.integrations.llm.openai_client import OpenAIProvider
+from app.integrations.llm.router import CostRoutedProvider
 from app.integrations.pncp.client import PncpClient
 from app.integrations.resend.client import ResendClient
 from app.modules.dp_sesmt.schemas import ModuleStatus
+from app.modules.licitacoes.analise import (
+    analyze_edital_for_licitacao,
+    get_analise,
+)
 from app.modules.licitacoes.boletins import (
     create_saved_query,
     delete_saved_query,
@@ -32,6 +40,7 @@ from app.modules.licitacoes.editais import (
 from app.modules.licitacoes.schemas import (
     AnexoEditalRead,
     BoletimDispatchSummary,
+    EditalAnaliseRead,
     EditalDownloadResult,
     EditalRead,
     IngestResult,
@@ -57,6 +66,42 @@ def get_pncp_client() -> PncpClient:
 def get_editais_storage() -> EditaisStorage:
     """Default storage: local filesystem under `editais_storage_path`."""
     return LocalStorage(get_settings().editais_storage_path)
+
+
+def build_llm_provider(settings: Settings) -> LLMProvider:
+    """Build a cost-routed LLM provider using whatever keys are configured.
+
+    Raises `LLMUnavailableError` if neither Anthropic nor OpenAI is set --
+    the router endpoint translates that into HTTP 503.
+    """
+    providers: list[LLMProvider] = []
+    if settings.openai_api_key:
+        providers.append(
+            OpenAIProvider(
+                api_key=settings.openai_api_key,
+                model=settings.openai_model,
+            )
+        )
+    if settings.anthropic_api_key:
+        providers.append(
+            AnthropicProvider(
+                api_key=settings.anthropic_api_key,
+                model=settings.anthropic_model,
+            )
+        )
+    if not providers:
+        raise LLMUnavailableError(
+            "Nenhuma chave LLM configurada (ANTHROPIC_API_KEY / OPENAI_API_KEY)."
+        )
+    return CostRoutedProvider(providers)  # type: ignore[return-value]
+
+
+def get_llm_provider() -> LLMProvider:
+    """FastAPI dependency: returns a configured LLMProvider or raises 503."""
+    try:
+        return build_llm_provider(get_settings())
+    except LLMUnavailableError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @router.get("/status", response_model=ModuleStatus)
@@ -248,3 +293,57 @@ async def download_edital_endpoint(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     finally:
         await pncp.aclose()
+
+
+# --- D.5: edital analise ---
+
+
+@router.get(
+    "/{licitacao_id}/edital/analise",
+    response_model=EditalAnaliseRead,
+)
+async def get_edital_analise_endpoint(
+    licitacao_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> EditalAnaliseRead:
+    edital = await get_edital(db, licitacao_id)
+    if edital is None:
+        raise HTTPException(
+            status_code=404, detail="Edital ainda nao baixado (rode D.4 primeiro)"
+        )
+    analise = await get_analise(db, edital.id)
+    if analise is None:
+        raise HTTPException(status_code=404, detail="Analise nao executada")
+    return EditalAnaliseRead.model_validate(analise)
+
+
+@router.post(
+    "/{licitacao_id}/edital/analise",
+    response_model=EditalAnaliseRead,
+)
+async def run_edital_analise_endpoint(
+    licitacao_id: int,
+    db: AsyncSession = Depends(get_db),
+    storage: EditaisStorage = Depends(get_editais_storage),
+    llm: LLMProvider = Depends(get_llm_provider),
+) -> EditalAnaliseRead:
+    """Execute a LLM-based analysis of the downloaded edital.
+
+    Returns 503 if no LLM provider is configured, 404 if D.4 hasn't run yet.
+    Idempotent: re-running updates the single `edital_analise` row.
+    """
+    try:
+        analise = await analyze_edital_for_licitacao(
+            db,
+            licitacao_id=licitacao_id,
+            storage=storage,
+            llm=llm,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LLMError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    finally:
+        await llm.aclose()
+
+    return EditalAnaliseRead.model_validate(analise)

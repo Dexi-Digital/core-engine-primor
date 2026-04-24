@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     # LocalStorage impl for a remote one.
     editais_storage_path: str = Field(default="/tmp/motor-central/editais")
 
+    # LLM providers for D.5 (analise de edital). The cost-routed wrapper
+    # picks the cheapest configured provider first and falls back to the
+    # next one on error. If none is configured the API returns 503.
+    anthropic_api_key: str | None = Field(default=None)
+    anthropic_model: str = Field(default="claude-3-5-haiku-20241022")
+    openai_api_key: str | None = Field(default=None)
+    openai_model: str = Field(default="gpt-4.1-nano")
+
 
 @lru_cache
 def get_settings() -> Settings:
