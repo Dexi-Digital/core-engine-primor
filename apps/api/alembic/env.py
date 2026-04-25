@@ -13,6 +13,7 @@ from app.core.db import Base
 from app.modules.dp_sesmt import models as _dp  # noqa: F401
 from app.modules.fiscal import models as _fiscal  # noqa: F401
 from app.modules.licitacoes import models as _lic  # noqa: F401
+from app.modules.manutencao_frota import models as _frota  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:

@@ -15,7 +15,7 @@ def test_module_status_endpoints() -> None:
     client = TestClient(app)
     for prefix, module, implemented in [
         ("dp-sesmt", "dp_sesmt", True),
-        ("manutencao-frota", "manutencao_frota", False),
+        ("manutencao-frota", "manutencao_frota", True),
         ("financeiro", "financeiro_contratos", False),
         ("licitacoes", "licitacoes", True),
         ("ia", "ia_tools", False),
