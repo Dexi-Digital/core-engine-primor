@@ -61,4 +61,10 @@ celery_app.conf.beat_schedule = {
         "task": "worker.tasks.licitacoes.dispatch_boletins",
         "schedule": crontab(hour="19", minute="0"),
     },
+    # D.6: alertas de vencimento de certidoes uma vez por dia (08h America/Sao_Paulo).
+    # Idempotente: a tabela `certidoes_alertas_log` impede reenvio na mesma janela.
+    "certidao-alerts-daily": {
+        "task": "worker.tasks.licitacoes.dispatch_certidao_alerts",
+        "schedule": crontab(hour="8", minute="0"),
+    },
 }

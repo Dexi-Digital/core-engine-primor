@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -154,3 +154,75 @@ class EditalAnaliseRead(BaseModel):
     error_message: str | None
     created_at: datetime
     updated_at: datetime
+
+
+# --- D.6: certidoes / atestados ---
+
+
+class CertidaoCreate(BaseModel):
+    empresa_cnpj: str = Field(min_length=11, max_length=32)
+    tipo: str = Field(min_length=1, max_length=64)
+    numero: str | None = Field(default=None, max_length=128)
+    emissao: date | None = None
+    validade: date | None = None
+    arquivo_path: str | None = Field(default=None, max_length=1024)
+    orgao_emissor: str | None = Field(default=None, max_length=255)
+    observacoes: str | None = Field(default=None, max_length=2048)
+
+
+class CertidaoUpdate(BaseModel):
+    numero: str | None = Field(default=None, max_length=128)
+    emissao: date | None = None
+    validade: date | None = None
+    arquivo_path: str | None = Field(default=None, max_length=1024)
+    orgao_emissor: str | None = Field(default=None, max_length=255)
+    observacoes: str | None = Field(default=None, max_length=2048)
+
+
+class CertidaoRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    empresa_cnpj: str
+    tipo: str
+    numero: str | None
+    emissao: date | None
+    validade: date | None
+    arquivo_path: str | None
+    orgao_emissor: str | None
+    observacoes: str | None
+    created_at: datetime
+    updated_at: datetime
+
+    # Computed: vigente | vencendo | vencido | sem_validade.
+    # Preenchido pelo router antes de devolver (compute_status).
+    status_atual: str | None = None
+    dias_para_vencer: int | None = None
+
+
+class CertidaoAlertaResult(BaseModel):
+    certidao_id: int
+    janela: str
+    status: str
+    recipients: list[str]
+    resend_message_id: str | None = None
+    error_message: str | None = None
+
+
+class CertidaoAlertaSummary(BaseModel):
+    total_certidoes: int
+    sent: int
+    skipped: int
+    failed: int
+    results: list[CertidaoAlertaResult]
+
+
+class CertidaoAlertaDispatchPayload(BaseModel):
+    """Payload do POST /certidoes/dispatch-alerts.
+
+    Os destinatarios sao informados a cada chamada para nao guardar email
+    pessoal em settings (evita LGPD issue trivial). O cron do worker pode
+    usar uma env var dedicada (CERTIDOES_ALERT_EMAILS).
+    """
+
+    recipients: list[EmailStr] = Field(min_length=1, max_length=20)

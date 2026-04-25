@@ -1,13 +1,14 @@
 """ORM models for the Licitacoes module."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -256,4 +257,72 @@ class EditalAnalise(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class CertidaoEmpresa(Base):
+    """Documento da empresa Primor com possivel vencimento (D.6).
+
+    Cobre CNDs (federal, estadual, municipal), FGTS, CNDT, INSS, atestados
+    CAT, certidao de falencia, etc. Quando `validade` e None, a certidao
+    e considerada "permanente" (atestados CAT nao vencem) e o cron de
+    alerta a ignora.
+
+    O arquivo opcional vai em storage (LocalStorage hoje, MinIO/S3 amanha)
+    e `arquivo_path` e o handle opaco devolvido pelo storage.
+    """
+
+    __tablename__ = "certidoes_empresa"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    empresa_cnpj: Mapped[str] = mapped_column(String(32), index=True)
+    # Tipo da certidao: usar `CertidaoTipo` no codigo, string aqui para
+    # permitir adicionar tipos sem migracao. Ver `app.modules.licitacoes.certidoes`.
+    tipo: Mapped[str] = mapped_column(String(64), index=True)
+    numero: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    emissao: Mapped[date | None] = mapped_column(Date, nullable=True)
+    validade: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    arquivo_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    orgao_emissor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    observacoes: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_certidoes_empresa_cnpj_tipo", "empresa_cnpj", "tipo"),
+    )
+
+
+class CertidaoAlertaLog(Base):
+    """Registro de alertas enviados por janela (30d/15d/7d/0d).
+
+    Garante idempotencia: o cron de alertas diario nao reenvia o mesmo
+    email para a mesma janela da mesma certidao -- o UniqueConstraint
+    (certidao_id, janela) impoe isso no banco.
+    """
+
+    __tablename__ = "certidoes_alertas_log"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    certidao_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("certidoes_empresa.id", ondelete="CASCADE"),
+        index=True,
+    )
+    janela: Mapped[str] = mapped_column(String(32))
+    sent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    recipients: Mapped[list[str]] = mapped_column(JSON)
+    resend_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="sent")
+    error_message: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("certidao_id", "janela", name="uq_certidao_alerta_janela"),
     )
