@@ -12,7 +12,6 @@ from app.modules.manutencao_frota.validators import (
     normalize_renavam,
 )
 
-
 # --- placa ------------------------------------------------------------------
 
 
