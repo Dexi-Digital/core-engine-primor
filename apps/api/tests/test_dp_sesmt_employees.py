@@ -1,0 +1,315 @@
+"""CRUD de funcionarios + dossie endpoints (Modulo A)."""
+from __future__ import annotations
+
+import httpx
+import pytest
+from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.integrations.brasilapi.client import BrasilAPIClient
+from app.integrations.directdata.client import DirectDataClient
+from app.integrations.viacep.client import ViaCEPClient
+from app.main import app
+from app.modules.dp_sesmt.models import DossieConsultaLog
+from app.modules.dp_sesmt.router import (
+    _get_brasilapi,
+    _get_directdata,
+    _get_viacep,
+)
+
+VALID_CPF_1 = "11144477735"
+VALID_CPF_2 = "39053344705"
+
+
+# --- CRUD --------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_create_employee_persiste_e_normaliza_cpf(
+    api_client: AsyncClient,
+) -> None:
+    resp = await api_client.post(
+        "/api/v1/dp-sesmt/employees",
+        json={
+            "cpf": "111.444.777-35",
+            "nome_completo": "Joao da Silva",
+            "cargo": "Pedreiro",
+            "obra": "Obra Centro",
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    # CPF deve ser persistido sem mascara.
+    assert body["cpf"] == VALID_CPF_1
+    assert body["status"] == "ativo"
+    assert body["source"] == "manual"
+
+
+@pytest.mark.asyncio
+async def test_create_employee_rejeita_cpf_invalido(
+    api_client: AsyncClient,
+) -> None:
+    resp = await api_client.post(
+        "/api/v1/dp-sesmt/employees",
+        json={
+            "cpf": "12345678901",
+            "nome_completo": "Quem Quer",
+            "cargo": "Pedreiro",
+        },
+    )
+    assert resp.status_code == 422
+    assert "CPF" in resp.text or "cpf" in resp.text
+
+
+@pytest.mark.asyncio
+async def test_create_employee_409_em_cpf_duplicado(
+    api_client: AsyncClient,
+) -> None:
+    payload = {
+        "cpf": VALID_CPF_1,
+        "nome_completo": "Joao da Silva",
+        "cargo": "Pedreiro",
+    }
+    r1 = await api_client.post("/api/v1/dp-sesmt/employees", json=payload)
+    assert r1.status_code == 201
+    r2 = await api_client.post("/api/v1/dp-sesmt/employees", json=payload)
+    assert r2.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_list_employees_filtros_e_busca(api_client: AsyncClient) -> None:
+    # Cria 2 funcionarios distintos.
+    await api_client.post(
+        "/api/v1/dp-sesmt/employees",
+        json={
+            "cpf": VALID_CPF_1,
+            "nome_completo": "Joao da Silva",
+            "cargo": "Pedreiro",
+            "obra": "Obra A",
+        },
+    )
+    await api_client.post(
+        "/api/v1/dp-sesmt/employees",
+        json={
+            "cpf": VALID_CPF_2,
+            "nome_completo": "Maria Souza",
+            "cargo": "Engenheira",
+            "obra": "Obra B",
+            "status": "afastado",
+        },
+    )
+
+    r = await api_client.get("/api/v1/dp-sesmt/employees")
+    assert r.status_code == 200
+    assert r.json()["total"] == 2
+
+    r = await api_client.get(
+        "/api/v1/dp-sesmt/employees", params={"obra": "Obra A"}
+    )
+    assert r.json()["total"] == 1
+    assert r.json()["items"][0]["nome_completo"] == "Joao da Silva"
+
+    r = await api_client.get(
+        "/api/v1/dp-sesmt/employees", params={"status": "afastado"}
+    )
+    assert r.json()["total"] == 1
+
+    r = await api_client.get(
+        "/api/v1/dp-sesmt/employees", params={"search": "Maria"}
+    )
+    assert r.json()["total"] == 1
+
+    # Busca por CPF com mascara deve normalizar.
+    r = await api_client.get(
+        "/api/v1/dp-sesmt/employees", params={"search": "111.444"}
+    )
+    assert r.json()["total"] == 1
+
+
+@pytest.mark.asyncio
+async def test_update_employee_partial(api_client: AsyncClient) -> None:
+    r = await api_client.post(
+        "/api/v1/dp-sesmt/employees",
+        json={
+            "cpf": VALID_CPF_1,
+            "nome_completo": "Joao da Silva",
+            "cargo": "Pedreiro",
+        },
+    )
+    employee_id = r.json()["id"]
+    r = await api_client.put(
+        f"/api/v1/dp-sesmt/employees/{employee_id}",
+        json={"status": "afastado", "observacoes": "INSS"},
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["status"] == "afastado"
+    assert body["observacoes"] == "INSS"
+    assert body["nome_completo"] == "Joao da Silva"  # preservado
+
+
+@pytest.mark.asyncio
+async def test_create_with_empregos_anteriores(api_client: AsyncClient) -> None:
+    r = await api_client.post(
+        "/api/v1/dp-sesmt/employees",
+        json={
+            "cpf": VALID_CPF_1,
+            "nome_completo": "Joao da Silva",
+            "cargo": "Pedreiro",
+            "empregos_anteriores": [
+                {
+                    "empresa_cnpj": "00000000000191",
+                    "empresa_razao_social": "Banco do Brasil",
+                    "cargo": "Estagiario",
+                    "inicio": "2020-01-01",
+                    "fim": "2021-06-01",
+                }
+            ],
+        },
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert len(body["empregos_anteriores"]) == 1
+    assert body["empregos_anteriores"][0]["empresa_cnpj"] == "00000000000191"
+
+
+@pytest.mark.asyncio
+async def test_delete_employee(api_client: AsyncClient) -> None:
+    r = await api_client.post(
+        "/api/v1/dp-sesmt/employees",
+        json={
+            "cpf": VALID_CPF_1,
+            "nome_completo": "Joao",
+            "cargo": "Pedreiro",
+        },
+    )
+    employee_id = r.json()["id"]
+    r = await api_client.delete(f"/api/v1/dp-sesmt/employees/{employee_id}")
+    assert r.status_code == 204
+    r = await api_client.get(f"/api/v1/dp-sesmt/employees/{employee_id}")
+    assert r.status_code == 404
+
+
+# --- Dossie endpoints --------------------------------------------------------
+
+
+def _override_viacep(handler):
+    def _factory() -> ViaCEPClient:
+        transport = httpx.MockTransport(handler)
+        http = httpx.AsyncClient(
+            base_url="https://viacep.com.br", transport=transport
+        )
+        return ViaCEPClient(client=http)
+
+    return _factory
+
+
+def _override_brasilapi(handler):
+    def _factory() -> BrasilAPIClient:
+        transport = httpx.MockTransport(handler)
+        http = httpx.AsyncClient(
+            base_url="https://brasilapi.com.br", transport=transport
+        )
+        return BrasilAPIClient(client=http)
+
+    return _factory
+
+
+def _override_directdata():
+    def _factory() -> DirectDataClient:
+        return DirectDataClient(api_key=None)  # forca mock
+
+    return _factory
+
+
+@pytest.mark.asyncio
+async def test_dossie_cep_ok(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "cep": "01310-100",
+                "logradouro": "Avenida Paulista",
+                "bairro": "Bela Vista",
+                "localidade": "Sao Paulo",
+                "uf": "SP",
+            },
+        )
+
+    app.dependency_overrides[_get_viacep] = _override_viacep(handler)
+    try:
+        r = await api_client.get("/api/v1/dp-sesmt/dossie/cep/01310100")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["cidade"] == "Sao Paulo"
+        assert body["uf"] == "SP"
+    finally:
+        app.dependency_overrides.pop(_get_viacep, None)
+
+    # Log de auditoria foi gravado.
+    from sqlalchemy import select
+    rows = (await db_session.execute(select(DossieConsultaLog))).scalars().all()
+    assert any(r.fonte == "viacep" and r.sucesso for r in rows)
+
+
+@pytest.mark.asyncio
+async def test_dossie_cep_404(api_client: AsyncClient) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"erro": True})
+
+    app.dependency_overrides[_get_viacep] = _override_viacep(handler)
+    try:
+        r = await api_client.get("/api/v1/dp-sesmt/dossie/cep/99999999")
+        assert r.status_code == 404
+    finally:
+        app.dependency_overrides.pop(_get_viacep, None)
+
+
+@pytest.mark.asyncio
+async def test_dossie_cnpj_ok(api_client: AsyncClient) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "cnpj": "00000000000191",
+                "razao_social": "Banco do Brasil",
+                "uf": "DF",
+            },
+        )
+
+    app.dependency_overrides[_get_brasilapi] = _override_brasilapi(handler)
+    try:
+        r = await api_client.get(
+            "/api/v1/dp-sesmt/dossie/cnpj/00000000000191"
+        )
+        assert r.status_code == 200
+        assert r.json()["razao_social"] == "Banco do Brasil"
+    finally:
+        app.dependency_overrides.pop(_get_brasilapi, None)
+
+
+@pytest.mark.asyncio
+async def test_dossie_cpf_modo_mock(api_client: AsyncClient) -> None:
+    app.dependency_overrides[_get_directdata] = _override_directdata()
+    try:
+        r = await api_client.get(
+            f"/api/v1/dp-sesmt/dossie/cpf/{VALID_CPF_1}"
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["source"] == "directdata_mock"
+        assert body["nome"]
+    finally:
+        app.dependency_overrides.pop(_get_directdata, None)
+
+
+@pytest.mark.asyncio
+async def test_dossie_cpf_invalido_400(api_client: AsyncClient) -> None:
+    app.dependency_overrides[_get_directdata] = _override_directdata()
+    try:
+        r = await api_client.get("/api/v1/dp-sesmt/dossie/cpf/12345678901")
+        assert r.status_code == 400
+    finally:
+        app.dependency_overrides.pop(_get_directdata, None)
