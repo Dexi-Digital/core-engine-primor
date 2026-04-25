@@ -150,6 +150,24 @@ function statusBadge(status: string): { label: string; className: string } {
   }
 }
 
+function analiseBadge(status: string): { label: string; className: string } {
+  switch (status) {
+    case "completed":
+      return {
+        label: "Analisado",
+        className: "bg-emerald-100 text-emerald-800",
+      };
+    case "pending":
+      return { label: "Pendente", className: "bg-amber-100 text-amber-800" };
+    case "empty":
+      return { label: "Sem texto", className: "bg-slate-100 text-slate-700" };
+    case "failed":
+      return { label: "Falhou", className: "bg-rose-100 text-rose-800" };
+    default:
+      return { label: status, className: "bg-slate-100 text-slate-700" };
+  }
+}
+
 export default async function LicitacaoDetailPage(props: {
   params: Promise<{ id: string }>;
 }) {
@@ -274,11 +292,11 @@ export default async function LicitacaoDetailPage(props: {
           <div className="flex items-center gap-2">
             {analise && (
               <span
-                className={`rounded-full px-3 py-1 text-xs font-semibold ${statusBadge(
+                className={`rounded-full px-3 py-1 text-xs font-semibold ${analiseBadge(
                   analise.status
                 ).className}`}
               >
-                {statusBadge(analise.status).label}
+                {analiseBadge(analise.status).label}
               </span>
             )}
             <form action={analisarEditalAction}>
