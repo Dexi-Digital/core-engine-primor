@@ -91,6 +91,12 @@ export default async function LicitacoesPage(props: {
         </div>
         <div className="flex items-center gap-2">
           <Link
+            href="/licitacoes/certidoes"
+            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Certidões / atestados →
+          </Link>
+          <Link
             href="/licitacoes/boletins"
             className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
           >

@@ -11,6 +11,7 @@ from app.core.logging import configure_logging
 from app.modules.dp_sesmt.router import router as dp_sesmt_router
 from app.modules.financeiro_contratos.router import router as financeiro_router
 from app.modules.ia_tools.router import router as ia_tools_router
+from app.modules.licitacoes.certidoes_router import router as certidoes_router
 from app.modules.licitacoes.router import router as licitacoes_router
 from app.modules.manutencao_frota.router import router as manutencao_router
 
@@ -45,6 +46,13 @@ def create_app() -> FastAPI:
     app.include_router(dp_sesmt_router, prefix="/api/v1/dp-sesmt", tags=["dp-sesmt"])
     app.include_router(manutencao_router, prefix="/api/v1/manutencao-frota", tags=["manutencao-frota"])
     app.include_router(financeiro_router, prefix="/api/v1/financeiro", tags=["financeiro-contratos"])
+    # D.6: mount certidoes BEFORE the catch-all `/{licitacao_id}` route to
+    # avoid "certidoes" being parsed as an int (returns 422).
+    app.include_router(
+        certidoes_router,
+        prefix="/api/v1/licitacoes/certidoes",
+        tags=["licitacoes-certidoes"],
+    )
     app.include_router(licitacoes_router, prefix="/api/v1/licitacoes", tags=["licitacoes"])
     app.include_router(ia_tools_router, prefix="/api/v1/ia", tags=["ia-tools"])
 

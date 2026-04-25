@@ -125,3 +125,52 @@ async def _run_download_edital(licitacao_id: int) -> dict[str, object]:
         finally:
             await pncp.aclose()
     return result.model_dump()
+
+
+@celery_app.task(name="worker.tasks.licitacoes.dispatch_certidao_alerts")
+def dispatch_certidao_alerts(recipients: list[str] | None = None) -> dict[str, object]:
+    """Dispatch alertas de vencimento de certidoes (D.6).
+
+    Roda 1x/dia (Celery beat). Os destinatarios vem de uma env var
+    `CERTIDOES_ALERT_EMAILS` (lista separada por virgula) -- assim a
+    Primor pode mudar quem recebe sem deploy. Quando `recipients` e
+    informado explicitamente, usa esse valor (util para testes manuais).
+    """
+    return asyncio.run(_run_certidao_alerts(recipients))
+
+
+async def _run_certidao_alerts(
+    recipients: list[str] | None,
+) -> dict[str, object]:
+    try:
+        from app.core.config import get_settings
+        from app.core.db import SessionLocal
+        from app.integrations.resend.client import ResendClient
+        from app.modules.licitacoes.certidoes import dispatch_expiration_alerts
+    except ImportError as exc:  # pragma: no cover
+        return {"error": f"API package not available in worker: {exc}"}
+
+    settings = get_settings()
+    if not settings.resend_api_key:
+        return {"error": "RESEND_API_KEY not configured; skipping certidao alerts"}
+
+    if recipients is None:
+        env_val = os.getenv("CERTIDOES_ALERT_EMAILS", "").strip()
+        recipients = [e.strip() for e in env_val.split(",") if e.strip()]
+    if not recipients:
+        return {"error": "CERTIDOES_ALERT_EMAILS not configured; nothing to send"}
+
+    async with SessionLocal() as db:
+        resend = ResendClient(api_key=settings.resend_api_key)
+        try:
+            summary = await dispatch_expiration_alerts(
+                db, resend, recipients=recipients
+            )
+        finally:
+            await resend.aclose()
+    return {
+        "total_certidoes": summary.total_certidoes,
+        "sent": summary.sent,
+        "skipped": summary.skipped,
+        "failed": summary.failed,
+    }
