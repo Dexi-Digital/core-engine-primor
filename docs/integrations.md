@@ -244,3 +244,64 @@ Azure AD — itens viram `mock-<sha>` e bytes ficam em memória).
 | GET    | `/drives/{drive_id}/items/{id}/content`                 | download          |
 | DELETE | `/drives/{drive_id}/items/{id}`                         | remoção           |
 
+
+
+## Domínio Sistemas — Central do Desenvolvedor (implementado, Módulo C)
+
+Adapter: `app/integrations/dominio/client.py` (`DominioClient` real
+com OAuth2 client_credentials + multipart upload, `DominioMockClient`
+determinístico para dev/CI).
+
+**Caso de uso:** envio automático de XMLs fiscais ao escritório
+contábil parceiro (NF-e, NFC-e, NFS-e, CT-e, CF-e, Baixa de Parcela)
+via API Domínio, eliminando a necessidade do cliente do ERP enviar
+manualmente os documentos para a Contabilidade.
+
+**Tipos suportados** (todos os do leiaute oficial Domínio):
+
+| Tipo | Versão | Origem do leiaute |
+|------|--------|-------------------|
+| `nfe`   | 4.00 | Portal NFe (`<infNFe>`)            |
+| `nfce`  | 4.00 | Portal NFe modelo 65 (`<mod>65</mod>`) |
+| `nfse`  | ABRASF 1.0 / Nacional | Prefeitura emissora |
+| `cte`   | 3.00 | Portal CT-e (`<infCte>`)           |
+| `cfe`   | 0.07/0.08 | SEFAZ-SP SAT (`<infCFe>`)     |
+| `baixa` | Domínio  | Manual de Baixas Domínio       |
+
+**Como ligar credenciais reais:**
+
+1. Cadastro de parceiro na **Central do Desenvolvedor** Domínio:
+   <https://www.dominiosistemas.com.br/lp-centraldodesenvolvedor-api/>
+2. A Domínio gera `client_id` e `client_secret` para o parceiro.
+3. O escritório contábil cliente fornece `audit_url` + `integracao`
+   (identificadores do tenant Domínio onde os XMLs vão parar).
+4. Setar no `.env`:
+
+```
+DOMINIO_AUDIT_URL=https://audit.contabilidadexyz.com.br
+DOMINIO_INTEGRACAO=identificador-tenant
+DOMINIO_CLIENT_ID=...
+DOMINIO_CLIENT_SECRET=...
+DOMINIO_BASE_URL=https://api.dominioexterior.com.br/api/v1   # ajustar p/ homol
+```
+
+Sem as 4 variáveis preenchidas, o adapter cai no `DominioMockClient`
+(útil para dev/CI — protocolos viram `MOCK-<TIPO>-<sha>-<seq>` e
+nenhum tráfego de rede sai da máquina).
+
+**Endpoints da API Domínio que usamos:**
+
+| Método | Path                                  | Quando             |
+|--------|---------------------------------------|--------------------|
+| POST   | `/token`                              | autenticação OAuth2 |
+| POST   | `/upload` (multipart `arquivo`)       | envio do XML       |
+
+**Tratamento de erros:**
+
+- `httpx.HTTPError` (timeout, DNS, conexão) → `DominioError` (NUNCA
+  escapa do adapter — o serviço captura e marca `status_envio="erro"`).
+- HTTP 401/403 no `/token` ou `/upload` → `DominioAuthError`
+  (separado de `DominioError` porque auth não é transitório — não
+  retentamos, precisa rotar credenciais).
+- Token cached em memória com TTL (renova 5 min antes do expiry) para
+  não sobrecarregar o `/token` que é rate-limitado.

@@ -1,0 +1,130 @@
+"""Testes do parser fiscal: detec\u00e7\u00e3o de tipo + extra\u00e7\u00e3o de metadata."""
+from __future__ import annotations
+
+from decimal import Decimal
+
+import pytest
+
+from app.modules.fiscal.parser import FiscalParseError, parse_xml
+from tests.fixtures.fiscal.samples import (
+    ALL_SAMPLES,
+    BAIXA_XML,
+    CFE_XML,
+    CTE_XML,
+    NFCE_65_XML,
+    NFE_44_XML,
+    NFSE_ABRASF_XML,
+)
+
+
+def test_parse_nfe_extrai_chave_e_valor():
+    parsed = parse_xml(NFE_44_XML)
+    assert parsed.tipo == "nfe"
+    assert parsed.chave_acesso == "35240414200166000187550010000123451000000001"
+    assert parsed.numero == "12345"
+    assert parsed.serie == "1"
+    assert parsed.emitente_cnpj == "14200166000187"
+    assert parsed.emitente_nome == "Construtora Primor LTDA"
+    assert parsed.destinatario_cnpj == "33000167000101"
+    assert parsed.valor_total == Decimal("15750.50")
+    assert parsed.data_emissao is not None
+    assert parsed.xml_hash  # sha256 hex
+
+
+def test_parse_nfce_detecta_modelo_65():
+    """Diferenciacao critica: NF-e (mod 55) vs NFC-e (mod 65) -- a
+    Domínio aceita os dois mas trata diferente. Nao podemos enviar
+    NFC-e como NF-e."""
+    parsed = parse_xml(NFCE_65_XML)
+    assert parsed.tipo == "nfce"
+    assert parsed.numero == "9999"
+    # NFC-e tem CPF do consumidor (nao CNPJ).
+    assert parsed.destinatario_cnpj == "12345678901"
+    assert parsed.valor_total == Decimal("89.90")
+
+
+def test_parse_cte_extrai_vTPrest():
+    parsed = parse_xml(CTE_XML)
+    assert parsed.tipo == "cte"
+    assert parsed.chave_acesso == "35240414200166000187570010000055551000000001"
+    assert parsed.numero == "5555"
+    assert parsed.valor_total == Decimal("4500.00")
+
+
+def test_parse_cfe_extrai_vCFe_e_data_compacta():
+    """CF-e usa formato data 'yyyymmdd' (sem T) -- regressao do parser."""
+    parsed = parse_xml(CFE_XML)
+    assert parsed.tipo == "cfe"
+    assert parsed.numero == "123450"
+    assert parsed.serie == "900012345"
+    assert parsed.valor_total == Decimal("250.00")
+    assert parsed.data_emissao is not None
+    assert parsed.data_emissao.year == 2024
+    assert parsed.data_emissao.month == 4
+
+
+def test_parse_nfse_abrasf():
+    parsed = parse_xml(NFSE_ABRASF_XML)
+    assert parsed.tipo == "nfse"
+    assert parsed.numero == "2024000123"
+    assert parsed.emitente_cnpj == "14200166000187"
+    assert parsed.destinatario_cnpj == "33000167000101"
+    assert parsed.valor_total == Decimal("3200.75")
+
+
+def test_parse_baixa_parcela():
+    parsed = parse_xml(BAIXA_XML)
+    assert parsed.tipo == "baixa"
+    assert parsed.numero == "P-001"
+    assert parsed.emitente_cnpj == "14200166000187"
+    assert parsed.valor_total == Decimal("1500.00")
+
+
+def test_parse_xml_vazio_levanta_erro():
+    with pytest.raises(FiscalParseError, match="vazio"):
+        parse_xml(b"")
+
+
+def test_parse_xml_malformado_levanta_erro():
+    with pytest.raises(FiscalParseError, match="malformado"):
+        parse_xml(b"<NFe><infNFe")
+
+
+def test_parse_xml_tipo_desconhecido_levanta_erro():
+    with pytest.raises(FiscalParseError, match="nao reconhecido"):
+        parse_xml(b"<documento><foo>bar</foo></documento>")
+
+
+def test_parse_xml_xxe_blocked_by_defusedxml():
+    """Defusa: XXE/billion-laughs nao podem comprometer o parser.
+
+    `defusedxml.ElementTree.fromstring` rejeita DOCTYPE com entidades
+    -- regressao defensiva contra XML malicioso vindo de ERPs externos.
+    """
+    xxe = b"""<?xml version="1.0"?>
+<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>
+<NFe><infNFe Id="NFe35"><test>&xxe;</test></infNFe></NFe>
+"""
+    with pytest.raises(FiscalParseError):
+        parse_xml(xxe)
+
+
+def test_parse_xml_hash_e_deterministico():
+    """Hash SHA-256 e usado como chave de idempotencia para CF-e/Baixa
+    onde nao ha chave_acesso. Tem que ser estavel byte-a-byte."""
+    a = parse_xml(NFE_44_XML)
+    b = parse_xml(NFE_44_XML)
+    assert a.xml_hash == b.xml_hash
+
+    c = parse_xml(CTE_XML)
+    assert c.xml_hash != a.xml_hash
+
+
+@pytest.mark.parametrize("tipo,xml", list(ALL_SAMPLES.items()))
+def test_parse_todos_os_6_tipos_dominio(tipo: str, xml: bytes):
+    """Smoke test: cada um dos 6 tipos suportados pela Dominio
+    (NF-e, NFC-e, CT-e, CF-e, NFS-e, Baixa) deve parsear sem erro
+    e retornar `parsed.tipo == tipo` esperado."""
+    parsed = parse_xml(xml)
+    assert parsed.tipo == tipo
+    assert parsed.xml_hash
