@@ -5,6 +5,7 @@ const nav = [
   { href: "/rh", label: "RH / DP" },
   { href: "/manutencao", label: "Manutenção" },
   { href: "/financeiro", label: "Financeiro" },
+  { href: "/fiscal/documentos", label: "Fiscal (Domínio)" },
   { href: "/licitacoes", label: "Licitações" },
   { href: "/juridico", label: "Jurídico" },
 ];

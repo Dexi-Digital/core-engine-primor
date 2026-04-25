@@ -70,6 +70,23 @@ class Settings(BaseSettings):
     # de outros conteudos do tenant.
     ms_graph_root_folder: str = Field(default="MotorCentral/editais")
 
+    # Dominio Sistemas - Central do Desenvolvedor (Modulo C). Sem
+    # credenciais o adapter cai no DominioMockClient deterministico
+    # para nao bloquear dev/CI -- igual DirectData/LLM/OneDrive.
+    # `audit_url` e `integracao` identificam o escritorio contabil
+    # parceiro dentro do tenant Dominio.
+    dominio_audit_url: str | None = Field(default=None)
+    dominio_integracao: str | None = Field(default=None)
+    dominio_client_id: str | None = Field(default=None)
+    dominio_client_secret: str | None = Field(default=None)
+    dominio_base_url: str = Field(
+        default="https://api.dominioexterior.com.br/api/v1"
+    )
+    # Subpasta no storage onde os XMLs vao parar (usa a mesma
+    # `EditaisStorage` -- local FS ou OneDrive). Mantemos uma raiz
+    # dedicada para isolar por modulo.
+    fiscal_storage_subdir: str = Field(default="MotorCentral/fiscal")
+
 
 @lru_cache
 def get_settings() -> Settings:

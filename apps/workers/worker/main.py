@@ -24,6 +24,7 @@ celery_app = Celery(
         "worker.tasks.manutencao",
         "worker.tasks.financeiro",
         "worker.tasks.licitacoes",
+        "worker.tasks.fiscal",
         "worker.tasks.ia",
     ],
 )
@@ -35,6 +36,7 @@ celery_app.conf.update(
         "worker.tasks.manutencao.*": {"queue": "manutencao"},
         "worker.tasks.financeiro.*": {"queue": "financeiro"},
         "worker.tasks.licitacoes.*": {"queue": "licitacoes"},
+        "worker.tasks.fiscal.*": {"queue": "financeiro"},
         "worker.tasks.ia.*": {"queue": "ia"},
     },
     task_acks_late=True,
