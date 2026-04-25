@@ -82,7 +82,14 @@ class OneDriveClient(IntegrationClient):
         self._client_secret = client_secret
         self._drive_id = drive_id
         self._root_folder = root_folder.strip("/")
-        self._client = httpx.AsyncClient(timeout=timeout, transport=transport)
+        # follow_redirects=True e CRITICO para download: o Graph
+        # responde /items/{id}/content com 302 -> URL pre-autenticada
+        # do CDN. Sem follow_redirects, .content retorna o body do
+        # redirect (vazio) e corrompe silenciosamente todo arquivo
+        # baixado, quebrando a analise IA do D.5.
+        self._client = httpx.AsyncClient(
+            timeout=timeout, transport=transport, follow_redirects=True
+        )
         self._token: str | None = None
         self._token_expires_at: float = 0.0
         self._token_lock = asyncio.Lock()
@@ -238,7 +245,10 @@ class OneDriveClient(IntegrationClient):
         r = await self._client.get(url, headers=await self._auth_header())
         if r.status_code == 404:
             raise OneDriveItemNotFound(f"item {item_id} nao encontrado")
-        if r.status_code not in (200, 302):
+        # 302 nao e mais aceito aqui porque follow_redirects=True ja
+        # resolve o redirect do CDN para nos. Se ainda chegar 302,
+        # algo configurou diferente -- nao engolimos silenciosamente.
+        if r.status_code != 200:
             raise OneDriveError(f"download {r.status_code}: {r.text[:200]}")
         return r.content
 

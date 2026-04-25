@@ -125,3 +125,68 @@ async def test_save_raises_when_item_has_no_id():
     storage = OneDriveStorage(_NoIdClient())  # type: ignore[arg-type]
     with pytest.raises(OSError, match="sem 'id'"):
         await storage.save(licitacao_id=1, filename="x.pdf", content=_stream(b"a"))
+
+
+# -- regressao: router dep cleanup ---------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_editais_storage_dep_closes_onedrive_client():
+    """Regressao Bug #2: get_editais_storage tem que fechar o
+    OneDriveClient (httpx.AsyncClient interno) ao final da request,
+    senao cada request vaza um pool TCP em prod.
+
+    Verifica chamando a async-generator dep diretamente e conferindo
+    que aclose foi invocado quando o gerador termina.
+    """
+    from app.core.config import get_settings
+    from app.modules.licitacoes.router import get_editais_storage
+
+    settings = get_settings()
+    settings.storage_backend = "onedrive"  # type: ignore[misc]
+    # forca modo mock (sem credenciais)
+    settings.ms_graph_tenant_id = None  # type: ignore[misc]
+    settings.ms_graph_client_id = None  # type: ignore[misc]
+    settings.ms_graph_client_secret = None  # type: ignore[misc]
+    settings.ms_graph_drive_id = None  # type: ignore[misc]
+
+    closed = {"count": 0}
+
+    try:
+        gen = get_editais_storage()
+        storage = await gen.__anext__()
+        assert isinstance(storage, OneDriveStorage)
+        # Patch aclose do client interno para detectar a chamada.
+        original = storage._client.aclose  # type: ignore[attr-defined]
+
+        async def tracked_aclose() -> None:
+            closed["count"] += 1
+            await original()
+
+        storage._client.aclose = tracked_aclose  # type: ignore[attr-defined]
+
+        # Gerador termina -> finally do dep dispara aclose.
+        with pytest.raises(StopAsyncIteration):
+            await gen.__anext__()
+
+        assert closed["count"] == 1, "aclose nao foi chamado pelo dep cleanup"
+    finally:
+        settings.storage_backend = "local"  # type: ignore[misc]
+
+
+@pytest.mark.asyncio
+async def test_get_editais_storage_local_backend_no_close_needed():
+    """LocalStorage nao tem nada para fechar -- o dep nao deve quebrar
+    quando o backend e 'local' (default)."""
+    from app.core.config import get_settings
+    from app.modules.licitacoes.router import get_editais_storage
+    from app.modules.licitacoes.storage import LocalStorage
+
+    settings = get_settings()
+    settings.storage_backend = "local"  # type: ignore[misc]
+
+    gen = get_editais_storage()
+    storage = await gen.__anext__()
+    assert isinstance(storage, LocalStorage)
+    with pytest.raises(StopAsyncIteration):
+        await gen.__anext__()

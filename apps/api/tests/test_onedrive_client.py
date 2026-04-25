@@ -288,6 +288,41 @@ async def test_real_chunked_upload_for_large_file():
 
 
 @pytest.mark.asyncio
+async def test_real_download_follows_redirect_to_cdn():
+    """Regressao Bug #1: o Graph responde GET /items/{id}/content com 302
+    redirecionando para uma URL pre-autenticada do CDN.
+
+    Sem `follow_redirects=True` no httpx.AsyncClient, `r.content` virava
+    o body do redirect (vazio) e corrompia silenciosamente todo arquivo
+    baixado -- quebrando D.4 (storage de anexos) e D.5 (analise IA).
+    """
+
+    cdn_url = "https://contoso-my.sharepoint.com/cdn/preauth/abc123"
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "/oauth2/v2.0/token" in url:
+            return httpx.Response(
+                200, json={"access_token": "T", "expires_in": 3600}
+            )
+        if request.method == "GET" and url.endswith("/items/REDIRID/content"):
+            # Graph retorna 302 com Location apontando para o CDN.
+            return httpx.Response(302, headers={"Location": cdn_url})
+        if request.method == "GET" and url == cdn_url:
+            # CDN entrega os bytes reais (sem token, URL ja assinada).
+            return httpx.Response(200, content=b"REAL_FILE_BYTES_HERE")
+        return httpx.Response(500, text=f"unexpected {request.method} {url}")
+
+    client = _build_client(handler)
+    try:
+        body = await client.download("REDIRID")
+        # Antes do fix, body viria vazio (body do redirect).
+        assert body == b"REAL_FILE_BYTES_HERE"
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_real_download_404_raises_item_not_found():
     def handler(request: httpx.Request) -> httpx.Response:
         if "/oauth2/v2.0/token" in str(request.url):

@@ -7,6 +7,7 @@ Escopo:
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import date, timedelta
 from typing import Annotated
 
@@ -65,13 +66,18 @@ def get_pncp_client() -> PncpClient:
     return PncpClient()
 
 
-def get_editais_storage() -> EditaisStorage:
+async def get_editais_storage() -> AsyncIterator[EditaisStorage]:
     """Storage backend selecionado por config.
 
     `STORAGE_BACKEND=local` (default) -> filesystem local.
     `STORAGE_BACKEND=onedrive` -> Microsoft Graph; cai em mock se as
     4 credenciais MS_GRAPH_* nao estiverem todas presentes (igual ao
     pattern do DirectData/LLM em outros modulos).
+
+    Async generator (com `yield`) para que o FastAPI feche o
+    `httpx.AsyncClient` interno do `OneDriveClient` ao final da
+    request -- caso contrario cada request vaza um pool de TCP
+    (mesmo padrao usado em `pncp` e `llm` neste mesmo arquivo).
     """
     settings = get_settings()
     backend = (settings.storage_backend or "local").lower()
@@ -83,8 +89,14 @@ def get_editais_storage() -> EditaisStorage:
             drive_id=settings.ms_graph_drive_id,
             root_folder=settings.ms_graph_root_folder,
         )
-        return OneDriveStorage(client)
-    return LocalStorage(settings.editais_storage_path)
+        try:
+            yield OneDriveStorage(client)
+        finally:
+            await client.aclose()
+        return
+    # LocalStorage nao tem nada para fechar -- FastAPI segue ok
+    # com um `yield` unico mesmo sem `finally`.
+    yield LocalStorage(settings.editais_storage_path)
 
 
 def build_llm_provider(settings: Settings) -> LLMProvider:
