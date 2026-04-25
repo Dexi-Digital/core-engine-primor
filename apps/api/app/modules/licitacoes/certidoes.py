@@ -99,8 +99,8 @@ def janela_for_certidao(
     delta = (validade - today).days
     if delta < 0:
         return None
-    # Pega a maior janela <= delta (a mais "urgente" ainda nao acionada).
-    # Ex.: faltam 12 dias -> janela 7 (a 15 ja deveria ter sido enviada).
+    # Pega a menor janela >= delta (a mais "urgente" ainda nao acionada).
+    # Ex.: faltam 12 dias -> janela 15 (a 7 ainda nao atingiu o threshold).
     candidatas = [j for j in JANELAS_ALERTA if j >= delta]
     if not candidatas:
         return None
