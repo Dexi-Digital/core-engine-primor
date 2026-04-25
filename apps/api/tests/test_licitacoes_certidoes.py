@@ -267,6 +267,105 @@ async def test_dispatch_skips_when_no_validade(db_session: AsyncSession) -> None
 
 
 @pytest.mark.asyncio
+async def test_dispatch_retries_after_failure_without_unique_violation(
+    db_session: AsyncSession,
+) -> None:
+    """Regressao: 1a tentativa falha grava log status=failed; 2a tentativa
+    deve atualizar in-place (UPDATE), nao tentar INSERT que violaria a
+    UniqueConstraint(certidao_id, janela)."""
+    today = date(2026, 4, 25)
+    await create_certidao(
+        db_session,
+        empresa_cnpj="44229813000123",
+        tipo="CND_FEDERAL",
+        validade=today + timedelta(days=10),  # janela 15d
+    )
+
+    fail_count = {"n": 0}
+
+    def fail_handler(request: httpx.Request) -> httpx.Response:
+        fail_count["n"] += 1
+        return httpx.Response(500, json={"message": "boom"})
+
+    fail_resend = ResendClient(
+        api_key="re_test",
+        client=httpx.AsyncClient(
+            base_url="https://mock.resend",
+            transport=httpx.MockTransport(fail_handler),
+            headers={"Authorization": "Bearer re_test"},
+        ),
+    )
+    summary1 = await dispatch_expiration_alerts(
+        db_session, fail_resend, recipients=["x@y.com"], today=today
+    )
+    await fail_resend.aclose()
+    assert summary1.failed == 1
+    assert summary1.sent == 0
+
+    # Confirma que existe exatamente 1 log com status=failed.
+    logs = (
+        await db_session.execute(CertidaoAlertaLog.__table__.select())
+    ).all()
+    assert len(logs) == 1
+
+    # Segunda rodada: ainda falha. Sem o fix, isto crasharia com IntegrityError.
+    fail_resend2 = ResendClient(
+        api_key="re_test",
+        client=httpx.AsyncClient(
+            base_url="https://mock.resend",
+            transport=httpx.MockTransport(fail_handler),
+            headers={"Authorization": "Bearer re_test"},
+        ),
+    )
+    summary2 = await dispatch_expiration_alerts(
+        db_session, fail_resend2, recipients=["x@y.com"], today=today
+    )
+    await fail_resend2.aclose()
+    assert summary2.failed == 1
+    logs = (
+        await db_session.execute(CertidaoAlertaLog.__table__.select())
+    ).all()
+    assert len(logs) == 1, "log deve ter sido atualizado in-place, nao duplicado"
+
+    # Terceira rodada: agora o Resend volta. O log failed deve virar sent.
+    captured: list[httpx.Request] = []
+    ok_resend = _mock_resend_client(captured)
+    summary3 = await dispatch_expiration_alerts(
+        db_session, ok_resend, recipients=["x@y.com"], today=today
+    )
+    await ok_resend.aclose()
+    assert summary3.sent == 1
+    assert summary3.failed == 0
+    logs = (
+        await db_session.execute(CertidaoAlertaLog.__table__.select())
+    ).all()
+    assert len(logs) == 1, "ainda 1 log, agora promovido a sent"
+
+
+@pytest.mark.asyncio
+async def test_update_certidao_can_clear_validade_to_null(
+    db_session: AsyncSession,
+) -> None:
+    """Regressao: PUT com `validade=None` deve converter certidao em
+    'sem_validade' (atestados perpetuos podem ter sido cadastrados com
+    data de validade por engano)."""
+    from app.modules.licitacoes.certidoes import update_certidao
+
+    today = date(2026, 4, 25)
+    row = await create_certidao(
+        db_session,
+        empresa_cnpj="X",
+        tipo="ATESTADO_CAT",
+        validade=today + timedelta(days=30),
+    )
+    assert row.validade is not None
+
+    updated = await update_certidao(db_session, row.id, validade=None)
+    assert updated is not None
+    assert updated.validade is None
+
+
+@pytest.mark.asyncio
 async def test_dispatch_skips_with_empty_recipients(
     db_session: AsyncSession,
 ) -> None:

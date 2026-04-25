@@ -194,8 +194,11 @@ async def update_certidao(
     row = await db.get(CertidaoEmpresa, certidao_id)
     if row is None:
         return None
+    # Permite limpar campos nullable explicitamente (ex: PUT validade=null para
+    # converter uma certidao em "sem validade"). O router ja usa
+    # exclude_unset=True, entao so chegam aqui campos que o cliente enviou.
     for key, value in fields.items():
-        if hasattr(row, key) and value is not None:
+        if hasattr(row, key):
             setattr(row, key, value)
     await db.commit()
     await db.refresh(row)
@@ -217,6 +220,12 @@ async def delete_certidao(db: AsyncSession, certidao_id: int) -> bool:
 async def _alerta_already_sent(
     db: AsyncSession, certidao_id: int, janela: str
 ) -> bool:
+    """Verifica se ja existe envio bem-sucedido para essa janela.
+
+    Note que `failed` nao conta -- entradas falhas devem ser tentadas
+    novamente no proximo cron, atualizando o log existente in-place
+    (a UniqueConstraint `(certidao_id, janela)` impede duplicatas).
+    """
     stmt = (
         select(CertidaoAlertaLog.id)
         .where(CertidaoAlertaLog.certidao_id == certidao_id)
@@ -225,6 +234,18 @@ async def _alerta_already_sent(
         .limit(1)
     )
     return (await db.execute(stmt)).scalar_one_or_none() is not None
+
+
+async def _get_existing_log(
+    db: AsyncSession, certidao_id: int, janela: str
+) -> CertidaoAlertaLog | None:
+    stmt = (
+        select(CertidaoAlertaLog)
+        .where(CertidaoAlertaLog.certidao_id == certidao_id)
+        .where(CertidaoAlertaLog.janela == janela)
+        .limit(1)
+    )
+    return (await db.execute(stmt)).scalar_one_or_none()
 
 
 def render_alerta_html(
@@ -374,6 +395,11 @@ async def dispatch_expiration_alerts(
                 f"{tipo_label} ({validade_str})"
             )
 
+        # Carrega log existente uma unica vez antes de enviar -- usado tanto
+        # no branch de erro (UPDATE para nao violar UniqueConstraint) quanto
+        # no branch de sucesso (UPDATE failed -> sent).
+        existing_log = await _get_existing_log(db, certidao.id, janela_str)
+
         try:
             resp = await resend.send_email(
                 to=list(recipients),
@@ -389,14 +415,34 @@ async def dispatch_expiration_alerts(
                 exc,
                 exc_info=False,
             )
-            log = CertidaoAlertaLog(
-                certidao_id=certidao.id,
-                janela=janela_str,
-                recipients=list(recipients),
-                status="failed",
-                error_message=str(exc)[:1024],
-            )
-            db.add(log)
+            error_msg = str(exc)[:1024]
+            if existing_log is None:
+                db.add(
+                    CertidaoAlertaLog(
+                        certidao_id=certidao.id,
+                        janela=janela_str,
+                        recipients=list(recipients),
+                        status="failed",
+                        error_message=error_msg,
+                    )
+                )
+            else:
+                # Retry de uma falha anterior que tornou a falhar -- atualiza
+                # in-place para nao violar UniqueConstraint(certidao_id, janela).
+                existing_log.recipients = list(recipients)
+                existing_log.status = "failed"
+                existing_log.error_message = error_msg
+            # Commit per-certidao para que 1 falha em uma certidao nao
+            # rollback as ja enviadas com sucesso nesta rodada.
+            try:
+                await db.commit()
+            except Exception:  # noqa: BLE001
+                logger.exception(
+                    "falha ao gravar log de erro do alerta certidao=%s janela=%s",
+                    certidao.id,
+                    janela_str,
+                )
+                await db.rollback()
             failed += 1
             results.append(
                 AlertaResult(
@@ -404,20 +450,48 @@ async def dispatch_expiration_alerts(
                     janela=janela_str,
                     status="failed",
                     recipients=list(recipients),
-                    error_message=str(exc)[:1024],
+                    error_message=error_msg,
                 )
             )
             continue
 
         message_id = resp.get("id") if isinstance(resp, dict) else None
-        log = CertidaoAlertaLog(
-            certidao_id=certidao.id,
-            janela=janela_str,
-            recipients=list(recipients),
-            resend_message_id=message_id,
-            status="sent",
-        )
-        db.add(log)
+        if existing_log is None:
+            db.add(
+                CertidaoAlertaLog(
+                    certidao_id=certidao.id,
+                    janela=janela_str,
+                    recipients=list(recipients),
+                    resend_message_id=message_id,
+                    status="sent",
+                )
+            )
+        else:
+            # Retry bem-sucedido apos falha previa -- promove o log para sent.
+            existing_log.recipients = list(recipients)
+            existing_log.resend_message_id = message_id
+            existing_log.status = "sent"
+            existing_log.error_message = None
+        try:
+            await db.commit()
+        except Exception:  # noqa: BLE001
+            logger.exception(
+                "falha ao gravar log de sucesso do alerta certidao=%s janela=%s",
+                certidao.id,
+                janela_str,
+            )
+            await db.rollback()
+            failed += 1
+            results.append(
+                AlertaResult(
+                    certidao_id=certidao.id,
+                    janela=janela_str,
+                    status="failed",
+                    recipients=list(recipients),
+                    error_message="db_commit_failed",
+                )
+            )
+            continue
         sent += 1
         results.append(
             AlertaResult(
@@ -428,8 +502,6 @@ async def dispatch_expiration_alerts(
                 resend_message_id=message_id,
             )
         )
-
-    await db.commit()
 
     return AlertaSummary(
         total_certidoes=len(certidoes),
