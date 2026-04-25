@@ -21,11 +21,16 @@ from app.modules.manutencao_frota.validators import (
 
 
 def _ensure_status_canonico(v: str | None) -> str | None:
-    """Validador compartilhado entre Create e Update -- mesma fonte da
-    verdade (`STATUSES_VALIDOS`) pra evitar status fantasma na UI."""
-    if v is None:
-        return v
-    if v not in STATUSES_VALIDOS:
+    """Validador compartilhado entre Create e Update.
+
+    Rejeita explicitamente `None` -- a coluna `frota_veiculos.status`
+    e NOT NULL, e Pydantic v2 (`validate_default=False`) so chama o
+    validador quando o campo aparece no payload, entao o caminho
+    "campo nao enviado" no PATCH continua passando direto pelo
+    `exclude_unset=True` no router. Quem manda `{"status": null}`
+    explicito ganha 422 aqui em vez de IntegrityError 500 no commit.
+    """
+    if v is None or not isinstance(v, str) or v not in STATUSES_VALIDOS:
         raise ValueError(
             "status deve ser um de: " + ", ".join(sorted(STATUSES_VALIDOS))
         )

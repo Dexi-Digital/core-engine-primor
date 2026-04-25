@@ -100,6 +100,36 @@ async def test_create_veiculo_chassi_invalido(api_client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_update_status_null_explicito(api_client: AsyncClient) -> None:
+    """Regressao do Devin Review: PATCH `{"status": null}` nao pode
+    bater no NOT NULL do DB e virar 500. Tem que falhar com 422."""
+    cr = await api_client.post(
+        "/api/v1/manutencao-frota/veiculos", json=_veiculo_payload()
+    )
+    veiculo_id = cr.json()["id"]
+    r = await api_client.patch(
+        f"/api/v1/manutencao-frota/veiculos/{veiculo_id}",
+        json={"status": None},
+    )
+    assert r.status_code == 422
+    g = await api_client.get(
+        f"/api/v1/manutencao-frota/veiculos/{veiculo_id}"
+    )
+    assert g.json()["status"] == "ativo"
+
+
+@pytest.mark.asyncio
+async def test_create_status_null_explicito(api_client: AsyncClient) -> None:
+    """Mesmo bug, lado do POST: payload com status=null deve falhar 422."""
+    payload = _veiculo_payload()
+    payload["status"] = None
+    r = await api_client.post(
+        "/api/v1/manutencao-frota/veiculos", json=payload
+    )
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_update_status_invalido(api_client: AsyncClient) -> None:
     """Regressao: igual ao bug do M\u00f3dulo A -- update parcial nao
     pode aceitar status arbitrario."""
