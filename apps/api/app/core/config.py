@@ -54,6 +54,22 @@ class Settings(BaseSettings):
     # desbloquear desenvolvimento -- ver app/integrations/directdata.
     directdata_api_key: str | None = Field(default=None)
 
+    # Microsoft Graph / OneDrive (storage de documentos: anexos de
+    # edital, ASOs, contratos). Mesmo padrao do DirectData/LLM: sem
+    # credenciais, o adapter opera em modo mock determinístico para
+    # desbloquear desenvolvimento -- ver app/integrations/onedrive.
+    # `storage_backend` controla qual backend `EditaisStorage` o
+    # router monta: "local" (default) ou "onedrive".
+    storage_backend: str = Field(default="local")
+    ms_graph_tenant_id: str | None = Field(default=None)
+    ms_graph_client_id: str | None = Field(default=None)
+    ms_graph_client_secret: str | None = Field(default=None)
+    ms_graph_drive_id: str | None = Field(default=None)
+    # Subpasta no drive onde os anexos de licitacao vao parar.
+    # Mantemos uma raiz dedicada para isolar os arquivos da plataforma
+    # de outros conteudos do tenant.
+    ms_graph_root_folder: str = Field(default="MotorCentral/editais")
+
 
 @lru_cache
 def get_settings() -> Settings:
