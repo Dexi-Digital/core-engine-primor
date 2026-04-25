@@ -210,7 +210,12 @@ class OneDriveClient(IntegrationClient):
                 "Content-Length": str(len(chunk)),
                 "Content-Range": f"bytes {offset}-{end - 1}/{total}",
             }
-            r = await self._client.put(upload_url, headers=headers, content=chunk)
+            try:
+                r = await self._client.put(
+                    upload_url, headers=headers, content=chunk
+                )
+            except httpx.HTTPError as exc:
+                raise OneDriveError(f"chunk upload Graph falhou: {exc}") from exc
             if r.status_code not in (200, 201, 202):
                 raise OneDriveError(
                     f"chunk upload retornou {r.status_code}: {r.text[:200]}"
@@ -229,11 +234,16 @@ class OneDriveClient(IntegrationClient):
         )
         headers = await self._auth_header()
         headers["Content-Type"] = "application/json"
-        r = await self._client.post(
-            url,
-            headers=headers,
-            json={"item": {"@microsoft.graph.conflictBehavior": "replace"}},
-        )
+        try:
+            r = await self._client.post(
+                url,
+                headers=headers,
+                json={"item": {"@microsoft.graph.conflictBehavior": "replace"}},
+            )
+        except httpx.HTTPError as exc:
+            raise OneDriveError(
+                f"createUploadSession Graph falhou: {exc}"
+            ) from exc
         if r.status_code not in (200, 201):
             raise OneDriveError(
                 f"createUploadSession {r.status_code}: {r.text[:200]}"
@@ -242,7 +252,15 @@ class OneDriveClient(IntegrationClient):
 
     async def download(self, item_id: str) -> bytes:
         url = f"{GRAPH_BASE}/drives/{self._drive_id}/items/{item_id}/content"
-        r = await self._client.get(url, headers=await self._auth_header())
+        try:
+            r = await self._client.get(url, headers=await self._auth_header())
+        except httpx.HTTPError as exc:
+            # Sem este wrap, um timeout/DNS error escaparia como
+            # httpx.HTTPError e nao seria capturado por
+            # OneDriveStorage.read (so trata OneDriveError) -- a
+            # extracao de PDF do D.5 quebraria inteira em uma falha
+            # transitoria de rede em um unico anexo.
+            raise OneDriveError(f"download Graph falhou: {exc}") from exc
         if r.status_code == 404:
             raise OneDriveItemNotFound(f"item {item_id} nao encontrado")
         # 302 nao e mais aceito aqui porque follow_redirects=True ja
@@ -254,7 +272,12 @@ class OneDriveClient(IntegrationClient):
 
     async def delete(self, item_id: str) -> None:
         url = f"{GRAPH_BASE}/drives/{self._drive_id}/items/{item_id}"
-        r = await self._client.delete(url, headers=await self._auth_header())
+        try:
+            r = await self._client.delete(
+                url, headers=await self._auth_header()
+            )
+        except httpx.HTTPError as exc:
+            raise OneDriveError(f"delete Graph falhou: {exc}") from exc
         if r.status_code == 404:
             raise OneDriveItemNotFound(f"item {item_id} nao encontrado")
         if r.status_code not in (200, 204):

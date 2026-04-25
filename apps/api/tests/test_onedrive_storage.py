@@ -190,3 +190,77 @@ async def test_get_editais_storage_local_backend_no_close_needed():
     assert isinstance(storage, LocalStorage)
     with pytest.raises(StopAsyncIteration):
         await gen.__anext__()
+
+
+# -- regressao: httpx.HTTPError -> OSError end-to-end ---
+
+
+@pytest.mark.asyncio
+async def test_storage_read_network_error_becomes_oserror():
+    """Regressao Bug #3: timeout/DNS do httpx no client real precisa
+    chegar na storage layer como OSError (`pdf_extract.py` captura
+    `(FileNotFoundError, OSError)` -- raw httpx.HTTPError escaparia).
+
+    Caminho completo: httpx.MockTransport sobe ConnectError ->
+    OneDriveClient.download envolve em OneDriveError ->
+    OneDriveStorage.read envolve em OSError.
+    """
+    import httpx
+
+    from app.integrations.onedrive.client import OneDriveClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/oauth2/v2.0/token" in str(request.url):
+            return httpx.Response(
+                200, json={"access_token": "T", "expires_in": 3600}
+            )
+        # Simula DNS/timeout em qualquer outra request.
+        raise httpx.ConnectError("DNS failed", request=request)
+
+    client = OneDriveClient(
+        tenant_id="t",
+        client_id="c",
+        client_secret="s",
+        drive_id="d",
+        transport=httpx.MockTransport(handler),
+    )
+    storage = OneDriveStorage(client)
+    try:
+        with pytest.raises(OSError):
+            await storage.read("any-id")
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_storage_save_network_error_becomes_oserror():
+    """Regressao Bug #4: timeout no createUploadSession ou no PUT
+    fragmentado precisa virar OSError tambem -- o loop de download em
+    `editais.py` so captura OSError; httpx.HTTPError escaparia."""
+    import httpx
+
+    from app.integrations.onedrive.client import OneDriveClient
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/oauth2/v2.0/token" in str(request.url):
+            return httpx.Response(
+                200, json={"access_token": "T", "expires_in": 3600}
+            )
+        # PUT (simple upload) -> timeout
+        raise httpx.ReadTimeout("upload timed out", request=request)
+
+    client = OneDriveClient(
+        tenant_id="t",
+        client_id="c",
+        client_secret="s",
+        drive_id="d",
+        transport=httpx.MockTransport(handler),
+    )
+    storage = OneDriveStorage(client)
+    try:
+        with pytest.raises(OSError):
+            await storage.save(
+                licitacao_id=1, filename="x.pdf", content=_stream(b"data")
+            )
+    finally:
+        await client.aclose()
