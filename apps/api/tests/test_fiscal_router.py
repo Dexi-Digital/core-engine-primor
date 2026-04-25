@@ -12,6 +12,7 @@ from app.audit.models import AuditLog
 from app.main import app
 from app.modules.fiscal.models import DocumentoFiscal
 from app.modules.fiscal.router import get_dominio_dep
+from app.modules.fiscal.service import reset_dominio_singleton
 from tests.fixtures.fiscal.samples import (
     BAIXA_XML,
     CFE_XML,
@@ -19,6 +20,16 @@ from tests.fixtures.fiscal.samples import (
     NFCE_65_XML,
     NFE_44_XML,
 )
+
+
+@pytest.fixture(autouse=True)
+def _reset_dominio_singleton_between_tests():
+    """O DominioClient e singleton por-processo agora (para aproveitar
+    token-cache em prod). Sem reset entre testes, o counter do mock
+    contaminaria assertions de protocolo entre testes."""
+    reset_dominio_singleton()
+    yield
+    reset_dominio_singleton()
 
 
 def _upload_payload(xml_bytes: bytes, filename: str = "doc.xml") -> dict:
@@ -256,8 +267,8 @@ async def test_enviar_dominio_em_erro_persiste_status_e_retry(
     )
     doc_id = r.json()["id"]
 
-    async def _override():
-        yield _FailingDominioClient()
+    def _override():
+        return _FailingDominioClient()
 
     app.dependency_overrides[get_dominio_dep] = _override
     try:
@@ -282,3 +293,49 @@ async def test_enviar_dominio_em_erro_persiste_status_e_retry(
         )
     )
     assert audits_count == 1
+
+
+@pytest.mark.asyncio
+async def test_storage_path_inclui_xml_hash_para_evitar_colisao(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    # Regressao Devin Review #12: dois XMLs distintos com o mesmo nome
+    # de arquivo ("doc.xml") cairiam no mesmo target do disco se o
+    # storage usasse so (bucket, filename). O hash do XML precisa
+    # entrar no path. Usamos NFE + CTE que tem hash garantidamente
+    # diferente para forcar caminhos distintos -- e ambos sao
+    # uploadados com o mesmo `filename="doc.xml"`.
+    r1 = await api_client.post(
+        "/api/v1/fiscal/documentos",
+        files=_upload_payload(NFE_44_XML, filename="doc.xml"),
+    )
+    r2 = await api_client.post(
+        "/api/v1/fiscal/documentos",
+        files=_upload_payload(CTE_XML, filename="doc.xml"),
+    )
+    assert r1.status_code == 201
+    assert r2.status_code == 201
+
+    doc1 = await db_session.get(DocumentoFiscal, r1.json()["id"])
+    doc2 = await db_session.get(DocumentoFiscal, r2.json()["id"])
+    assert doc1 is not None and doc2 is not None
+    # Mesmo filename de upload, paths diferentes graças ao prefixo do
+    # hash. Sem o fix, ambos terminariam em ".../doc.xml" -- o segundo
+    # sobrescreveria o primeiro silenciosamente.
+    assert doc1.xml_path != doc2.xml_path
+    assert doc1.xml_hash[:16] in doc1.xml_path
+    assert doc2.xml_hash[:16] in doc2.xml_path
+
+
+@pytest.mark.asyncio
+async def test_dominio_dep_devolve_singleton_entre_requests():
+    # Regressao Devin Review #12: criar um DominioClient novo por
+    # request invalida o token-cache (a Dominio rate-limita /token).
+    # `get_dominio_dep` PRECISA devolver a mesma instancia entre
+    # chamadas dentro do mesmo processo.
+    from app.modules.fiscal.router import get_dominio_dep
+
+    reset_dominio_singleton()
+    c1 = get_dominio_dep()
+    c2 = get_dominio_dep()
+    assert c1 is c2, "get_dominio_dep deve cachear o client (token-cache)"

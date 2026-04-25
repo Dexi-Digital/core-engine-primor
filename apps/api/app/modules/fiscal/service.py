@@ -102,10 +102,21 @@ async def import_xml(
     # o hash do XML como bucket logico para nao misturar fiscal com
     # licitacoes -- o storage local cria subdir por id, entao usar um
     # numero estavel derivado do hash mantem fiscal/<bucket>/file.xml.
+    #
+    # ATENCAO: o `bucket` sozinho NAO garante unicidade do `target` no
+    # disco -- 100_000 valores possiveis caem em birthday-paradox a ~316
+    # documentos. Pior: o filename do upload tipicamente repete (default
+    # "documento.xml" ou "doc.xml" do ERP), entao bucket-collision +
+    # filename igual = sobrescrita silenciosa. Por isso prefixamos o
+    # filename com o hash completo abreviado (16 hex chars = 64 bits
+    # de entropia, colisao em ~4 bilhoes de docs). Combinado com o
+    # UNIQUE em xml_hash no DB, a sobrescrita fica matematicamente
+    # impossivel sem violar tambem a constraint de duplicata.
     bucket = int(parsed.xml_hash[:8], 16) % 100_000
+    safe_filename = f"{parsed.xml_hash[:16]}-{filename}"
     storage_path, _size = await storage.save(
         licitacao_id=bucket,
-        filename=filename,
+        filename=safe_filename,
         content=_stream_bytes(xml_bytes),
     )
 
@@ -393,11 +404,15 @@ async def enviar_para_dominio(
 
 
 def get_dominio_client(settings: Any) -> Any:
-    """Constroi o client real ou o mock conforme configuracao.
+    """Constroi um novo client real ou mock conforme configuracao.
 
     Mesma estrategia de DirectData/LLM: se faltar credencial, cai no
     mock determinístico para nao bloquear dev/CI. Em prod, basta
     configurar `DOMINIO_*` no env.
+
+    Esta funcao e a "factory" -- cada chamada cria um client novo. Para
+    uso na API HTTP use `get_dominio_singleton()` que cacheia para
+    aproveitar o token-cache (a Domínio rate-limita /token).
     """
     from app.integrations.dominio.client import DominioClient
 
@@ -419,6 +434,46 @@ def get_dominio_client(settings: Any) -> Any:
     return DominioMockClient()
 
 
+# Singleton de processo. Criar um novo `DominioClient` por request
+# desperdica o token-cache (que existe justamente porque a Dominio
+# rate-limita o `/token`) E cria um novo pool TCP do httpx a cada
+# upload. A camada de API HTTP reutiliza esta instancia entre
+# requests; o `aclose()` e disparado no lifespan handler do FastAPI.
+# Workers Celery seguem usando `get_dominio_client()` (factory) porque
+# rodam em processos separados com lifecycle proprio.
+_dominio_singleton: Any | None = None
+
+
+def get_dominio_singleton() -> Any:
+    """Devolve um `DominioClient` (ou mock) compartilhado por processo.
+
+    Cacheia para que o token OAuth2 e o pool de conexoes httpx fiquem
+    vivos entre requests. Em testes, basta limpar via
+    `reset_dominio_singleton()` ou usar `app.dependency_overrides` no
+    `get_dominio_dep` -- o singleton nao bloqueia injecao de mocks.
+    """
+    global _dominio_singleton
+    if _dominio_singleton is None:
+        _dominio_singleton = get_dominio_client(_get_settings())
+    return _dominio_singleton
+
+
+def reset_dominio_singleton() -> Any | None:
+    """Limpa o singleton (lifespan shutdown / testes). Devolve a
+    instancia anterior para o caller poder chamar `aclose()`."""
+    global _dominio_singleton
+    prev = _dominio_singleton
+    _dominio_singleton = None
+    return prev
+
+
+def _get_settings() -> Any:
+    # Indireto para evitar import circular em tempo de modulo.
+    from app.core.config import get_settings
+
+    return get_settings()
+
+
 __all__ = [
     "FiscalDuplicateError",
     "FiscalParseError",
@@ -426,7 +481,9 @@ __all__ = [
     "enviar_para_dominio",
     "get_documento",
     "get_dominio_client",
+    "get_dominio_singleton",
     "import_xml",
     "list_documentos",
+    "reset_dominio_singleton",
     "update_documento",
 ]

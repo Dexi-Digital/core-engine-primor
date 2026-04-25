@@ -21,6 +21,14 @@ from app.modules.manutencao_frota.router import router as manutencao_router
 async def lifespan(app: FastAPI):
     configure_logging()
     yield
+    # Shutdown: fechar singletons que abriram pools TCP. O singleton do
+    # DominioClient e criado lazy na 1a request; se nunca foi tocado,
+    # `reset_dominio_singleton()` retorna None e nao fazemos nada.
+    from app.modules.fiscal.service import reset_dominio_singleton
+
+    prev_dominio = reset_dominio_singleton()
+    if prev_dominio is not None:
+        await prev_dominio.aclose()
 
 
 def create_app() -> FastAPI:

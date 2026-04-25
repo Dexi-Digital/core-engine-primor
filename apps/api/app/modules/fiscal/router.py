@@ -22,7 +22,6 @@ from fastapi import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
 from app.core.db import get_db
 from app.modules.dp_sesmt.schemas import ModuleStatus
 from app.modules.fiscal.parser import FiscalParseError
@@ -36,7 +35,7 @@ from app.modules.fiscal.service import (
     delete_documento,
     enviar_para_dominio,
     get_documento,
-    get_dominio_client,
+    get_dominio_singleton,
     import_xml,
     list_documentos,
     update_documento,
@@ -47,19 +46,20 @@ from app.modules.licitacoes.storage import EditaisStorage
 router = APIRouter()
 
 
-async def get_dominio_dep() -> Any:
-    """Constroi o client Dominio (real ou mock) por request.
+def get_dominio_dep() -> Any:
+    """Devolve o `DominioClient` singleton compartilhado por processo.
 
-    Async generator igual ao `get_editais_storage` para garantir cleanup
-    do `httpx.AsyncClient` interno do `DominioClient` real -- caso
-    contrario cada request vaza um pool TCP. O mock nao tem nada para
-    fechar mas implementa `aclose()` no-op pra nao precisar branch.
+    Reuso do client e CRITICO em prod: ele cacheia o token OAuth2 (TTL
+    ~1h) e mantem um pool TCP do httpx vivo. Criar uma instancia por
+    request quebraria os dois -- a Domínio rate-limita `/token` e cada
+    novo pool gasta uma RTT de TLS handshake.
+
+    O `aclose()` nao acontece aqui (seria absurdo fechar a cada request);
+    quem fecha e o lifespan handler do FastAPI no shutdown da API. Em
+    testes, `app.dependency_overrides[get_dominio_dep]` substitui o
+    singleton normalmente.
     """
-    client = get_dominio_client(get_settings())
-    try:
-        yield client
-    finally:
-        await client.aclose()
+    return get_dominio_singleton()
 
 
 @router.get("/status", response_model=ModuleStatus)
