@@ -206,3 +206,47 @@ async def test_mock_client_retorna_protocolo_deterministico():
 async def test_mock_client_health_check_sempre_ok():
     mock = DominioMockClient()
     assert await mock.health_check() is True
+
+
+@pytest.mark.asyncio
+async def test_token_lock_evita_thundering_herd_em_uploads_concorrentes():
+    # Regressao Devin Review #12: o DominioClient agora e singleton de
+    # processo (`get_dominio_singleton`). Sem `asyncio.Lock` no
+    # `_get_token`, varios uploads simultaneos com cache vazio
+    # disparariam N POST /token concorrentes -- a Dominio rate-limita
+    # /token. O lock garante que so 1 chamada e feita; as outras
+    # esperam e reusam o token cached.
+    import asyncio
+
+    token_calls = 0
+
+    async def slow_token_handler(request: httpx.Request) -> httpx.Response:
+        nonlocal token_calls
+        if "/token" in str(request.url):
+            token_calls += 1
+            # Latencia artificial: sem lock, as 5 coroutines passam
+            # pelo `if self._token` antes da 1a response chegar e
+            # cada uma chama POST /token.
+            await asyncio.sleep(0.05)
+            return httpx.Response(
+                200, json={"access_token": "T", "expires_in": 3600}
+            )
+        return httpx.Response(
+            200, json={"protocolo": "OK", "status": "ok", "mensagem": ""}
+        )
+
+    client = _make_client(slow_token_handler)
+    try:
+        results = await asyncio.gather(
+            *[
+                client.upload_xml(
+                    filename=f"doc{i}.xml", content=b"<x/>", tipo="nfe"
+                )
+                for i in range(5)
+            ]
+        )
+        assert len(results) == 5
+        # 5 uploads concorrentes, mas apenas 1 chamada a /token.
+        assert token_calls == 1
+    finally:
+        await client.aclose()

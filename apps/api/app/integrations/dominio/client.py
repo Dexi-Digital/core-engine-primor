@@ -25,6 +25,7 @@ Decisoes de design:
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import time
@@ -83,6 +84,12 @@ class DominioClient(IntegrationClient):
         )
         self._token: str | None = None
         self._token_expires_at: float = 0.0
+        # Lock evita thundering-herd no `/token` quando o client e
+        # singleton (ver get_dominio_singleton): com varias requests
+        # concorrentes proximas do expiry, todas passariam o `if` ao
+        # mesmo tempo e cada uma faria POST /token, esgotando o
+        # rate-limit da Domínio. Mesmo padrao do OneDriveClient.
+        self._token_lock = asyncio.Lock()
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -96,38 +103,40 @@ class DominioClient(IntegrationClient):
 
     async def _get_token(self) -> str:
         # Renova com 5 min de folga antes do expiry. Tokens da Domínio
-        # tipicamente duram 1h.
-        if self._token and self._token_expires_at - time.time() > 300:
+        # tipicamente duram 1h. O lock garante que so 1 coroutine
+        # dispara o POST /token; as outras esperam e reusam o cache.
+        async with self._token_lock:
+            if self._token and self._token_expires_at - time.time() > 300:
+                return self._token
+            url = f"{self._base_url}/token"
+            try:
+                r = await self._client.post(
+                    url,
+                    json={
+                        "audit_url": self._audit_url,
+                        "integracao": self._integracao,
+                        "client_id": self._client_id,
+                        "client_secret": self._client_secret,
+                    },
+                )
+            except httpx.HTTPError as exc:
+                raise DominioError(f"token Dominio falhou: {exc}") from exc
+            if r.status_code in (401, 403):
+                raise DominioAuthError(
+                    f"credenciais Dominio rejeitadas ({r.status_code}): "
+                    f"{r.text[:200]}"
+                )
+            if r.status_code != 200:
+                raise DominioError(f"token {r.status_code}: {r.text[:200]}")
+            data = r.json()
+            token = data.get("access_token") or data.get("token")
+            if not token:
+                raise DominioError(f"resposta /token sem access_token: {data}")
+            self._token = str(token)
+            # `expires_in` em segundos (padrao OAuth2). Se nao vier, assume 1h.
+            expires_in = int(data.get("expires_in", 3600))
+            self._token_expires_at = time.time() + expires_in
             return self._token
-        url = f"{self._base_url}/token"
-        try:
-            r = await self._client.post(
-                url,
-                json={
-                    "audit_url": self._audit_url,
-                    "integracao": self._integracao,
-                    "client_id": self._client_id,
-                    "client_secret": self._client_secret,
-                },
-            )
-        except httpx.HTTPError as exc:
-            raise DominioError(f"token Dominio falhou: {exc}") from exc
-        if r.status_code in (401, 403):
-            raise DominioAuthError(
-                f"credenciais Dominio rejeitadas ({r.status_code}): "
-                f"{r.text[:200]}"
-            )
-        if r.status_code != 200:
-            raise DominioError(f"token {r.status_code}: {r.text[:200]}")
-        data = r.json()
-        token = data.get("access_token") or data.get("token")
-        if not token:
-            raise DominioError(f"resposta /token sem access_token: {data}")
-        self._token = str(token)
-        # `expires_in` em segundos (padrao OAuth2). Se nao vier, assume 1h.
-        expires_in = int(data.get("expires_in", 3600))
-        self._token_expires_at = time.time() + expires_in
-        return self._token
 
     async def _auth_header(self) -> dict[str, str]:
         token = await self._get_token()
