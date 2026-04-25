@@ -41,20 +41,24 @@ async def _run(documento_id: int) -> dict[str, object]:
     try:
         from app.core.config import get_settings
         from app.core.db import SessionLocal
+        from app.modules.fiscal.router import (
+            get_fiscal_storage,
+        )
         from app.modules.fiscal.service import (
             enviar_para_dominio,
             get_dominio_client,
-        )
-        from app.modules.licitacoes.router import (
-            get_editais_storage,
         )
     except ImportError as exc:  # pragma: no cover
         return {"error": f"API package not available in worker: {exc}"}
 
     settings = get_settings()
     client = get_dominio_client(settings)
-    # `get_editais_storage` e um async generator; consumimos diretamente.
-    storage_gen = get_editais_storage()
+    # `get_fiscal_storage` e um async generator; consumimos diretamente.
+    # Importante: `get_fiscal_storage` (nao `get_editais_storage`) -- o
+    # XML mora em `fiscal_storage_subdir`, nao na raiz dos editais. No
+    # OneDrive isso muda o `root_folder` que o save/delete usa em paths
+    # relativos.
+    storage_gen = get_fiscal_storage()
     storage = await storage_gen.__anext__()
     try:
         async with SessionLocal() as session:
