@@ -68,13 +68,16 @@ def test_render_alerta_html_includes_essentials() -> None:
         orgao_emissor="Receita Federal",
     )
     html = render_alerta_html(
-        cert, janela=10, public_base_url="https://motorcentral.example"
+        cert,
+        janela=15,
+        public_base_url="https://motorcentral.example",
+        dias_restantes=10,
     )
     assert "Certidao Negativa de Debitos Federais" in html  # label expandida
     assert "44229813000123" in html
     assert "ABC-123" in html
     assert "05/05/2026" in html
-    assert "Vence em 10 dias" in html
+    assert "Vence em 10 dia(s)" in html
     assert (
         "https://motorcentral.example/licitacoes/certidoes" in html
     ), "deve linkar para o dashboard"
@@ -87,8 +90,31 @@ def test_render_alerta_html_today_uses_vencida_label() -> None:
         tipo="FGTS",
         validade=date.today(),
     )
-    html = render_alerta_html(cert, janela=0, public_base_url="https://x.example")
+    html = render_alerta_html(
+        cert, janela=0, public_base_url="https://x.example", dias_restantes=0
+    )
     assert "VENCIDA hoje" in html
+
+
+def test_render_alerta_html_uses_actual_days_not_janela_threshold() -> None:
+    """Regressao: o email tem que mostrar dias REAIS ate o vencimento, nao
+    o threshold da janela (30/15/7). Cert com 12 dias cai na janela 15 mas
+    o usuario precisa ler '12 dia(s)', nao '15 dias' -- senao perde prazo."""
+    cert = CertidaoEmpresa(
+        id=10,
+        empresa_cnpj="44229813000123",
+        tipo="CND_FEDERAL",
+        validade=date(2026, 5, 7),
+    )
+    html = render_alerta_html(
+        cert,
+        janela=15,
+        public_base_url="https://x.example",
+        dias_restantes=12,
+    )
+    assert "12 dia(s)" in html
+    # E nao deve mostrar o numero da janela como se fosse a contagem real.
+    assert "Vence em 15 dias" not in html
 
 
 # --- service layer ------------------------------------------------------------
@@ -201,6 +227,12 @@ async def test_dispatch_sends_for_certidao_in_window(
     assert len(captured) == 1
     body = captured[0].read().decode()
     assert "primor.example" in body
+    # Subject e corpo devem refletir os 10 dias REAIS, nao a janela 15.
+    # (regressao -- antes do fix `dias_restantes` o email mostrava "15 dias"
+    # para uma certidao com 10 dias restantes).
+    assert "10 dia" in body  # "10 dia(s)" na urgencia + subject
+    assert "vence em 10 dia" in body.lower()  # subject
+    assert "vence em 15 dia" not in body.lower()  # nao deve usar janela
     # Logged in DB
     log = (
         await db_session.execute(
