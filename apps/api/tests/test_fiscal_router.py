@@ -339,3 +339,26 @@ async def test_dominio_dep_devolve_singleton_entre_requests():
     c1 = get_dominio_dep()
     c2 = get_dominio_dep()
     assert c1 is c2, "get_dominio_dep deve cachear o client (token-cache)"
+
+
+@pytest.mark.asyncio
+async def test_fiscal_storage_isolado_do_editais_storage(
+    api_client: AsyncClient, db_session: AsyncSession
+):
+    # Regressao Devin Review #12: fiscal_storage_subdir foi declarado
+    # no config mas nunca era lido. Resultado: XMLs fiscais e PDFs
+    # de edital iam para o mesmo `editais_storage_path/{licitacao_id}/`
+    # com o `licitacao_id` do fiscal sendo um bucket numerico do hash --
+    # podia colidir com IDs reais de licitacao.
+    from app.core.config import get_settings
+
+    settings = get_settings()
+    r = await api_client.post(
+        "/api/v1/fiscal/documentos", files=_upload_payload(NFE_44_XML)
+    )
+    assert r.status_code == 201
+    doc = await db_session.get(DocumentoFiscal, r.json()["id"])
+    assert doc is not None
+    # O subdir fiscal precisa aparecer no path final; sem o fix o path
+    # seria so `{editais_storage_path}/{bucket}/...`.
+    assert settings.fiscal_storage_subdir in doc.xml_path

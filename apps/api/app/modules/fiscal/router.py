@@ -10,6 +10,8 @@ Endpoints:
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import (
@@ -22,7 +24,10 @@ from fastapi import (
 )
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.db import get_db
+from app.integrations.onedrive.client import build_onedrive_client
+from app.integrations.onedrive.storage import OneDriveStorage
 from app.modules.dp_sesmt.schemas import ModuleStatus
 from app.modules.fiscal.parser import FiscalParseError
 from app.modules.fiscal.schemas import (
@@ -40,10 +45,47 @@ from app.modules.fiscal.service import (
     list_documentos,
     update_documento,
 )
-from app.modules.licitacoes.router import get_editais_storage
-from app.modules.licitacoes.storage import EditaisStorage
+from app.modules.licitacoes.storage import EditaisStorage, LocalStorage
 
 router = APIRouter()
+
+
+async def get_fiscal_storage() -> AsyncIterator[EditaisStorage]:
+    """Storage dedicado para XMLs fiscais.
+
+    Mesmo backend (`STORAGE_BACKEND=local|onedrive`) do storage de
+    editais, mas em uma raiz/folder separada -- `fiscal_storage_subdir`
+    no config -- para evitar que XMLs fiscais e PDFs de edital caiam
+    no mesmo namespace numerico (ambos usam `licitacao_id` como subdir
+    e o bucket numerico do fiscal poderia colidir com IDs reais de
+    licitacao).
+
+    Local : `Path(editais_storage_path).parent / fiscal_storage_subdir`
+            -> ex. `/tmp/motor-central/MotorCentral/fiscal/`
+    OneDrive: `OneDriveClient(root_folder=fiscal_storage_subdir)` --
+            arquivos vao para `{drive}/MotorCentral/fiscal/...`.
+
+    Async generator igual ao `get_editais_storage` -- garante
+    `aclose()` do `httpx.AsyncClient` interno do `OneDriveClient` no
+    fim da request (LocalStorage nao precisa).
+    """
+    settings = get_settings()
+    backend = (settings.storage_backend or "local").lower()
+    if backend == "onedrive":
+        client = build_onedrive_client(
+            tenant_id=settings.ms_graph_tenant_id,
+            client_id=settings.ms_graph_client_id,
+            client_secret=settings.ms_graph_client_secret,
+            drive_id=settings.ms_graph_drive_id,
+            root_folder=settings.fiscal_storage_subdir,
+        )
+        try:
+            yield OneDriveStorage(client)
+        finally:
+            await client.aclose()
+        return
+    base = Path(settings.editais_storage_path).parent
+    yield LocalStorage(base / settings.fiscal_storage_subdir)
 
 
 def get_dominio_dep() -> Any:
@@ -72,7 +114,7 @@ async def upload_documento(
     arquivo: Annotated[UploadFile, File(description="XML fiscal a importar")],
     source: str | None = Query(default=None, max_length=64),
     db: AsyncSession = Depends(get_db),
-    storage: EditaisStorage = Depends(get_editais_storage),
+    storage: EditaisStorage = Depends(get_fiscal_storage),
 ) -> DocumentoFiscalRead:
     """Recebe um XML, parseia, persiste storage + DB.
 
@@ -162,7 +204,7 @@ async def update_endpoint(
 async def delete_endpoint(
     doc_id: int,
     db: AsyncSession = Depends(get_db),
-    storage: EditaisStorage = Depends(get_editais_storage),
+    storage: EditaisStorage = Depends(get_fiscal_storage),
 ) -> None:
     ok = await delete_documento(db, doc_id, storage=storage)
     if not ok:
@@ -176,7 +218,7 @@ async def delete_endpoint(
 async def enviar_endpoint(
     doc_id: int,
     db: AsyncSession = Depends(get_db),
-    storage: EditaisStorage = Depends(get_editais_storage),
+    storage: EditaisStorage = Depends(get_fiscal_storage),
     dominio_client: Any = Depends(get_dominio_dep),
 ) -> DocumentoFiscalEnvioResponse:
     """Dispara envio sincrono para a Dominio.
