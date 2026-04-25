@@ -253,19 +253,31 @@ def render_alerta_html(
     *,
     janela: int,
     public_base_url: str,
+    dias_restantes: int | None = None,
 ) -> str:
+    """Render do email de alerta.
+
+    `janela` define a *cor / urgencia* do alerta (30/15/7/0); `dias_restantes`
+    e o numero real de dias ate o vencimento, exibido para o usuario. Em
+    licitacoes essa diferenca importa: uma certidao com 12 dias restantes
+    cai na janela `15`, mas o email precisa dizer "12 dias", nao "15 dias".
+
+    Quando `dias_restantes` nao e fornecido (chamada legada / fallback),
+    cai para o valor da `janela` -- mantem retrocompat mas perde precisao.
+    """
     tipo_label = dict(TIPOS_CERTIDAO).get(certidao.tipo, certidao.tipo)
+    dias = dias_restantes if dias_restantes is not None else janela
     if janela == 0:
-        urgencia = "VENCIDA hoje"
+        urgencia = "VENCIDA hoje" if dias == 0 else f"Vence em {dias} dia(s)"
         cor = "#dc2626"
     elif janela <= 7:
-        urgencia = f"Vence em {janela} dia(s)"
+        urgencia = f"Vence em {dias} dia(s)"
         cor = "#ea580c"
     elif janela <= 15:
-        urgencia = f"Vence em {janela} dias"
+        urgencia = f"Vence em {dias} dia(s)"
         cor = "#d97706"
     else:
-        urgencia = f"Vence em {janela} dias"
+        urgencia = f"Vence em {dias} dia(s)"
         cor = "#0284c7"
     validade_str = (
         certidao.validade.strftime("%d/%m/%Y") if certidao.validade else "-"
@@ -380,18 +392,25 @@ async def dispatch_expiration_alerts(
             )
             continue
 
+        # Calcula os dias reais ate o vencimento -- diferente da janela
+        # (que e o threshold do alerta, nao a contagem real). Usado tanto
+        # no subject quanto no corpo do email.
+        assert certidao.validade is not None  # janela_for_certidao filtrou None
+        dias_restantes = (certidao.validade - today).days
+
         html = render_alerta_html(
-            certidao, janela=janela, public_base_url=public_base_url
+            certidao,
+            janela=janela,
+            public_base_url=public_base_url,
+            dias_restantes=dias_restantes,
         )
         tipo_label = dict(TIPOS_CERTIDAO).get(certidao.tipo, certidao.tipo)
-        validade_str = (
-            certidao.validade.strftime("%d/%m/%Y") if certidao.validade else "-"
-        )
-        if janela == 0:
-            subject = f"[Motor Central] VENCIDA: {tipo_label} ({validade_str})"
+        validade_str = certidao.validade.strftime("%d/%m/%Y")
+        if dias_restantes == 0:
+            subject = f"[Motor Central] VENCIDA hoje: {tipo_label} ({validade_str})"
         else:
             subject = (
-                f"[Motor Central] Certidao vence em {janela} dias: "
+                f"[Motor Central] Certidao vence em {dias_restantes} dia(s): "
                 f"{tipo_label} ({validade_str})"
             )
 
