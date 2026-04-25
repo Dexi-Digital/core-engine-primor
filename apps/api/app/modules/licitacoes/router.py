@@ -7,6 +7,7 @@ Escopo:
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import date, timedelta
 from typing import Annotated
 
@@ -19,6 +20,8 @@ from app.integrations.llm.anthropic_client import AnthropicProvider
 from app.integrations.llm.base import LLMError, LLMProvider, LLMUnavailableError
 from app.integrations.llm.openai_client import OpenAIProvider
 from app.integrations.llm.router import CostRoutedProvider
+from app.integrations.onedrive.client import build_onedrive_client
+from app.integrations.onedrive.storage import OneDriveStorage
 from app.integrations.pncp.client import PncpClient
 from app.integrations.resend.client import ResendClient
 from app.modules.dp_sesmt.schemas import ModuleStatus
@@ -63,9 +66,37 @@ def get_pncp_client() -> PncpClient:
     return PncpClient()
 
 
-def get_editais_storage() -> EditaisStorage:
-    """Default storage: local filesystem under `editais_storage_path`."""
-    return LocalStorage(get_settings().editais_storage_path)
+async def get_editais_storage() -> AsyncIterator[EditaisStorage]:
+    """Storage backend selecionado por config.
+
+    `STORAGE_BACKEND=local` (default) -> filesystem local.
+    `STORAGE_BACKEND=onedrive` -> Microsoft Graph; cai em mock se as
+    4 credenciais MS_GRAPH_* nao estiverem todas presentes (igual ao
+    pattern do DirectData/LLM em outros modulos).
+
+    Async generator (com `yield`) para que o FastAPI feche o
+    `httpx.AsyncClient` interno do `OneDriveClient` ao final da
+    request -- caso contrario cada request vaza um pool de TCP
+    (mesmo padrao usado em `pncp` e `llm` neste mesmo arquivo).
+    """
+    settings = get_settings()
+    backend = (settings.storage_backend or "local").lower()
+    if backend == "onedrive":
+        client = build_onedrive_client(
+            tenant_id=settings.ms_graph_tenant_id,
+            client_id=settings.ms_graph_client_id,
+            client_secret=settings.ms_graph_client_secret,
+            drive_id=settings.ms_graph_drive_id,
+            root_folder=settings.ms_graph_root_folder,
+        )
+        try:
+            yield OneDriveStorage(client)
+        finally:
+            await client.aclose()
+        return
+    # LocalStorage nao tem nada para fechar -- FastAPI segue ok
+    # com um `yield` unico mesmo sem `finally`.
+    yield LocalStorage(settings.editais_storage_path)
 
 
 def build_llm_provider(settings: Settings) -> LLMProvider:

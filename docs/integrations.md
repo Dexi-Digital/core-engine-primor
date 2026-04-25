@@ -191,3 +191,56 @@ Env vars:
 | Variável              | Obrigatória | Descrição                                   |
 |-----------------------|-------------|---------------------------------------------|
 | `DIRECTDATA_API_KEY`  | opcional    | Sem chave, o adapter usa mock determinístico. |
+
+## OneDrive / Microsoft Graph (implementado)
+
+Adapter: `app/integrations/onedrive/client.py` (`OneDriveClient` real
+com OAuth2 client_credentials + `OneDriveMockClient` determinístico).
+Bridge para o `EditaisStorage` protocol em
+`app/integrations/onedrive/storage.py` (`OneDriveStorage`).
+
+**Casos de uso atuais:**
+- D.4 — anexos de edital (storage backend alternativo ao
+  `LocalStorage` quando `STORAGE_BACKEND=onedrive`).
+- Próximos: ASOs digitalizados, contratos, documentos do funcionário
+  (Módulo A).
+
+**Como ligar credenciais reais:**
+
+1. No Azure AD, criar um **App Registration** (single tenant).
+2. Adicionar permissão de aplicação **`Files.ReadWrite.All`**
+   (ou `Sites.ReadWrite.All` se a raiz for SharePoint) e
+   conceder admin consent.
+3. Gerar um client secret e copiar `tenant_id`, `client_id`,
+   `client_secret`.
+4. Pegar o `drive_id` do drive alvo via `GET /me/drive` (com login
+   delegado uma vez) ou `GET /sites/{id}/drives` (SharePoint).
+5. Setar no `.env`:
+
+```
+STORAGE_BACKEND=onedrive
+MS_GRAPH_TENANT_ID=...
+MS_GRAPH_CLIENT_ID=...
+MS_GRAPH_CLIENT_SECRET=...
+MS_GRAPH_DRIVE_ID=b!...
+MS_GRAPH_ROOT_FOLDER=MotorCentral/editais   # opcional
+```
+
+Sem essas 4 variáveis (ou com `STORAGE_BACKEND=local`), os anexos
+continuam indo para `editais_storage_path`. Quando todas as 4 estão
+presentes E `STORAGE_BACKEND=onedrive`, o cliente real entra no lugar.
+Se as 4 faltarem mas `STORAGE_BACKEND=onedrive` estiver setado, o
+adapter cai no `OneDriveMockClient` (útil para desenvolvimento sem
+Azure AD — itens viram `mock-<sha>` e bytes ficam em memória).
+
+**Endpoints Graph que usamos:**
+
+| Método | Path                                                    | Quando            |
+|--------|---------------------------------------------------------|-------------------|
+| POST   | `/oauth2/v2.0/token`                                    | autenticação      |
+| GET    | `/drives/{drive_id}/root`                               | health check      |
+| PUT    | `/drives/{drive_id}/items/root:/{path}:/content`        | upload < 4 MiB    |
+| POST   | `/drives/{drive_id}/items/root:/{path}:/createUploadSession` | upload >= 4 MiB |
+| GET    | `/drives/{drive_id}/items/{id}/content`                 | download          |
+| DELETE | `/drives/{drive_id}/items/{id}`                         | remoção           |
+
