@@ -7,6 +7,24 @@ from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.dp_sesmt.cpf import is_valid_cpf, normalize_cpf
+from app.modules.dp_sesmt.models import STATUSES_VALIDOS
+
+
+def _ensure_status_canonico(v: str | None) -> str | None:
+    """Validador compartilhado entre EmployeeBase e EmployeeUpdate.
+
+    Mantemos uma unica fonte da verdade (`STATUSES_VALIDOS` no models)
+    em vez de repetir o set inline -- evita o caso onde EmployeeUpdate
+    nao herdava de EmployeeBase e deixava passar status arbitrario,
+    corrompendo filtros e badges da UI.
+    """
+    if v is None:
+        return v
+    if v not in STATUSES_VALIDOS:
+        raise ValueError(
+            "status deve ser um de: " + ", ".join(sorted(STATUSES_VALIDOS))
+        )
+    return v
 
 
 class ModuleStatus(BaseModel):
@@ -94,13 +112,7 @@ class EmployeeBase(BaseModel):
     @field_validator("status")
     @classmethod
     def _validate_status(cls, v: str | None) -> str | None:
-        if v is None:
-            return v
-        if v not in {"ativo", "afastado", "desligado"}:
-            raise ValueError(
-                "status deve ser um de: ativo, afastado, desligado"
-            )
-        return v
+        return _ensure_status_canonico(v)
 
 
 class EmployeeCreate(EmployeeBase):
@@ -160,6 +172,15 @@ class EmployeeUpdate(BaseModel):
     aso_resultado: str | None = None
 
     observacoes: str | None = None
+
+    # Mesma validacao do EmployeeBase -- aqui precisa ser repetida porque
+    # EmployeeUpdate herda de BaseModel diretamente (campos obrigatorios
+    # do EmployeeBase como cpf/nome_completo/cargo nao se aplicam ao PUT
+    # parcial, e Pydantic v2 nao tem `partial` nativo).
+    @field_validator("status")
+    @classmethod
+    def _validate_status(cls, v: str | None) -> str | None:
+        return _ensure_status_canonico(v)
 
 
 class EmployeeRead(EmployeeBase):

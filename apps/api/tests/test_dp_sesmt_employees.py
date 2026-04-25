@@ -313,3 +313,88 @@ async def test_dossie_cpf_invalido_400(api_client: AsyncClient) -> None:
         assert r.status_code == 400
     finally:
         app.dependency_overrides.pop(_get_directdata, None)
+
+
+# --- Regressões de bugs flagados em review ----------------------------------
+
+
+@pytest.mark.asyncio
+async def test_update_employee_rejeita_status_arbitrario(
+    api_client: AsyncClient,
+) -> None:
+    """Devin Review #10: EmployeeUpdate aceitava qualquer string de
+    status porque herdava de BaseModel direto, sem o validator.
+    """
+    r = await api_client.post(
+        "/api/v1/dp-sesmt/employees",
+        json={"cpf": VALID_CPF_1, "nome_completo": "Joao", "cargo": "Pedreiro"},
+    )
+    employee_id = r.json()["id"]
+    bad = await api_client.put(
+        f"/api/v1/dp-sesmt/employees/{employee_id}",
+        json={"status": "fantasma"},
+    )
+    assert bad.status_code == 422
+    # Garante que o status ficou intocado.
+    r = await api_client.get(f"/api/v1/dp-sesmt/employees/{employee_id}")
+    assert r.json()["status"] == "ativo"
+
+
+@pytest.mark.asyncio
+async def test_create_update_delete_geram_audit_log(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """AGENTS.md: mutacoes em recurso sensivel devem gravar em audit_log."""
+    from sqlalchemy import select
+
+    from app.audit.models import AuditLog
+
+    r = await api_client.post(
+        "/api/v1/dp-sesmt/employees",
+        json={"cpf": VALID_CPF_1, "nome_completo": "Joao", "cargo": "Pedreiro"},
+    )
+    employee_id = r.json()["id"]
+    await api_client.put(
+        f"/api/v1/dp-sesmt/employees/{employee_id}",
+        json={"status": "afastado"},
+    )
+    await api_client.delete(f"/api/v1/dp-sesmt/employees/{employee_id}")
+
+    rows = (
+        (await db_session.execute(select(AuditLog).order_by(AuditLog.id)))
+        .scalars()
+        .all()
+    )
+    actions = [r.action for r in rows if r.resource == "dp_sesmt.employee"]
+    assert actions == ["create", "update", "delete"]
+    # Resource_id correto e metadata gravados.
+    for r in rows:
+        if r.resource == "dp_sesmt.employee":
+            assert r.resource_id == str(employee_id)
+            assert r.metadata_json  # JSON serializado nao-vazio
+
+
+@pytest.mark.asyncio
+async def test_update_sem_mudanca_real_nao_polui_audit(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Update sem alteracao efetiva nao deve gerar AuditLog (evita ruido)."""
+    from sqlalchemy import select
+
+    from app.audit.models import AuditLog
+
+    r = await api_client.post(
+        "/api/v1/dp-sesmt/employees",
+        json={"cpf": VALID_CPF_1, "nome_completo": "Joao", "cargo": "Pedreiro"},
+    )
+    employee_id = r.json()["id"]
+    # Send same status -- nada deve mudar.
+    await api_client.put(
+        f"/api/v1/dp-sesmt/employees/{employee_id}",
+        json={"status": "ativo"},
+    )
+    rows = (
+        (await db_session.execute(select(AuditLog))).scalars().all()
+    )
+    update_rows = [r for r in rows if r.action == "update"]
+    assert update_rows == []

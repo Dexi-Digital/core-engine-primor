@@ -6,6 +6,7 @@ mock ate a Primor contratar o plano.
 """
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Sequence
 from typing import Any
@@ -14,6 +15,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.audit.models import AuditLog
 from app.integrations.brasilapi.client import (
     BrasilAPIClient,
     BrasilAPIError,
@@ -46,6 +48,35 @@ async def start_onboarding(cpf: str) -> str:
 # --- Employee CRUD ----------------------------------------------------------
 
 
+# AGENTS.md: "Toda mutacao de recurso sensivel (ASO, documentos DP, INSS)
+# grava em audit_log". Funcionarios contem ASO + dados pessoais + salario,
+# entao toda criacao/edicao/exclusao precisa virar uma linha em audit_log.
+_AUDIT_RESOURCE = "dp_sesmt.employee"
+# Placeholder ate termos auth com identidade real do usuario; quando o
+# middleware de auth chegar, threadeamos o user_id pra dentro do service.
+_AUDIT_ACTOR_PLACEHOLDER = "system"
+
+
+async def _record_audit(
+    db: AsyncSession,
+    *,
+    action: str,
+    resource_id: int | None,
+    metadata: dict[str, Any] | None = None,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
+) -> None:
+    db.add(
+        AuditLog(
+            actor=actor,
+            action=action,
+            resource=_AUDIT_RESOURCE,
+            resource_id=str(resource_id) if resource_id is not None else None,
+            metadata_json=json.dumps(metadata, default=str) if metadata else None,
+        )
+    )
+    await db.commit()
+
+
 async def create_employee(
     db: AsyncSession,
     *,
@@ -62,6 +93,18 @@ async def create_employee(
     db.add(employee)
     await db.commit()
     await db.refresh(employee)
+    await _record_audit(
+        db,
+        action="create",
+        resource_id=employee.id,
+        metadata={
+            "cpf": employee.cpf,
+            "nome_completo": employee.nome_completo,
+            "cargo": employee.cargo,
+            "obra": employee.obra,
+            "source": employee.source,
+        },
+    )
     # Recarrega com a coleção de empregos para evitar lazy-load no return.
     return await get_employee(db, employee.id) or employee
 
@@ -144,10 +187,21 @@ async def update_employee(
     row = await db.get(Employee, employee_id)
     if row is None:
         return None
+    changed: dict[str, Any] = {}
     for key, value in fields.items():
         if hasattr(row, key):
+            old = getattr(row, key)
+            if old != value:
+                changed[key] = {"from": old, "to": value}
             setattr(row, key, value)
     await db.commit()
+    if changed:
+        await _record_audit(
+            db,
+            action="update",
+            resource_id=employee_id,
+            metadata={"changed": changed},
+        )
     return await get_employee(db, employee_id)
 
 
@@ -155,8 +209,19 @@ async def delete_employee(db: AsyncSession, employee_id: int) -> bool:
     row = await db.get(Employee, employee_id)
     if row is None:
         return False
+    snapshot = {
+        "cpf": row.cpf,
+        "nome_completo": row.nome_completo,
+        "cargo": row.cargo,
+    }
     await db.delete(row)
     await db.commit()
+    await _record_audit(
+        db,
+        action="delete",
+        resource_id=employee_id,
+        metadata=snapshot,
+    )
     return True
 
 
