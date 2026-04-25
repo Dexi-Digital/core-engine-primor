@@ -49,6 +49,11 @@ class Settings(BaseSettings):
     openai_api_key: str | None = Field(default=None)
     openai_model: str = Field(default="gpt-4.1-nano")
 
+    # DirectData (consulta paga de CPF para o dossie de admissao do
+    # Modulo A). Sem chave, o adapter opera em modo mock para
+    # desbloquear desenvolvimento -- ver app/integrations/directdata.
+    directdata_api_key: str | None = Field(default=None)
+
 
 @lru_cache
 def get_settings() -> Settings:

@@ -22,6 +22,9 @@ Chaves de acesso vivem em variáveis de ambiente; **nunca no código**.
 | `llm/anthropic` | Anthropic Messages (tool_use)     | API          | D (análise edital) |
 | `llm/openai`    | OpenAI Chat Completions (json_schema) | API      | D (análise edital) |
 | `whatsapp`      | WhatsApp Business API             | API          | A, E |
+| `viacep`        | ViaCEP (endereço por CEP)         | API pública  | A (dossiê de admissão) |
+| `brasilapi`     | BrasilAPI (CNPJ via Receita)      | API pública  | A (dossiê de admissão) |
+| `directdata`    | DirectData (consulta CPF)         | API paga     | A (dossiê de admissão) |
 
 ## Padrões
 
@@ -161,3 +164,30 @@ Os PDFs baixados em D.4 são concatenados via `pypdf` em um único prompt
 (anexos não-PDF, acima de 25 MiB, ou com erro de leitura são pulados e
 reportados em `analise.data.anexos`). Truncamos em 400k caracteres
 antes de enviar ao modelo para conter custo.
+
+## ViaCEP / BrasilAPI / DirectData (Modulo A — dossie de admissao)
+
+Tres adapters chamados durante o cadastro manual de funcionarios em
+`/rh/funcionarios` para enriquecer o dossie:
+
+- **ViaCEP** (`https://viacep.com.br/ws/{cep}/json/`) — auto-completa
+  endereco quando o usuario digita o CEP. Publico, sem autenticacao.
+- **BrasilAPI** (`https://brasilapi.com.br/api/cnpj/v1/{cnpj}`) — valida
+  CNPJ de empregador anterior e expande a razao social. Publico.
+- **DirectData** (`https://apiv3.directd.com.br/api/v1/consultas/cadastro_pessoa`)
+  — consulta paga de CPF (nome, data de nascimento, situacao
+  cadastral). Quando `DIRECTDATA_API_KEY` esta vazia, o adapter opera
+  em modo *mock* (retorna struct deterministico), permitindo
+  desenvolvimento sem custo. UI marca o resultado com `source =
+  "directdata_mock"`.
+
+Toda consulta a essas APIs grava uma linha em `dp_dossie_consultas`
+(LGPD): quem foi consultado, quando, qual fonte, sucesso/erro. Util
+tambem para rastrear o custo do DirectData por funcionario quando o
+plano for contratado.
+
+Env vars:
+
+| Variável              | Obrigatória | Descrição                                   |
+|-----------------------|-------------|---------------------------------------------|
+| `DIRECTDATA_API_KEY`  | opcional    | Sem chave, o adapter usa mock determinístico. |

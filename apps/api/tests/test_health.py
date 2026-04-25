@@ -14,7 +14,7 @@ def test_health() -> None:
 def test_module_status_endpoints() -> None:
     client = TestClient(app)
     for prefix, module, implemented in [
-        ("dp-sesmt", "dp_sesmt", False),
+        ("dp-sesmt", "dp_sesmt", True),
         ("manutencao-frota", "manutencao_frota", False),
         ("financeiro", "financeiro_contratos", False),
         ("licitacoes", "licitacoes", True),
