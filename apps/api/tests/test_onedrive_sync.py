@@ -311,6 +311,47 @@ async def test_run_sync_ignora_path_invalido(db_session: AsyncSession) -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_sync_error_recovery_apos_db_commit_falhar(
+    db_session: AsyncSession,
+) -> None:
+    """Regressao: se db.commit() dentro do try falhar, o handler de
+    erro precisa fazer rollback antes do proprio commit -- caso
+    contrario SQLAlchemy levanta PendingRollbackError e o run fica
+    preso em `running` com o router devolvendo 500 opaco.
+    """
+    from unittest.mock import patch
+
+    from sqlalchemy.exc import OperationalError
+
+    from app.modules.onedrive_sync.models import RUN_ERROR
+
+    emp, _, _ = await _seed_entities(db_session)
+    client = OneDriveMockClient(root_folder="MotorCentral/editais")
+    client.seed(relative_path=f"dp/{emp.id}/NR12.pdf")
+
+    original_commit = db_session.commit
+    calls = {"n": 0}
+
+    async def flaky_commit() -> None:
+        calls["n"] += 1
+        # Primeiro commit e o que persiste o run em `running` (OK).
+        # Segundo e o que finaliza o loop de sync -- forcamos falha
+        # pra exercitar o recovery.
+        if calls["n"] == 2:
+            raise OperationalError("boom", params=None, orig=Exception("boom"))
+        await original_commit()
+
+    with patch.object(db_session, "commit", flaky_commit):
+        run = await run_sync(db_session, client=client, actor="a@b.com")
+
+    assert run.status == RUN_ERROR
+    assert run.error_message is not None
+    assert "boom" in run.error_message.lower() or "operational" in run.error_message.lower()
+    # O registro persistiu mesmo apos o commit interno falhar.
+    assert run.id is not None
+
+
+@pytest.mark.asyncio
 async def test_run_sync_erro_quando_entidade_nao_existe(
     db_session: AsyncSession,
 ) -> None:

@@ -204,7 +204,16 @@ async def run_sync(
         root_folder=client.root_folder,
     )
     db.add(run)
-    await db.flush()  # preciso do run.id antes de associar docs
+    # Commitar o run imediatamente em `running` pra tornar persistente
+    # antes de tocar no OneDrive. Se o loop de sync falhar em DB (ex:
+    # connection drop durante SELECT, UNIQUE violation em commit),
+    # o rollback nao destroi o registro do run -- os exception handlers
+    # fazem rollback e abrem uma nova transacao pra marcar RUN_ERROR.
+    # Sem isso, o db.commit() do handler explodia PendingRollbackError
+    # e o router devolvia 500 opaco em vez de persistir o erro.
+    await db.commit()
+    await db.refresh(run)
+    run_id = run.id
     totals = _Totals()
     try:
         items = await client.list_folder(relative_path="", recursive=True)
@@ -267,20 +276,42 @@ async def run_sync(
         await db.refresh(run)
         return run
     except OneDriveError as exc:
-        run.status = RUN_ERROR
-        run.error_message = f"OneDrive falhou: {exc}"
-        run.finished_at = datetime.now(UTC)
-        await db.commit()
-        await db.refresh(run)
-        return run
+        return await _finalize_error(
+            db, run_id=run_id, error=f"OneDrive falhou: {exc}"
+        )
     except Exception as exc:  # noqa: BLE001 -- queremos enterrar o run mesmo em bugs
         logger.exception("run_sync falhou inesperadamente")
+        return await _finalize_error(
+            db,
+            run_id=run_id,
+            error=f"{type(exc).__name__}: {exc}"[:2000],
+        )
+
+
+async def _finalize_error(
+    db: AsyncSession, *, run_id: int, error: str
+) -> OneDriveSyncRun:
+    """Rollback + nova transacao pra marcar RUN_ERROR no registro.
+
+    Chamado pelos exception handlers. A transacao em curso pode estar
+    em estado corrupto (SELECT/commit falhou), entao precisamos fazer
+    rollback antes de qualquer outra operacao -- sem isso, SQLAlchemy
+    levanta PendingRollbackError e o router volta 500 opaco.
+    """
+    await db.rollback()
+    run = await db.get(OneDriveSyncRun, run_id)
+    if run is None:
+        # Nunca deveria ocorrer (o run foi commitado antes do try).
+        # Se ocorrer, re-cria pra nao mascarar o erro.
+        run = OneDriveSyncRun(status=RUN_ERROR, error_message=error)
+        db.add(run)
+    else:
         run.status = RUN_ERROR
-        run.error_message = f"{type(exc).__name__}: {exc}"[:2000]
+        run.error_message = error
         run.finished_at = datetime.now(UTC)
-        await db.commit()
-        await db.refresh(run)
-        return run
+    await db.commit()
+    await db.refresh(run)
+    return run
 
 
 class _SyncError(Exception):
