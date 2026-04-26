@@ -391,3 +391,95 @@ chamadas — útil para dev/CI/screenshots).
 - O endpoint `POST /veiculos/{id}/consultar-detran` devolve 201
   mesmo em caso de erro de upstream (com payload da row `status=erro`),
   e 422 só para UF não suportada / 404 para veículo inexistente.
+
+## Google Document AI — OCR Parte Diária (Módulo B.2)
+
+**Adapter:** `app/integrations/google_documentai/client.py`
+
+**O que faz:** OCR de partes diárias escaneadas (PDF/JPG/PNG) via Google
+Document AI. Extrai data, operador, obra, equipamento, placa, horímetros e
+KM. Os campos extraídos são pré-preenchidos em `partes_diarias` e o
+operador revisa pela UI antes de marcar `ocr_status='revisado'`.
+
+**Auth:** OAuth2 Service Account (JWT Bearer flow). O JSON da service
+account é colado em `GOOGLE_DOCUMENTAI_CREDENTIALS_JSON` e o adapter
+gera um RS256 JWT, troca por access_token em
+`https://oauth2.googleapis.com/token`, e cacheia o token por 55 minutos.
+Não dependemos de `google-auth` — apenas `python-jose[cryptography]`
+(que já está no projeto pelo módulo de autenticação).
+
+**Endpoint Document AI:**
+
+```
+POST https://{location}-documentai.googleapis.com/v1/projects/{project_id}/locations/{location}/processors/{processor_id}:process
+Authorization: Bearer {access_token}
+
+{
+  "rawDocument": {
+    "mimeType": "application/pdf",
+    "content": "<base64 do arquivo>"
+  }
+}
+```
+
+A resposta tem `document.entities[]`, cada entity com `{type, mentionText,
+confidence}`. O adapter mapeia o `type` para o schema canônico
+(`data`/`operador`/`obra`/`equipamento`/`placa`/`horimetro_inicio`/
+`horimetro_fim`/`km_inicio`/`km_fim`). Tipos desconhecidos são ignorados
+mas ficam no `ocr_payload` para auditoria.
+
+**Configuração:**
+
+| Env var | Default | Função |
+|---|---|---|
+| `GOOGLE_DOCUMENTAI_CREDENTIALS_JSON` | vazio → mock | JSON inteiro da service account (uma única string, escape de `\n` ok) |
+| `GCP_PROJECT_ID` | vazio → mock | ID do projeto GCP |
+| `DOCUMENTAI_PROCESSOR_ID` | vazio → mock | ID do processor (recomendo `FORM_PARSER_PROCESSOR`) |
+| `DOCUMENTAI_LOCATION` | `us` | Região Document AI (`us` ou `eu`) |
+| `PARTE_DIARIA_STORAGE_SUBDIR` | `MotorCentral/partes-diarias` | Subpasta no storage para os anexos |
+
+**Modo mock (default em dev/CI):** se *qualquer* uma das 3 credenciais
+estiver vazia, o adapter cai em `GoogleDocumentAIMockClient`. Mock é
+determinístico — `sha1(filename|len(content))` é o seed dos campos
+gerados. Mesmo arquivo upload sempre gera mesma extração — útil para
+testes de regressão. Source field marcado como `google_documentai_mock`.
+
+**Pricing:** ~US$1.50 por 1 000 páginas processadas (FORM_PARSER no
+plano standard, abr/2025). Quotas de API: 600 requests/min por projeto.
+
+**Para ligar real:**
+
+1. Console GCP → Document AI → Processadores → "Criar processador"
+   → escolher *FORM_PARSER_PROCESSOR* na região `us` (ou `eu`).
+2. Copiar o **Processor ID** mostrado na página do processador.
+3. IAM & Admin → Service Accounts → criar conta com role
+   *Document AI API User* → gerar chave JSON.
+4. Colar a chave JSON inteira em `GOOGLE_DOCUMENTAI_CREDENTIALS_JSON`
+   no `.env` (linha única; `\n` dentro do `private_key` é aceito).
+5. Configurar `GCP_PROJECT_ID` e `DOCUMENTAI_PROCESSOR_ID`.
+6. Restart da API — adapter detecta as 3 vars preenchidas e sai do mock.
+
+**Persistência (`partes_diarias`):**
+
+- Anexo armazenado via `EditaisStorage` (local em dev, OneDrive em prod) —
+  reusa abstração do D.4.
+- `ocr_status` ∈ `{pendente, processado, revisado, erro}`. Workflow:
+  upload → `pendente`; OCR roda → `processado` (com campos preenchidos);
+  operador edita pela UI → auto-promovido para `revisado`; falha de
+  Document AI → `erro` com `ocr_error_msg`, sem perder o anexo
+  (operador pode reprocessar).
+- FK `veiculo_id` é `ON DELETE SET NULL` — parte diária sobrevive ao
+  delete do veículo (auditoria operacional).
+- Audit log em todas as mutações: `manutencao_frota.parte_diaria` com
+  `action="create"` (upload), `action="update"` (OCR processado ou
+  revisão), `action="delete"`, `action="error"` (falha do Document AI).
+
+**Tratamento de erros:**
+
+- `processar_ocr_parte_diaria` **nunca** propaga exceção para o
+  router — falha de transporte, auth, formato inesperado: tudo vira
+  `ocr_status='erro'` com `ocr_error_msg` truncado em 500 chars. UI
+  renderiza erro inline e oferece botão "Reprocessar".
+- Endpoints retornam 201 mesmo em caso de erro de OCR (com payload
+  da parte com `ocr_status='erro'`); 422 só para arquivo vazio /
+  404 para `parte_id` inexistente.

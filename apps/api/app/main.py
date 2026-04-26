@@ -26,6 +26,7 @@ async def lifespan(app: FastAPI):
     # nunca foi tocada), e o `aclose()` libera o pool httpx.
     from app.modules.fiscal.service import reset_dominio_singleton
     from app.modules.manutencao_frota.service import (
+        reset_documentai_singleton,
         reset_infosimples_singleton,
     )
 
@@ -36,6 +37,10 @@ async def lifespan(app: FastAPI):
     prev_infosimples = reset_infosimples_singleton()
     if prev_infosimples is not None:
         await prev_infosimples.aclose()
+
+    prev_documentai = reset_documentai_singleton()
+    if prev_documentai is not None:
+        await prev_documentai.aclose()
 
 
 def create_app() -> FastAPI:
