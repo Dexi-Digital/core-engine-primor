@@ -283,6 +283,86 @@ class OneDriveClient(IntegrationClient):
         if r.status_code not in (200, 204):
             raise OneDriveError(f"delete {r.status_code}: {r.text[:200]}")
 
+    async def list_folder(
+        self, *, relative_path: str = "", recursive: bool = True
+    ) -> list[dict[str, Any]]:
+        """Lista arquivos em `{root_folder}/{relative_path}`.
+
+        Retorna 1 dict por arquivo (pasta nao vira item -- so recursao),
+        com chaves estaveis:
+            id, name, path (relativo ao root_folder), size (int),
+            last_modified (str ISO-8601 do Graph, ou None).
+
+        Pagina via `@odata.nextLink` ate o fim. Se `recursive=True`,
+        entra em cada subpasta (DFS). Se a pasta raiz nao existir,
+        retorna lista vazia (404 tratado como "nada a sincronizar",
+        nao erro -- facilita o onboarding em ambientes novos).
+        """
+        prefix = self._root_folder
+        sub = relative_path.strip("/")
+        full = f"{prefix}/{sub}" if prefix and sub else (prefix or sub)
+        items = await self._list_recursive(full, recursive=recursive)
+        # `_list_recursive` devolve paths absolutos a partir da raiz do
+        # drive (ex: `MotorCentral/editais/dp/42/NR12.pdf`). Os consumers
+        # (parser.parse_path, service.run_sync) esperam paths relativos
+        # ao `root_folder` -- o mock ja faz esse strip, manter paridade.
+        root = prefix.strip("/")
+        if root:
+            for item in items:
+                p = item["path"]
+                if p.startswith(root + "/"):
+                    item["path"] = p[len(root) + 1 :]
+                elif p == root:
+                    item["path"] = ""
+        return items
+
+    async def _list_recursive(
+        self, path: str, *, recursive: bool
+    ) -> list[dict[str, Any]]:
+        path = path.strip("/")
+        if path:
+            url: str | None = (
+                f"{GRAPH_BASE}/drives/{self._drive_id}/root:/{path}:/children"
+            )
+        else:
+            url = f"{GRAPH_BASE}/drives/{self._drive_id}/root/children"
+        out: list[dict[str, Any]] = []
+        while url:
+            try:
+                r = await self._client.get(
+                    url, headers=await self._auth_header()
+                )
+            except httpx.HTTPError as exc:
+                raise OneDriveError(f"list Graph falhou: {exc}") from exc
+            if r.status_code == 404:
+                return []
+            if r.status_code != 200:
+                raise OneDriveError(
+                    f"list {r.status_code}: {r.text[:200]}"
+                )
+            payload = r.json()
+            for item in payload.get("value", []):
+                if "folder" in item:
+                    if recursive:
+                        sub_path = f"{path}/{item['name']}" if path else item["name"]
+                        out.extend(
+                            await self._list_recursive(
+                                sub_path, recursive=recursive
+                            )
+                        )
+                    continue
+                out.append(
+                    {
+                        "id": item.get("id"),
+                        "name": item.get("name"),
+                        "path": f"{path}/{item['name']}" if path else item["name"],
+                        "size": int(item.get("size") or 0),
+                        "last_modified": item.get("lastModifiedDateTime"),
+                    }
+                )
+            url = payload.get("@odata.nextLink")
+        return out
+
 
 class OneDriveMockClient(IntegrationClient):
     """Mock determinístico para desbloquear dev/testes sem Azure AD.
@@ -298,6 +378,10 @@ class OneDriveMockClient(IntegrationClient):
     def __init__(self, *, root_folder: str = "MotorCentral/editais") -> None:
         self._root_folder = root_folder.strip("/")
         self._store: dict[str, bytes] = {}
+        # Metadata por item_id -- path absoluto (inclui root_folder) +
+        # ultimo modificado. Permite `list_folder` devolver dados
+        # coerentes sem refletir o dict de bytes.
+        self._meta: dict[str, dict[str, Any]] = {}
 
     @property
     def root_folder(self) -> str:
@@ -331,6 +415,12 @@ class OneDriveMockClient(IntegrationClient):
         path = self._full_path(relative_path)
         item_id = self._id_for(path)
         self._store[item_id] = bytes(buffer)
+        self._meta[item_id] = {
+            "path": path,
+            "name": relative_path.rsplit("/", 1)[-1],
+            "size": len(buffer),
+            "last_modified": "2026-04-23T00:00:00Z",
+        }
         return {
             "id": item_id,
             "name": relative_path.rsplit("/", 1)[-1],
@@ -349,6 +439,75 @@ class OneDriveMockClient(IntegrationClient):
         if item_id not in self._store:
             raise OneDriveItemNotFound(f"item {item_id} nao encontrado (mock)")
         del self._store[item_id]
+        self._meta.pop(item_id, None)
+
+    def seed(
+        self,
+        *,
+        relative_path: str,
+        content: bytes = b"",
+        last_modified: str = "2026-04-23T00:00:00Z",
+    ) -> str:
+        """Helper para testes: cria um item sem usar async upload().
+
+        Retorna o `item_id` gerado (hash do path, igual ao upload).
+        Usado pelos tests de sync pra popular o drive mock com a
+        estrutura de pastas esperada (`dp/{id}/{tipo}.pdf`).
+        """
+        path = self._full_path(relative_path)
+        item_id = self._id_for(path)
+        self._store[item_id] = content
+        self._meta[item_id] = {
+            "path": path,
+            "name": relative_path.rsplit("/", 1)[-1],
+            "size": len(content),
+            "last_modified": last_modified,
+        }
+        return item_id
+
+    async def list_folder(
+        self, *, relative_path: str = "", recursive: bool = True
+    ) -> list[dict[str, Any]]:
+        """Lista items sob `{root_folder}/{relative_path}`.
+
+        Filtra o dict de metadados por prefixo (nao precisa simular
+        estrutura de pastas -- uma pasta existe se houver algum item
+        com path abaixo dela). `recursive=False` retorna so items
+        diretos da pasta (1 nivel); `recursive=True` (default) retorna
+        todos os descendentes.
+        """
+        prefix = self._full_path(relative_path).rstrip("/")
+        out: list[dict[str, Any]] = []
+        for item_id, meta in self._meta.items():
+            path = meta["path"]
+            # Pasta em path precisa casar com prefix ate o proximo /.
+            if prefix:
+                if path == prefix or not path.startswith(prefix + "/"):
+                    continue
+                rel_to_prefix = path[len(prefix) + 1 :]
+            else:
+                rel_to_prefix = path
+            if not recursive and "/" in rel_to_prefix:
+                continue
+            # Normaliza: mock expoe path relativo ao `root_folder` pra
+            # casar com o comportamento do cliente real.
+            root = self._root_folder
+            rel_path = (
+                path[len(root) + 1 :]
+                if root and path.startswith(root + "/")
+                else path
+            )
+            out.append(
+                {
+                    "id": item_id,
+                    "name": meta["name"],
+                    "path": rel_path,
+                    "size": meta["size"],
+                    "last_modified": meta["last_modified"],
+                }
+            )
+        out.sort(key=lambda it: it["path"])
+        return out
 
 
 def build_onedrive_client(

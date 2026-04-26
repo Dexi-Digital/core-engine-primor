@@ -11,10 +11,14 @@ from alembic import context
 from app.audit import models as _audit  # noqa: F401
 from app.core.db import Base
 from app.modules.auth import models as _auth  # noqa: F401
+from app.modules.diagnostico import models as _diag  # noqa: F401
+from app.modules.dp_sesmt import afastamentos as _afast  # noqa: F401
 from app.modules.dp_sesmt import models as _dp  # noqa: F401
 from app.modules.fiscal import models as _fiscal  # noqa: F401
 from app.modules.licitacoes import models as _lic  # noqa: F401
 from app.modules.manutencao_frota import models as _frota  # noqa: F401
+from app.modules.obras import models as _obras  # noqa: F401
+from app.modules.onedrive_sync import models as _onedrive  # noqa: F401
 
 config = context.config
 if config.config_file_name is not None:

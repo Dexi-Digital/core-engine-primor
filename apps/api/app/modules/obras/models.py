@@ -152,6 +152,21 @@ class ObraDocumento(Base):
         String(32), default="manual", server_default="manual"
     )
 
+    # --- Sync OneDrive (D1 fase 2) -- ver dp_sesmt.EmployeeDocument ---
+    onedrive_item_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
+    onedrive_path: Mapped[str | None] = mapped_column(
+        String(1024), nullable=True
+    )
+    onedrive_last_modified: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    onedrive_sync_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("onedrive_sync_runs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

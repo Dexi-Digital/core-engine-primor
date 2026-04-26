@@ -35,9 +35,36 @@ const STATUS_BADGE: Record<string, string> = {
 
 export const dynamic = "force-dynamic";
 
+type OneDriveSyncRun = {
+  id: number;
+  started_at: string;
+  finished_at: string | null;
+  status: string;
+  scope: string | null;
+  triggered_by: string | null;
+  root_folder: string | null;
+  files_scanned: number;
+  docs_created: number;
+  docs_updated: number;
+  docs_skipped: number;
+  errors_count: number;
+  error_message: string | null;
+  summary_json: { errors?: Array<{ path: string; reason: string }> } | null;
+};
+
 async function fetchRuns(): Promise<DiagnosticoRun[]> {
   try {
     return await apiFetch<DiagnosticoRun[]>("/api/v1/diagnostico/runs?limit=20");
+  } catch {
+    return [];
+  }
+}
+
+async function fetchOneDriveRuns(): Promise<OneDriveSyncRun[]> {
+  try {
+    return await apiFetch<OneDriveSyncRun[]>(
+      "/api/v1/onedrive-sync/runs?limit=5",
+    );
   } catch {
     return [];
   }
@@ -47,6 +74,16 @@ async function triggerRun(formData: FormData): Promise<void> {
   "use server";
   const scope = String(formData.get("scope") ?? "all");
   await apiFetch("/api/v1/diagnostico/run", {
+    method: "POST",
+    body: JSON.stringify({ scope }),
+  });
+  revalidatePath("/diagnostico");
+}
+
+async function triggerOneDriveSync(formData: FormData): Promise<void> {
+  "use server";
+  const scope = String(formData.get("scope") ?? "all");
+  await apiFetch("/api/v1/onedrive-sync/run", {
     method: "POST",
     body: JSON.stringify({ scope }),
   });
@@ -65,8 +102,12 @@ function pctConformidade(run: DiagnosticoRun): number {
 }
 
 export default async function DiagnosticoPage() {
-  const runs = await fetchRuns();
+  const [runs, oneDriveRuns] = await Promise.all([
+    fetchRuns(),
+    fetchOneDriveRuns(),
+  ]);
   const lastRun = runs[0];
+  const lastOneDriveRun = oneDriveRuns[0];
 
   return (
     <div className="flex flex-col gap-8">
@@ -201,6 +242,146 @@ export default async function DiagnosticoPage() {
           </div>
         </section>
       )}
+
+      <section
+        className="rounded-lg border border-slate-200 bg-white p-6"
+        data-testid="onedrive-sync-card"
+      >
+        <header className="mb-3 flex items-baseline justify-between">
+          <div>
+            <h2 className="text-lg font-semibold">Sincronizar OneDrive</h2>
+            <p className="mt-1 text-xs text-slate-600">
+              Varre a pasta raiz do OneDrive e importa documentos
+              seguindo a convencao <code>dp/&#123;id&#125;/TIPO.pdf</code>,{" "}
+              <code>frota/&#123;placa&#125;/TIPO.pdf</code>,{" "}
+              <code>obras/&#123;codigo&#125;/TIPO.pdf</code>,{" "}
+              <code>empresa/TIPO.pdf</code>. Cada run e idempotente —
+              rodar duas vezes nao duplica documentos.
+            </p>
+          </div>
+          <form action={triggerOneDriveSync} className="flex items-end gap-2">
+            <label className="flex flex-col text-xs">
+              <span className="mb-1 font-medium text-slate-700">Escopo</span>
+              <select
+                name="scope"
+                defaultValue="all"
+                className="rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+              >
+                <option value="all">Todas as pastas</option>
+                <option value="dp">DP</option>
+                <option value="frota">Frota</option>
+                <option value="obras">Obras</option>
+                <option value="empresa">Empresa</option>
+              </select>
+            </label>
+            <button
+              type="submit"
+              className="rounded-md bg-sky-700 px-4 py-2 text-sm font-medium text-white hover:bg-sky-800"
+            >
+              Sincronizar agora
+            </button>
+          </form>
+        </header>
+
+        {lastOneDriveRun ? (
+          <div className="grid grid-cols-5 gap-3 text-sm">
+            <div className="rounded-md bg-slate-100 p-3">
+              <p className="text-xs text-slate-700">Arquivos</p>
+              <p className="text-xl font-semibold text-slate-900">
+                {lastOneDriveRun.files_scanned}
+              </p>
+            </div>
+            <div className="rounded-md bg-emerald-50 p-3">
+              <p className="text-xs text-emerald-700">Criados</p>
+              <p className="text-xl font-semibold text-emerald-900">
+                {lastOneDriveRun.docs_created}
+              </p>
+            </div>
+            <div className="rounded-md bg-sky-50 p-3">
+              <p className="text-xs text-sky-700">Atualizados</p>
+              <p className="text-xl font-semibold text-sky-900">
+                {lastOneDriveRun.docs_updated}
+              </p>
+            </div>
+            <div className="rounded-md bg-slate-50 p-3">
+              <p className="text-xs text-slate-600">Ignorados</p>
+              <p className="text-xl font-semibold text-slate-700">
+                {lastOneDriveRun.docs_skipped}
+              </p>
+            </div>
+            <div className="rounded-md bg-red-50 p-3">
+              <p className="text-xs text-red-700">Erros</p>
+              <p className="text-xl font-semibold text-red-900">
+                {lastOneDriveRun.errors_count}
+              </p>
+            </div>
+          </div>
+        ) : (
+          <p className="text-sm text-slate-500">
+            Nenhuma sincronizacao executada ainda.
+          </p>
+        )}
+
+        {lastOneDriveRun?.error_message && (
+          <p className="mt-3 rounded-md bg-red-50 p-3 text-xs text-red-800">
+            <strong>Erro:</strong> {lastOneDriveRun.error_message}
+          </p>
+        )}
+
+        {oneDriveRuns.length > 1 && (
+          <details className="mt-4 text-sm">
+            <summary className="cursor-pointer text-xs text-slate-600">
+              Historico ({oneDriveRuns.length} ultimos runs)
+            </summary>
+            <table className="mt-3 w-full text-sm">
+              <thead className="border-b border-slate-200 text-left text-xs uppercase tracking-wider text-slate-500">
+                <tr>
+                  <th className="py-2">#</th>
+                  <th className="py-2">Iniciado</th>
+                  <th className="py-2">Escopo</th>
+                  <th className="py-2">Por</th>
+                  <th className="py-2 text-right">Arquivos</th>
+                  <th className="py-2 text-right">Criados</th>
+                  <th className="py-2 text-right">Atualizados</th>
+                  <th className="py-2 text-right">Erros</th>
+                  <th className="py-2">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {oneDriveRuns.map((r) => (
+                  <tr key={r.id} className="border-b border-slate-100">
+                    <td className="py-2 font-mono">{r.id}</td>
+                    <td className="py-2">{formatDateTime(r.started_at)}</td>
+                    <td className="py-2">{r.scope ?? "all"}</td>
+                    <td className="py-2 text-xs text-slate-600">
+                      {r.triggered_by ?? "system"}
+                    </td>
+                    <td className="py-2 text-right">{r.files_scanned}</td>
+                    <td className="py-2 text-right text-emerald-700">
+                      {r.docs_created}
+                    </td>
+                    <td className="py-2 text-right text-sky-700">
+                      {r.docs_updated}
+                    </td>
+                    <td className="py-2 text-right text-red-700">
+                      {r.errors_count}
+                    </td>
+                    <td className="py-2">
+                      <span
+                        className={`rounded px-2 py-0.5 text-xs ${
+                          STATUS_BADGE[r.status === "done" ? "ok" : "ausente"]
+                        }`}
+                      >
+                        {r.status}
+                      </span>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </details>
+        )}
+      </section>
 
       <section className="rounded-lg border border-slate-200 bg-white p-6">
         <h2 className="mb-3 text-lg font-semibold">Histórico</h2>
