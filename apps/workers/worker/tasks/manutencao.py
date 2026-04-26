@@ -106,13 +106,11 @@ def ocr_parte_diaria(self, parte_id: int) -> dict[str, object]:
 
 async def _run_ocr_parte_diaria(parte_id: int) -> dict[str, object]:
     try:
-        from pathlib import Path
-
         from app.core.config import get_settings
         from app.core.db import SessionLocal
-        from app.modules.licitacoes.storage import LocalStorage
         from app.modules.manutencao_frota.service import (
             get_documentai_client,
+            open_partes_diarias_storage,
             processar_ocr_parte_diaria,
         )
     except ImportError as exc:  # pragma: no cover
@@ -120,17 +118,17 @@ async def _run_ocr_parte_diaria(parte_id: int) -> dict[str, object]:
 
     settings = get_settings()
     client = get_documentai_client(settings)
-    # Worker nao usa OneDrive (geraria pool TCP por task) -- usa o
-    # backend local mesmo. Caso queira OneDrive, plug-in similar ao
-    # router/get_partes_diarias_storage. Em prod, normalmente o anexo
-    # esta acessivel via FS compartilhado entre API e worker.
-    base = Path(settings.editais_storage_path).parent
-    storage = LocalStorage(base / settings.parte_diaria_storage_subdir)
+    # Worker reusa o helper que a API tambem usa
+    # (`open_partes_diarias_storage`) -- assim ambos respeitam
+    # `STORAGE_BACKEND`. Sem isso, API saving em OneDrive escrevia o
+    # item_id no DB e o worker tentava `LocalStorage.read(item_id)` ->
+    # FileNotFoundError. Bug apontado pelo Devin Review.
     try:
-        async with SessionLocal() as session:
-            parte = await processar_ocr_parte_diaria(
-                session, parte_id, client=client, storage=storage
-            )
+        async with open_partes_diarias_storage(settings) as storage:
+            async with SessionLocal() as session:
+                parte = await processar_ocr_parte_diaria(
+                    session, parte_id, client=client, storage=storage
+                )
         return {
             "parte_id": parte.id,
             "ocr_status": parte.ocr_status,
