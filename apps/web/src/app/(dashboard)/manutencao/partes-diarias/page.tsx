@@ -303,7 +303,7 @@ export default async function PartesDiariasPage({
           <h2 className="text-base font-semibold">
             Lançamentos {list ? `(${list.total})` : ""}
           </h2>
-          {list && totalAlertas > 0 && (
+          {list && (totalAlertas > 0 || apenasComAlerta) && (
             <Link
               href={
                 apenasComAlerta
@@ -326,7 +326,9 @@ export default async function PartesDiariasPage({
               }`}
             >
               {apenasComAlerta
-                ? `mostrando ${totalAlertas} com alerta · limpar filtro`
+                ? totalAlertas > 0
+                  ? `mostrando ${totalAlertas} com alerta · limpar filtro`
+                  : "filtro de alerta ativo · limpar filtro"
                 : `${totalAlertas} com alerta de manutenção · filtrar`}
             </Link>
           )}
