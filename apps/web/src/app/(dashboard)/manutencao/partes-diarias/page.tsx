@@ -30,6 +30,13 @@ type ListResponse = {
   page_size: number;
 };
 
+type ParteDiariaConsumo = {
+  parte_diaria_id: number;
+  horas_trabalhadas: string | null;
+  km_rodados: number | null;
+  alerta_manutencao_preventiva: boolean;
+};
+
 const OCR_STATUSES: Array<[string, string]> = [
   ["pendente", "Pendente"],
   ["processado", "Processado"],
@@ -77,6 +84,37 @@ async function fetchPartes(params: {
   }
 }
 
+async function fetchConsumo(
+  id: number,
+): Promise<ParteDiariaConsumo | null> {
+  try {
+    return await apiFetch<ParteDiariaConsumo>(
+      `/api/v1/manutencao-frota/partes-diarias/${id}/consumo`,
+    );
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Fetch consumo em paralelo para um conjunto de partes. Indexa por id
+ * para a UI poder lookup O(1) ao renderizar a linha.
+ *
+ * E O(n) chamadas mas como o backend e SQL leve (1 query por consumo)
+ * e o page_size default e 50, fica aceitavel. Se virar gargalo, vira
+ * endpoint batch (POST /partes-diarias/consumos com body=[ids]).
+ */
+async function fetchConsumosBatch(
+  ids: number[],
+): Promise<Map<number, ParteDiariaConsumo>> {
+  const results = await Promise.all(ids.map((id) => fetchConsumo(id)));
+  const map = new Map<number, ParteDiariaConsumo>();
+  results.forEach((c) => {
+    if (c !== null) map.set(c.parte_diaria_id, c);
+  });
+  return map;
+}
+
 async function uploadParteDiaria(formData: FormData): Promise<void> {
   "use server";
   const arquivo = formData.get("arquivo") as File | null;
@@ -119,6 +157,22 @@ export default async function PartesDiariasPage({
     obra: obra || undefined,
     placa: placa || undefined,
   });
+  const consumos = list
+    ? await fetchConsumosBatch(list.items.map((p) => p.id))
+    : new Map<number, ParteDiariaConsumo>();
+  const apenasComAlerta = (params.alerta as string | undefined) === "1";
+  const itensVisiveis = list
+    ? apenasComAlerta
+      ? list.items.filter(
+          (p) => consumos.get(p.id)?.alerta_manutencao_preventiva,
+        )
+      : list.items
+    : [];
+  const totalAlertas = list
+    ? list.items.filter(
+        (p) => consumos.get(p.id)?.alerta_manutencao_preventiva,
+      ).length
+    : 0;
 
   return (
     <div className="flex flex-col gap-6">
@@ -184,6 +238,16 @@ export default async function PartesDiariasPage({
           method="get"
           className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-4"
         >
+          {/*
+            Form GET so envia inputs nomeados na URL, e como `alerta`
+            nao tem widget aqui (o toggle vive no header da lista),
+            sem o hidden input ele seria silenciosamente descartado
+            ao filtrar por status/obra/placa enquanto o toggle de
+            alerta estiver ligado. Preserva o filtro entre submits.
+          */}
+          {apenasComAlerta && (
+            <input type="hidden" name="alerta" value="1" />
+          )}
           <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
             Status OCR
             <select
@@ -235,18 +299,49 @@ export default async function PartesDiariasPage({
       </section>
 
       <section className="rounded-xl border border-slate-200 bg-white shadow-sm">
-        <header className="flex items-center justify-between border-b border-slate-200 px-6 py-4">
+        <header className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-6 py-4">
           <h2 className="text-base font-semibold">
             Lançamentos {list ? `(${list.total})` : ""}
           </h2>
+          {list && (totalAlertas > 0 || apenasComAlerta) && (
+            <Link
+              href={
+                apenasComAlerta
+                  ? `?${new URLSearchParams({
+                      ...(ocrStatus ? { ocr_status: ocrStatus } : {}),
+                      ...(obra ? { obra } : {}),
+                      ...(placa ? { placa } : {}),
+                    }).toString()}`
+                  : `?${new URLSearchParams({
+                      ...(ocrStatus ? { ocr_status: ocrStatus } : {}),
+                      ...(obra ? { obra } : {}),
+                      ...(placa ? { placa } : {}),
+                      alerta: "1",
+                    }).toString()}`
+              }
+              className={`inline-flex items-center gap-1 rounded-full border px-3 py-1 text-xs font-medium ${
+                apenasComAlerta
+                  ? "border-amber-500 bg-amber-100 text-amber-900"
+                  : "border-amber-300 bg-amber-50 text-amber-800 hover:border-amber-500"
+              }`}
+            >
+              {apenasComAlerta
+                ? totalAlertas > 0
+                  ? `mostrando ${totalAlertas} com alerta · limpar filtro`
+                  : "filtro de alerta ativo · limpar filtro"
+                : `${totalAlertas} com alerta de manutenção · filtrar`}
+            </Link>
+          )}
         </header>
         {list === null ? (
           <p className="px-6 py-8 text-sm text-slate-500">
             API indisponível.
           </p>
-        ) : list.items.length === 0 ? (
+        ) : itensVisiveis.length === 0 ? (
           <p className="px-6 py-8 text-sm text-slate-500">
-            Nenhuma parte diária com esses filtros ainda.
+            {apenasComAlerta
+              ? "Nenhuma parte com alerta de manutenção nesse filtro."
+              : "Nenhuma parte diária com esses filtros ainda."}
           </p>
         ) : (
           <table className="w-full text-left text-sm">
@@ -258,12 +353,15 @@ export default async function PartesDiariasPage({
                 <th className="px-6 py-3">Equipamento</th>
                 <th className="px-6 py-3">Placa</th>
                 <th className="px-6 py-3">Status OCR</th>
+                <th className="px-6 py-3">Manutenção</th>
                 <th className="px-6 py-3">Arquivo</th>
                 <th className="px-6 py-3"></th>
               </tr>
             </thead>
             <tbody>
-              {list.items.map((p) => (
+              {itensVisiveis.map((p) => {
+                const c = consumos.get(p.id);
+                return (
                 <tr key={p.id} className="border-t border-slate-100">
                   <td className="px-6 py-3">{formatDate(p.data)}</td>
                   <td className="px-6 py-3">{p.operador ?? "—"}</td>
@@ -279,6 +377,22 @@ export default async function PartesDiariasPage({
                     >
                       {p.ocr_status}
                     </span>
+                  </td>
+                  <td className="px-6 py-3">
+                    {c?.alerta_manutencao_preventiva ? (
+                      <span
+                        className="inline-flex rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800"
+                        title="Atravessou marco de 250 horas desde o último apontamento"
+                      >
+                        ⚠ 250h
+                      </span>
+                    ) : c?.horas_trabalhadas ? (
+                      <span className="text-xs text-slate-500">
+                        {c.horas_trabalhadas} h
+                      </span>
+                    ) : (
+                      <span className="text-xs text-slate-400">—</span>
+                    )}
                   </td>
                   <td className="px-6 py-3 text-xs text-slate-500">
                     {p.filename_original ?? "—"}
@@ -301,7 +415,8 @@ export default async function PartesDiariasPage({
                     </form>
                   </td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         )}
