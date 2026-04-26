@@ -112,6 +112,25 @@ class AsoAlertaSummary:
     results: list[AsoAlertaResult]
 
 
+@dataclass(slots=True)
+class _EmployeeSnapshot:
+    """Snapshot dos campos do Employee usados no dispatch.
+
+    Existe para isolar a iteracao do estado da sessao SQLAlchemy: apos
+    um `db.rollback()` (per-employee error path) o SQLAlchemy 2.0 expira
+    TODOS os ORM objects da sessao, e o lazy-refresh em `AsyncSession`
+    falha com `MissingGreenlet`. Carregando os campos uma vez e
+    iterando sobre dataclasses, isolamos o loop dessa armadilha.
+    """
+
+    id: int
+    nome_completo: str
+    cpf: str
+    cargo: str | None
+    obra: str | None
+    aso_validade: _date  # nao-None: filtramos no SQL upstream
+
+
 async def _alerta_already_sent(
     db: AsyncSession, employee_id: int, janela: str
 ) -> bool:
@@ -138,7 +157,7 @@ async def _get_existing_log(
 
 
 def render_aso_alerta_html(
-    employee: Employee,
+    employee: Employee | _EmployeeSnapshot,
     *,
     janela: int,
     public_base_url: str,
@@ -250,11 +269,32 @@ async def dispatch_aso_alerts(
         return AsoAlertaSummary(0, 0, 0, 0, [])
 
     stmt = (
-        select(Employee)
+        select(
+            Employee.id,
+            Employee.nome_completo,
+            Employee.cpf,
+            Employee.cargo,
+            Employee.obra,
+            Employee.aso_validade,
+        )
         .where(Employee.status == STATUS_ATIVO)
         .where(Employee.aso_validade.is_not(None))
     )
-    employees = list((await db.execute(stmt)).scalars().all())
+    rows = (await db.execute(stmt)).all()
+    # Snapshot detached -- iteramos sobre dataclasses puras para que um
+    # rollback no meio do loop (que expira ORM objects) nao quebre os
+    # acessos subsequentes a `aso_validade`/`nome_completo` etc.
+    employees: list[_EmployeeSnapshot] = [
+        _EmployeeSnapshot(
+            id=r.id,
+            nome_completo=r.nome_completo,
+            cpf=r.cpf,
+            cargo=r.cargo,
+            obra=r.obra,
+            aso_validade=r.aso_validade,
+        )
+        for r in rows
+    ]
 
     sent = 0
     skipped = 0

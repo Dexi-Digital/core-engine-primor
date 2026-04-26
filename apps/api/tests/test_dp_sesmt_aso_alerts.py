@@ -252,6 +252,79 @@ async def test_dispatch_skips_no_validade(db_session: AsyncSession) -> None:
 
 
 @pytest.mark.asyncio
+async def test_dispatch_continues_after_db_rollback_in_loop(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regressao do bug do Devin Review: quando `db.commit()` falha
+    no meio do loop e dispara `db.rollback()`, SQLAlchemy 2.0 expira
+    TODOS os ORM objects da sessao. O AsyncSession nao suporta
+    lazy-refresh implicito (sem greenlet), entao o proximo acesso a
+    `employee.aso_validade` crashava com `MissingGreenlet` e abortava
+    o resto do dispatch.
+
+    Fix: snapshot dos campos do Employee em dataclass puro
+    (`_EmployeeSnapshot`) antes do loop, isolando a iteracao do
+    estado da sessao.
+
+    Setup: 2 funcionarios elegiveis. Patch em `db.commit` para falhar
+    APENAS no primeiro `commit()` -- forca o branch de erro do dispatch,
+    que chama `db.rollback()`. Sem o fix, o segundo employee causaria
+    `MissingGreenlet` ao acessar `aso_validade`. Com o fix, o loop
+    continua e o segundo employee e processado normalmente.
+    """
+    today = date(2026, 4, 25)
+    emp1 = await _create_employee(
+        db_session,
+        cpf="11144477735",
+        nome="Funcionario A",
+        aso_validade=today + timedelta(days=10),  # janela 15
+    )
+    emp2 = await _create_employee(
+        db_session,
+        cpf="22255588846",
+        nome="Funcionario B",
+        aso_validade=today + timedelta(days=5),  # janela 7
+    )
+    # Capturamos os ids ANTES do dispatch -- depois do rollback no meio
+    # do loop, esses ORM objects ficam expirados e qualquer acesso aqui
+    # tambem dispararia MissingGreenlet.
+    emp1_id = emp1.id
+    emp2_id = emp2.id
+
+    # Resend OK para todo mundo -- a falha sera no commit, nao no envio.
+    captured: list[httpx.Request] = []
+    resend = _mock_resend(captured)
+
+    original_commit = db_session.commit
+    fail_count = {"remaining": 1}
+
+    async def flaky_commit() -> None:
+        if fail_count["remaining"] > 0:
+            fail_count["remaining"] -= 1
+            raise RuntimeError("simulated commit failure")
+        await original_commit()
+
+    monkeypatch.setattr(db_session, "commit", flaky_commit)
+
+    summary = await dispatch_aso_alerts(
+        db_session, resend, recipients=["x@y.com"], today=today
+    )
+    await resend.aclose()
+
+    # Sem o fix: summary.failed=1, summary.sent=0 e o segundo employee
+    # NAO aparece em results (perdido por MissingGreenlet).
+    # Com o fix: o loop continua. O 1o tem commit falho (`status=failed`,
+    # commit retornou erro); o 2o passa normal (`sent`).
+    assert summary.total_employees == 2
+    employee_ids_in_results = {r.employee_id for r in summary.results}
+    assert employee_ids_in_results == {emp1_id, emp2_id}, (
+        "ambos os funcionarios devem aparecer em results -- segundo "
+        "nao pode ser perdido por MissingGreenlet apos rollback"
+    )
+
+
+@pytest.mark.asyncio
 async def test_dispatch_empty_recipients_warns_and_returns(
     db_session: AsyncSession,
 ) -> None:

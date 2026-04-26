@@ -129,6 +129,25 @@ class AlertaSummary:
     results: list[AlertaResult]
 
 
+@dataclass(slots=True)
+class _CertidaoSnapshot:
+    """Snapshot dos campos da certidao usados no dispatch.
+
+    Mesmo motivo do `_EmployeeSnapshot` em `dp_sesmt/aso_alerts.py`:
+    apos `db.rollback()` (per-certidao error path) o SQLAlchemy 2.0
+    expira TODOS os ORM objects da sessao, e o lazy-refresh em
+    `AsyncSession` falha com `MissingGreenlet`. Carregar os campos
+    uma vez em dataclass puro isola o loop dessa armadilha.
+    """
+
+    id: int
+    tipo: str
+    numero: str | None
+    empresa_cnpj: str
+    orgao_emissor: str | None
+    validade: _date | None  # `None` = certidao sem validade (atestado, etc.)
+
+
 async def list_certidoes(
     db: AsyncSession,
     *,
@@ -249,7 +268,7 @@ async def _get_existing_log(
 
 
 def render_alerta_html(
-    certidao: CertidaoEmpresa,
+    certidao: CertidaoEmpresa | _CertidaoSnapshot,
     *,
     janela: int,
     public_base_url: str,
@@ -356,8 +375,29 @@ async def dispatch_expiration_alerts(
         logger.warning("dispatch_expiration_alerts: lista de recipients vazia")
         return AlertaSummary(0, 0, 0, 0, [])
 
-    stmt = select(CertidaoEmpresa)
-    certidoes = list((await db.execute(stmt)).scalars().all())
+    stmt = select(
+        CertidaoEmpresa.id,
+        CertidaoEmpresa.tipo,
+        CertidaoEmpresa.numero,
+        CertidaoEmpresa.empresa_cnpj,
+        CertidaoEmpresa.orgao_emissor,
+        CertidaoEmpresa.validade,
+    )
+    rows = (await db.execute(stmt)).all()
+    # Snapshot detached -- ver doc da `_CertidaoSnapshot`. NAO filtramos
+    # `validade IS NOT NULL` aqui porque queremos preservar o comportamento
+    # antigo de contabilizar `skipped+1` para atestados sem validade.
+    certidoes: list[_CertidaoSnapshot] = [
+        _CertidaoSnapshot(
+            id=r.id,
+            tipo=r.tipo,
+            numero=r.numero,
+            empresa_cnpj=r.empresa_cnpj,
+            orgao_emissor=r.orgao_emissor,
+            validade=r.validade,
+        )
+        for r in rows
+    ]
 
     sent = 0
     skipped = 0
