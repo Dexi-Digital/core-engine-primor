@@ -948,3 +948,69 @@ async def test_endpoint_consumo_404_se_inexistente(
         "/api/v1/manutencao-frota/partes-diarias/999999/consumo"
     )
     assert r.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_consumo_ignora_horimetro_de_partes_pendentes_ou_erro(
+    db_session: AsyncSession,
+) -> None:
+    """Regressao do finding Devin Review #24: a query do horimetro
+    anterior precisa filtrar por ocr_status revisado/processado --
+    senao uma parte pendente (com horimetro_fim cru de OCR ainda
+    nao validado) seria usada como base do gatilho de 250h e
+    geraria alerta espurio (ou perderia um real)."""
+    from datetime import date as date_cls
+    from decimal import Decimal as D
+
+    from app.modules.manutencao_frota.models import PARTE_PENDENTE
+
+    veiculo_id = 7777
+
+    # Parte ANTIGA, status=pendente, horimetro_fim=140 (lixo de OCR
+    # ainda nao validado). Nao deve influenciar o gatilho.
+    pendente = ParteDiaria(
+        veiculo_id=veiculo_id,
+        data=date_cls(2025, 8, 10),
+        horimetro_inicio=D("100.00"),
+        horimetro_fim=D("140.00"),
+        ocr_status=PARTE_PENDENTE,
+        ocr_source="upload",
+    )
+    db_session.add(pendente)
+
+    # Parte ANTIGA, status=revisado, horimetro_fim=240. Esta sim
+    # deve ser usada como horimetro_anterior.
+    revisada = ParteDiaria(
+        veiculo_id=veiculo_id,
+        data=date_cls(2025, 8, 12),
+        horimetro_inicio=D("200.00"),
+        horimetro_fim=D("240.00"),
+        ocr_status=PARTE_REVISADO,
+        ocr_source="manual_pwa",
+    )
+    db_session.add(revisada)
+
+    # Parte ATUAL, horimetro_fim=260 -- atravessa marco de 250h
+    # SE comparada com 240 (revisada). Se o filtro estivesse
+    # quebrado, comparariamos com 140 (pendente) e ignorariamos
+    # incorretamente o gatilho (140//250=0, 260//250=1, ainda
+    # detectaria mas pelo motivo errado; e em outros cenarios a
+    # parte pendente teria horimetro espurio que MASCARARIA o
+    # cruzamento real).
+    atual = ParteDiaria(
+        veiculo_id=veiculo_id,
+        data=date_cls(2025, 8, 15),
+        horimetro_inicio=D("240.00"),
+        horimetro_fim=D("260.00"),
+        ocr_status=PARTE_REVISADO,
+        ocr_source="manual_pwa",
+    )
+    db_session.add(atual)
+    await db_session.commit()
+    await db_session.refresh(atual)
+
+    consumo = await service.get_consumo_parte_diaria(db_session, atual.id)
+    assert consumo is not None
+    # Alerta dispara comparando com 240 (revisada) -- nao com 140
+    # (pendente, que seria ignorada).
+    assert consumo["alerta_manutencao_preventiva"] is True

@@ -941,6 +941,11 @@ async def get_consumo_parte_diaria(
             .where(ParteDiaria.horimetro_fim.is_not(None))
             .where(ParteDiaria.data.is_not(None))
             .where(ParteDiaria.data < parte.data)
+            # Pendente/erro tem horimetro_fim cru de OCR ainda nao
+            # validado -- usar isso como base do gatilho de 250h
+            # geraria alerta espurio (ou perderia um real). So
+            # contam revisado/processado.
+            .where(ParteDiaria.ocr_status.in_([PARTE_REVISADO, PARTE_PROCESSADO]))
             .order_by(ParteDiaria.data.desc())
             .limit(1)
         )
