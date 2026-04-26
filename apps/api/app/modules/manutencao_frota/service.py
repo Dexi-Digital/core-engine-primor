@@ -7,10 +7,12 @@ multas/IPVA/CRLV em `frota_documentos` com `source=detran_rpa`.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -1024,6 +1026,49 @@ def reset_documentai_singleton() -> Any | None:
     return prev
 
 
+# --- Storage helper compartilhado API/worker (B.2) -------------------------
+#
+# Tanto o router quanto o worker `_run_ocr_parte_diaria` precisam abrir o
+# storage de partes diarias respeitando `STORAGE_BACKEND`. Sem essa
+# fatoracao, a API saving em OneDrive escrevia o item_id no DB e o worker
+# tentava `LocalStorage.read(item_id)` -> FileNotFoundError. (Apontado
+# pelo Devin Review.) Devolvemos como async context manager porque o
+# OneDriveStorage segura um httpx client que precisa de aclose().
+
+@contextlib.asynccontextmanager
+async def open_partes_diarias_storage(settings: Any) -> AsyncIterator[Any]:
+    """Abre o storage de partes diarias conforme `STORAGE_BACKEND`.
+
+    Local: `LocalStorage` em `<editais_storage_parent>/<parte_diaria_subdir>`.
+    OneDrive: `OneDriveStorage` apontando para a pasta
+    `<parte_diaria_subdir>` no drive configurado.
+
+    Uso:
+        async with open_partes_diarias_storage(settings) as storage:
+            await storage.read(path)
+    """
+    from app.integrations.onedrive.client import build_onedrive_client
+    from app.integrations.onedrive.storage import OneDriveStorage
+    from app.modules.licitacoes.storage import LocalStorage
+
+    backend = (getattr(settings, "storage_backend", None) or "local").lower()
+    if backend == "onedrive":
+        client = build_onedrive_client(
+            tenant_id=settings.ms_graph_tenant_id,
+            client_id=settings.ms_graph_client_id,
+            client_secret=settings.ms_graph_client_secret,
+            drive_id=settings.ms_graph_drive_id,
+            root_folder=settings.parte_diaria_storage_subdir,
+        )
+        try:
+            yield OneDriveStorage(client)
+        finally:
+            await client.aclose()
+        return
+    base = Path(settings.editais_storage_path).parent
+    yield LocalStorage(base / settings.parte_diaria_storage_subdir)
+
+
 # --- Celery dispatch (B.2) ------------------------------------------------
 #
 # AGENTS.md: "Scrapers/OCR/RPA rodam SEMPRE no worker (Celery) -- nunca
@@ -1037,6 +1082,35 @@ def reset_documentai_singleton() -> Any | None:
 # `processar_ocr_parte_diaria` direto -- assim a assertiva de "campos
 # preenchidos" continua valida sem precisar de Redis/celery rodando.
 
+_celery_dispatcher_singleton: Any | None = None
+
+
+def get_celery_dispatcher() -> Any:
+    """Singleton do app Celery usado pela API APENAS para `send_task`.
+
+    Cada `Celery(...)` aloca pool de conexoes (Redis/AMQP) interno. Como
+    `enqueue_ocr_parte_diaria` e chamado em todo upload + reprocessar,
+    instanciar por chamada vaza conexoes (apontado pelo Devin Review).
+    Mantemos um singleton por processo da API, mesmo padrao do Infosimples
+    /Dominio/OneDrive (so que esses sao httpx clients, nao Celery).
+    """
+    global _celery_dispatcher_singleton
+    if _celery_dispatcher_singleton is None:
+        from celery import Celery
+
+        settings = _get_settings()
+        _celery_dispatcher_singleton = Celery(broker=settings.redis_url)
+    return _celery_dispatcher_singleton
+
+
+def reset_celery_dispatcher_singleton() -> Any | None:
+    """Limpa o singleton do dispatcher Celery (testes / lifespan)."""
+    global _celery_dispatcher_singleton
+    prev = _celery_dispatcher_singleton
+    _celery_dispatcher_singleton = None
+    return prev
+
+
 def enqueue_ocr_parte_diaria(parte_id: int) -> None:
     """Despacha OCR para o worker Celery (fila `manutencao`).
 
@@ -1045,12 +1119,12 @@ def enqueue_ocr_parte_diaria(parte_id: int) -> None:
     (caso raro -- tipicamente Redis down), a chamada levanta
     `kombu.exceptions.OperationalError`. A row ja foi criada com
     `ocr_status='pendente'`, entao retentar o upload nao causa duplicidade.
-    """
-    from celery import Celery
 
-    settings = _get_settings()
-    celery = Celery(broker=settings.redis_url)
-    celery.send_task(
+    Reusa um app Celery singleton (`get_celery_dispatcher`) para nao
+    alocar pool TCP novo a cada upload.
+    """
+    dispatcher = get_celery_dispatcher()
+    dispatcher.send_task(
         "worker.tasks.manutencao.ocr_parte_diaria",
         args=[parte_id],
         queue="manutencao",
@@ -1066,6 +1140,7 @@ __all__ = [
     "delete_parte_diaria",
     "delete_veiculo",
     "enqueue_ocr_parte_diaria",
+    "get_celery_dispatcher",
     "get_documentai_client",
     "get_documentai_singleton",
     "get_infosimples_client",
@@ -1077,7 +1152,9 @@ __all__ = [
     "list_partes_diarias",
     "list_veiculos",
     "mark_parte_diaria_erro",
+    "open_partes_diarias_storage",
     "processar_ocr_parte_diaria",
+    "reset_celery_dispatcher_singleton",
     "reset_documentai_singleton",
     "reset_infosimples_singleton",
     "update_documento",

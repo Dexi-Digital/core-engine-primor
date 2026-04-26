@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
-from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import (
@@ -33,9 +32,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.db import get_db
-from app.integrations.onedrive.client import build_onedrive_client
-from app.integrations.onedrive.storage import OneDriveStorage
-from app.modules.licitacoes.storage import EditaisStorage, LocalStorage
+from app.modules.licitacoes.storage import EditaisStorage
 from app.modules.manutencao_frota import service
 from app.modules.manutencao_frota.schemas import (
     ConsultaDetranListResponse,
@@ -280,28 +277,15 @@ async def list_consultas_global_endpoint(
 async def get_partes_diarias_storage() -> AsyncIterator[EditaisStorage]:
     """Storage dedicado para anexos de parte diaria.
 
-    Mesmo backend (`STORAGE_BACKEND=local|onedrive`) do storage de
-    editais/fiscal, em pasta separada (`parte_diaria_storage_subdir`)
-    para nao misturar namespaces. Local: filesystem; OneDrive: pasta
-    no drive Microsoft 365 do tenant.
+    Delega para `service.open_partes_diarias_storage` (helper
+    compartilhado API/worker) para garantir que ambos usem o mesmo
+    backend conforme `STORAGE_BACKEND`. Sem essa fatoracao, API podia
+    salvar em OneDrive enquanto worker tentava ler com LocalStorage --
+    bug apontado pelo Devin Review.
     """
     settings = get_settings()
-    backend = (settings.storage_backend or "local").lower()
-    if backend == "onedrive":
-        client = build_onedrive_client(
-            tenant_id=settings.ms_graph_tenant_id,
-            client_id=settings.ms_graph_client_id,
-            client_secret=settings.ms_graph_client_secret,
-            drive_id=settings.ms_graph_drive_id,
-            root_folder=settings.parte_diaria_storage_subdir,
-        )
-        try:
-            yield OneDriveStorage(client)
-        finally:
-            await client.aclose()
-        return
-    base = Path(settings.editais_storage_path).parent
-    yield LocalStorage(base / settings.parte_diaria_storage_subdir)
+    async with service.open_partes_diarias_storage(settings) as storage:
+        yield storage
 
 
 def get_documentai_dep() -> Any:

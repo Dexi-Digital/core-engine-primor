@@ -538,3 +538,85 @@ async def test_processar_ocr_falha_de_read_anexo(
     )
     assert parte.ocr_status == PARTE_ERRO
     assert "file not found" in (parte.ocr_error_msg or "")
+
+
+# --- regressao Devin Review post-merge -------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_celery_dispatcher_e_singleton() -> None:
+    """Bug do Devin Review: cada `enqueue_ocr_parte_diaria` criava um
+    novo `Celery(...)` -- vazava pool de conexoes Redis/AMQP. O fix
+    cacheia em `_celery_dispatcher_singleton`.
+    """
+    service.reset_celery_dispatcher_singleton()
+    a = service.get_celery_dispatcher()
+    b = service.get_celery_dispatcher()
+    assert a is b, "dispatcher Celery deve ser singleton (sem leak de pool)"
+
+    # E `enqueue_ocr_parte_diaria` deve usar o mesmo singleton.
+    sent: list[tuple[str, list, str]] = []
+
+    class _Spy:
+        def send_task(self, name, args=None, queue=None):
+            sent.append((name, args or [], queue or ""))
+
+    spy = _Spy()
+    # Substitui o singleton em memoria pelo spy.
+    service._celery_dispatcher_singleton = spy  # type: ignore[attr-defined]
+    try:
+        service.enqueue_ocr_parte_diaria(42)
+        service.enqueue_ocr_parte_diaria(43)
+        assert len(sent) == 2
+        assert sent[0] == ("worker.tasks.manutencao.ocr_parte_diaria", [42], "manutencao")
+        assert sent[1] == ("worker.tasks.manutencao.ocr_parte_diaria", [43], "manutencao")
+    finally:
+        service.reset_celery_dispatcher_singleton()
+
+
+@pytest.mark.asyncio
+async def test_open_partes_diarias_storage_local(tmp_path) -> None:
+    """`open_partes_diarias_storage` (helper compartilhado API/worker)
+    deve devolver `LocalStorage` quando `STORAGE_BACKEND` != onedrive.
+
+    Regressao do Devin Review: API saving em OneDrive / worker lendo com
+    LocalStorage -> FileNotFoundError. Helper unico evita divergencia.
+    """
+    from types import SimpleNamespace
+
+    from app.modules.licitacoes.storage import LocalStorage
+
+    settings = SimpleNamespace(
+        storage_backend="local",
+        editais_storage_path=str(tmp_path / "editais"),
+        parte_diaria_storage_subdir="partes_diarias",
+    )
+    async with service.open_partes_diarias_storage(settings) as storage:
+        assert isinstance(storage, LocalStorage)
+
+
+@pytest.mark.asyncio
+async def test_open_partes_diarias_storage_onedrive_aclose() -> None:
+    """No backend OneDrive o helper deve abrir client httpx e fechar no
+    finally -- senao o worker vaza pool TCP a cada parte diaria."""
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    settings = SimpleNamespace(
+        storage_backend="onedrive",
+        editais_storage_path="/tmp/editais",
+        parte_diaria_storage_subdir="partes_diarias",
+        ms_graph_tenant_id="t",
+        ms_graph_client_id="c",
+        ms_graph_client_secret="s",
+        ms_graph_drive_id="d",
+    )
+    fake_client = AsyncMock()
+    fake_client.aclose = AsyncMock()
+    with patch(
+        "app.integrations.onedrive.client.build_onedrive_client",
+        return_value=fake_client,
+    ):
+        async with service.open_partes_diarias_storage(settings) as storage:
+            assert storage is not None
+        fake_client.aclose.assert_awaited_once()
