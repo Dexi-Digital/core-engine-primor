@@ -20,7 +20,7 @@ from app.modules.manutencao_frota.models import (
     ParteDiaria,
 )
 from app.modules.manutencao_frota.router import (
-    get_documentai_dep,
+    get_ocr_dispatcher,
     get_partes_diarias_storage,
 )
 
@@ -120,20 +120,47 @@ def in_memory_storage():
     app.dependency_overrides.pop(get_partes_diarias_storage, None)
 
 
+def _eager_factory(
+    client: Any, db_session: AsyncSession, storage: Any
+):
+    """Substitui o dispatcher Celery por execucao sincrona in-process.
+
+    Conforme AGENTS.md, OCR roda no worker em prod -- mas como testes de
+    API nao trazem broker/worker rodando, usamos este "eager dispatcher"
+    que chama `processar_ocr_parte_diaria` direto na mesma session da
+    request. Comportamento end-to-end pos-task fica equivalente: a row
+    sai com `ocr_status='processado'` (ou 'erro') antes do response
+    voltar para o caller, e a UI nao precisa esperar polling no teste.
+    """
+    async def _dispatch(parte_id: int) -> None:
+        await service.processar_ocr_parte_diaria(
+            db_session, parte_id, client=client, storage=storage
+        )
+
+    def _factory():
+        return _dispatch
+
+    return _factory
+
+
 @pytest.fixture
-def fake_ok_ocr():
+def fake_ok_ocr(db_session: AsyncSession, in_memory_storage: InMemoryStorage):
     client = FakeOkOcrClient()
-    app.dependency_overrides[get_documentai_dep] = lambda: client
+    app.dependency_overrides[get_ocr_dispatcher] = _eager_factory(
+        client, db_session, in_memory_storage
+    )
     yield client
-    app.dependency_overrides.pop(get_documentai_dep, None)
+    app.dependency_overrides.pop(get_ocr_dispatcher, None)
 
 
 @pytest.fixture
-def fake_failing_ocr():
+def fake_failing_ocr(db_session: AsyncSession, in_memory_storage: InMemoryStorage):
     client = FakeFailingOcrClient()
-    app.dependency_overrides[get_documentai_dep] = lambda: client
+    app.dependency_overrides[get_ocr_dispatcher] = _eager_factory(
+        client, db_session, in_memory_storage
+    )
     yield client
-    app.dependency_overrides.pop(get_documentai_dep, None)
+    app.dependency_overrides.pop(get_ocr_dispatcher, None)
 
 
 # --- endpoint POST /partes-diarias -----------------------------------------
@@ -148,7 +175,7 @@ async def test_upload_extrai_campos_e_persiste(
 ) -> None:
     files = {"arquivo": ("parte-001.pdf", b"%PDF-fake-bytes", "application/pdf")}
     r = await api_client.post("/api/v1/manutencao-frota/partes-diarias", files=files)
-    assert r.status_code == 201, r.text
+    assert r.status_code == 202, r.text
     body = r.json()
     assert body["ocr_status"] == PARTE_PROCESSADO
     assert body["operador"] == "Joao da Silva"
@@ -195,7 +222,7 @@ async def test_upload_amarra_veiculo_via_placa_extraida(
 
     files = {"arquivo": ("parte.pdf", b"%PDF-x", "application/pdf")}
     r = await api_client.post("/api/v1/manutencao-frota/partes-diarias", files=files)
-    assert r.status_code == 201
+    assert r.status_code == 202
     assert r.json()["veiculo_id"] == veiculo_id
 
 
@@ -212,7 +239,7 @@ async def test_ocr_falha_devolve_201_com_status_erro(
     pode reprocessar."""
     files = {"arquivo": ("parte.pdf", b"%PDF-x", "application/pdf")}
     r = await api_client.post("/api/v1/manutencao-frota/partes-diarias", files=files)
-    assert r.status_code == 201
+    assert r.status_code == 202
     body = r.json()
     assert body["ocr_status"] == PARTE_ERRO
     assert "documentai timeout" in body["ocr_error_msg"]
@@ -229,7 +256,7 @@ async def test_audit_log_registra_create_e_update(
 ) -> None:
     files = {"arquivo": ("parte.pdf", b"%PDF-x", "application/pdf")}
     r = await api_client.post("/api/v1/manutencao-frota/partes-diarias", files=files)
-    assert r.status_code == 201
+    assert r.status_code == 202
     parte_id = r.json()["id"]
     rows = (
         await db_session.execute(
@@ -352,10 +379,12 @@ async def test_reprocessar_recupera_de_erro(
     db_session: AsyncSession,
     in_memory_storage: InMemoryStorage,
 ) -> None:
-    """Upload com OCR falhando -> patch override do client para OK ->
+    """Upload com OCR falhando -> swap do dispatcher pelo OK ->
     reprocessar deve atualizar para `processado`."""
     failing = FakeFailingOcrClient()
-    app.dependency_overrides[get_documentai_dep] = lambda: failing
+    app.dependency_overrides[get_ocr_dispatcher] = _eager_factory(
+        failing, db_session, in_memory_storage
+    )
     files = {"arquivo": ("parte.pdf", b"%PDF-x", "application/pdf")}
     r = await api_client.post(
         "/api/v1/manutencao-frota/partes-diarias", files=files
@@ -365,17 +394,49 @@ async def test_reprocessar_recupera_de_erro(
 
     # Substitui pelo OK e reprocessa.
     ok = FakeOkOcrClient()
-    app.dependency_overrides[get_documentai_dep] = lambda: ok
+    app.dependency_overrides[get_ocr_dispatcher] = _eager_factory(
+        ok, db_session, in_memory_storage
+    )
     try:
         r2 = await api_client.post(
             f"/api/v1/manutencao-frota/partes-diarias/{parte_id}/reprocessar"
         )
-        assert r2.status_code == 200
+        assert r2.status_code == 202
         body = r2.json()
         assert body["ocr_status"] == PARTE_PROCESSADO
         assert body["operador"] == "Joao da Silva"
     finally:
-        app.dependency_overrides.pop(get_documentai_dep, None)
+        app.dependency_overrides.pop(get_ocr_dispatcher, None)
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_broker_down_marca_erro(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    in_memory_storage: InMemoryStorage,
+) -> None:
+    """Broker do Celery indisponivel -> upload nao falha; row fica `erro`.
+
+    Regressao do fix do Devin Review #2: AGENTS.md exige OCR no worker,
+    mas se o broker estiver fora a UX nao pode quebrar -- o operador
+    precisa ver o anexo persistido com mensagem de erro clara.
+    """
+    async def _broken(_parte_id: int) -> None:
+        raise ConnectionError("broker offline")
+
+    app.dependency_overrides[get_ocr_dispatcher] = lambda: _broken
+    try:
+        files = {"arquivo": ("parte.pdf", b"%PDF-x", "application/pdf")}
+        r = await api_client.post(
+            "/api/v1/manutencao-frota/partes-diarias", files=files
+        )
+        assert r.status_code == 202, r.text
+        body = r.json()
+        assert body["ocr_status"] == PARTE_ERRO
+        assert "broker offline" in (body["ocr_error_msg"] or "")
+        assert body["anexo_path"] is not None
+    finally:
+        app.dependency_overrides.pop(get_ocr_dispatcher, None)
 
 
 # --- delete + cascade ------------------------------------------------------

@@ -699,6 +699,34 @@ async def create_parte_diaria(
     return parte
 
 
+async def mark_parte_diaria_erro(
+    db: AsyncSession, parte_id: int, error_msg: str
+) -> ParteDiaria | None:
+    """Marca uma parte_diaria como `erro` com mensagem truncada.
+
+    Usado quando o dispatch para o worker falha (broker down) -- a row
+    ja existe com `pendente`, mas o caller precisa sinalizar para a UI
+    que o pipeline nao vai rodar sem intervencao. Audita `error` em
+    audit_log para rastreio.
+    """
+    res = await db.execute(select(ParteDiaria).where(ParteDiaria.id == parte_id))
+    parte = res.scalar_one_or_none()
+    if parte is None:
+        return None
+    parte.ocr_status = PARTE_ERRO
+    parte.ocr_error_msg = (error_msg or "")[:500]
+    await db.commit()
+    await db.refresh(parte)
+    await _record_audit(
+        db,
+        action="error",
+        resource=_AUDIT_RESOURCE_PARTE,
+        resource_id=parte.id,
+        metadata={"error_msg": parte.ocr_error_msg},
+    )
+    return parte
+
+
 async def processar_ocr_parte_diaria(
     db: AsyncSession,
     parte_id: int,
@@ -996,6 +1024,39 @@ def reset_documentai_singleton() -> Any | None:
     return prev
 
 
+# --- Celery dispatch (B.2) ------------------------------------------------
+#
+# AGENTS.md: "Scrapers/OCR/RPA rodam SEMPRE no worker (Celery) -- nunca
+# bloqueiem a API." O endpoint POST /partes-diarias e o /reprocessar usam
+# `enqueue_ocr_parte_diaria(parte_id)` que dispara `worker.tasks.manutencao.
+# ocr_parte_diaria` por nome (sem importar o pacote `worker`, que esta em
+# outro modulo do monorepo). A task usa a fila `manutencao` ja roteada em
+# `worker.main.celery_app.conf.task_routes`.
+#
+# Em testes a gente monkeypatch isso para chamar
+# `processar_ocr_parte_diaria` direto -- assim a assertiva de "campos
+# preenchidos" continua valida sem precisar de Redis/celery rodando.
+
+def enqueue_ocr_parte_diaria(parte_id: int) -> None:
+    """Despacha OCR para o worker Celery (fila `manutencao`).
+
+    Usa `send_task` por nome para evitar dependencia de import entre
+    apps/api e apps/workers. Caso o broker nao esteja disponivel
+    (caso raro -- tipicamente Redis down), a chamada levanta
+    `kombu.exceptions.OperationalError`. A row ja foi criada com
+    `ocr_status='pendente'`, entao retentar o upload nao causa duplicidade.
+    """
+    from celery import Celery
+
+    settings = _get_settings()
+    celery = Celery(broker=settings.redis_url)
+    celery.send_task(
+        "worker.tasks.manutencao.ocr_parte_diaria",
+        args=[parte_id],
+        queue="manutencao",
+    )
+
+
 __all__ = [
     "add_documento",
     "consultar_detran",
@@ -1004,6 +1065,7 @@ __all__ = [
     "delete_documento",
     "delete_parte_diaria",
     "delete_veiculo",
+    "enqueue_ocr_parte_diaria",
     "get_documentai_client",
     "get_documentai_singleton",
     "get_infosimples_client",
@@ -1014,6 +1076,7 @@ __all__ = [
     "list_consultas_detran",
     "list_partes_diarias",
     "list_veiculos",
+    "mark_parte_diaria_erro",
     "processar_ocr_parte_diaria",
     "reset_documentai_singleton",
     "reset_infosimples_singleton",

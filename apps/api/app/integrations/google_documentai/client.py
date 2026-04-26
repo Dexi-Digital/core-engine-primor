@@ -102,11 +102,15 @@ class GoogleDocumentAIClient(IntegrationClient):
             except json.JSONDecodeError as exc:
                 # Credenciais malformadas -- preferimos cair em mock
                 # (com warning) a quebrar a importacao do servico.
+                # Limpa _credentials_raw para is_mock devolver True, senao
+                # toda chamada `processar_documento` levantaria
+                # DocumentAIAuthError ao inves de cair no mock.
                 logger.warning(
                     "GOOGLE_DOCUMENTAI_CREDENTIALS_JSON invalido (%s) "
                     "-- caindo em modo mock",
                     exc,
                 )
+                self._credentials_raw = ""
                 self._service_account = None
 
     @property

@@ -144,6 +144,20 @@ export default async function ParteDiariaDetail({
         </form>
       </header>
 
+      {parte.ocr_status === "pendente" && (
+        <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+          <strong>Processando OCR…</strong> a tarefa foi enfileirada no
+          worker. Atualize esta página em alguns segundos para ver os
+          campos extraídos.{" "}
+          <a
+            href={`/manutencao/partes-diarias/${parte.id}`}
+            className="underline"
+          >
+            Atualizar agora
+          </a>
+        </div>
+      )}
+
       {parte.ocr_error_msg && (
         <div className="rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800">
           <strong>Erro OCR:</strong> {parte.ocr_error_msg}

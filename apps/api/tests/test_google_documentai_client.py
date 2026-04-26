@@ -131,14 +131,16 @@ async def test_mock_creds_json_invalido_cai_em_mock():
         project_id="p",
         processor_id="proc-1",
     )
-    # is_mock olha so se as 3 strings sao truthy -- a deteccao do JSON
-    # invalido acontece em runtime no _get_access_token. Aqui o
-    # caminho async tenta processar e levanta DocumentAIAuthError.
-    assert c.is_mock is False
-    with pytest.raises(DocumentAIAuthError):
-        await c.processar_documento(
-            content=b"x", mime_type="application/pdf", filename="x.pdf"
-        )
+    # JSON malformado: o ctor detecta a falha e LIMPA o _credentials_raw
+    # para que `is_mock` devolva True. Sem isso, `processar_documento`
+    # levantaria DocumentAIAuthError em produção dando a impressão de
+    # que o cliente esta em modo real (o log diz "caindo em modo mock"
+    # mas o `is_mock` continuaria False -- bug pego pelo Devin Review).
+    assert c.is_mock is True
+    out = await c.processar_documento(
+        content=b"x", mime_type="application/pdf", filename="x.pdf"
+    )
+    assert out["source"] == "google_documentai_mock"
 
 
 # --- modo real --------------------------------------------------------------

@@ -16,7 +16,7 @@ Endpoints:
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -305,14 +305,35 @@ async def get_partes_diarias_storage() -> AsyncIterator[EditaisStorage]:
 
 
 def get_documentai_dep() -> Any:
-    """Singleton-friendly accessor para o `GoogleDocumentAIClient`."""
+    """Singleton-friendly accessor para o `GoogleDocumentAIClient`.
+
+    Mantido para retrocompatibilidade mas nao e mais usado pelo router
+    (OCR roda no worker via `get_ocr_dispatcher`). Util caso alguem
+    monte um endpoint custom que chame OCR sincrono fora do flow B.2.
+    """
     return service.get_documentai_singleton()
+
+
+# AGENTS.md: OCR roda SEMPRE no worker (Celery). O dispatcher e
+# injetado para que testes possam substituir por uma versao "eager"
+# (executa OCR sincrono in-process, no mesmo db session da request),
+# sem precisar de Redis/celery rodando.
+OcrDispatcher = Callable[[int], Awaitable[None]]
+
+
+def get_ocr_dispatcher() -> OcrDispatcher:
+    async def _dispatch(parte_id: int) -> None:
+        # O `send_task` da Celery e sync e tipicamente retorna em <5ms
+        # (so escreve no broker Redis) -- nao bloqueia request.
+        service.enqueue_ocr_parte_diaria(parte_id)
+
+    return _dispatch
 
 
 @router.post(
     "/partes-diarias",
     response_model=ParteDiariaRead,
-    status_code=201,
+    status_code=202,
 )
 async def upload_parte_diaria_endpoint(
     arquivo: Annotated[UploadFile, File(description="PDF/JPG/PNG da parte diaria")],
@@ -320,15 +341,20 @@ async def upload_parte_diaria_endpoint(
     obra: Annotated[str | None, Form()] = None,
     db: AsyncSession = Depends(get_db),
     storage: EditaisStorage = Depends(get_partes_diarias_storage),
-    client: Any = Depends(get_documentai_dep),
+    dispatch_ocr: OcrDispatcher = Depends(get_ocr_dispatcher),
 ) -> ParteDiariaRead:
-    """Upload do anexo + OCR sincrono.
+    """Upload do anexo + dispatch da task OCR para o worker (fila `manutencao`).
 
-    Em prod o OCR roda no worker async para nao segurar a request,
-    mas a versao sincrona aqui e util para a UI mostrar resultado
-    imediato em arquivos pequenos. O endpoint dispara OCR direto;
-    caso o caller queira async, basta `POST /partes-diarias/{id}/reprocessar`
-    apos um upload sem OCR.
+    Conforme AGENTS.md, OCR roda SEMPRE no worker -- nunca bloqueia a API.
+    O endpoint:
+      1. Cria a row com `ocr_status='pendente'` e persiste o anexo.
+      2. Aplica pre-fill manual (`veiculo_id`/`obra` opcionais).
+      3. Dispatcha `worker.tasks.manutencao.ocr_parte_diaria` por nome.
+      4. Devolve 202 + ParteDiariaRead com status `pendente`.
+
+    A UI faz polling/refresh para ver o status virar `processado`/`erro`.
+    Falha do dispatcher (broker down) marca a row como `erro` para o
+    operador poder retentar via `/reprocessar` quando o broker voltar.
     """
     content = await arquivo.read()
     if not content:
@@ -349,9 +375,16 @@ async def upload_parte_diaria_endpoint(
             parte.id,
             {k: v for k, v in {"veiculo_id": veiculo_id, "obra": obra}.items() if v},
         )
-    parte = await service.processar_ocr_parte_diaria(
-        db, parte.id, client=client, storage=storage
-    )
+    try:
+        await dispatch_ocr(parte.id)
+    except Exception as exc:
+        # Broker indisponivel: marca como erro com mensagem clara para
+        # o operador. Anexo ja esta persistido entao reprocessar funciona.
+        logger.warning("Falha ao enfileirar OCR parte_diaria=%s: %s", parte.id, exc)
+        await service.mark_parte_diaria_erro(
+            db, parte.id, f"falha ao enfileirar OCR: {exc}"
+        )
+    parte = await service.get_parte_diaria(db, parte.id)
     return ParteDiariaRead.model_validate(parte)
 
 
@@ -433,19 +466,32 @@ async def delete_parte_diaria_endpoint(
 @router.post(
     "/partes-diarias/{parte_id}/reprocessar",
     response_model=ParteDiariaRead,
+    status_code=202,
 )
 async def reprocessar_parte_diaria_endpoint(
     parte_id: int,
     db: AsyncSession = Depends(get_db),
-    storage: EditaisStorage = Depends(get_partes_diarias_storage),
-    client: Any = Depends(get_documentai_dep),
+    dispatch_ocr: OcrDispatcher = Depends(get_ocr_dispatcher),
 ) -> ParteDiariaRead:
-    """Re-roda OCR (util quando o operador subiu arquivo melhor ou
-    quando troca-se o processor do Document AI no console)."""
+    """Re-dispatcha a task OCR (util pos-erro ou troca de processor).
+
+    Igual ao upload: roda no worker via Celery, nao bloqueia a API.
+    Devolve 202 com a row em `ocr_status='pendente'` -- a UI polla
+    ate virar `processado` ou `erro`.
+    """
     parte = await service.get_parte_diaria(db, parte_id)
     if parte is None:
         raise HTTPException(status_code=404, detail="parte_diaria nao encontrada")
-    parte = await service.processar_ocr_parte_diaria(
-        db, parte_id, client=client, storage=storage
+    # Reseta status para pendente (caso esteja em 'erro' ou 'processado').
+    await service.update_parte_diaria(
+        db, parte_id, {"ocr_status": "pendente", "ocr_error_msg": None}
     )
+    try:
+        await dispatch_ocr(parte_id)
+    except Exception as exc:
+        logger.warning("Falha ao re-enfileirar OCR parte_diaria=%s: %s", parte_id, exc)
+        await service.mark_parte_diaria_erro(
+            db, parte_id, f"falha ao enfileirar OCR: {exc}"
+        )
+    parte = await service.get_parte_diaria(db, parte_id)
     return ParteDiariaRead.model_validate(parte)
