@@ -238,6 +238,16 @@ export default async function PartesDiariasPage({
           method="get"
           className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-4"
         >
+          {/*
+            Form GET so envia inputs nomeados na URL, e como `alerta`
+            nao tem widget aqui (o toggle vive no header da lista),
+            sem o hidden input ele seria silenciosamente descartado
+            ao filtrar por status/obra/placa enquanto o toggle de
+            alerta estiver ligado. Preserva o filtro entre submits.
+          */}
+          {apenasComAlerta && (
+            <input type="hidden" name="alerta" value="1" />
+          )}
           <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
             Status OCR
             <select
