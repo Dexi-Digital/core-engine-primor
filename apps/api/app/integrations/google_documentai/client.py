@@ -38,6 +38,7 @@ Resposta normalizada (mesma p/ mock e real):
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
@@ -96,6 +97,12 @@ class GoogleDocumentAIClient(IntegrationClient):
         self._access_token: str | None = None
         self._access_token_expires_at: float = 0.0
         self._service_account: dict[str, Any] | None = None
+        # Lock evita varias coroutines disparando renovacao do JWT
+        # bearer simultaneamente -- mesmo padrao de OneDriveClient/
+        # DominioClient. Sem isso, N requests concorrentes apos
+        # expiracao do token fazem N POSTs em oauth2.googleapis.com/
+        # token, gastando rate-limit da Google.
+        self._token_lock = asyncio.Lock()
         if self._credentials_raw and not self.is_mock:
             try:
                 self._service_account = json.loads(self._credentials_raw)
@@ -196,12 +203,27 @@ class GoogleDocumentAIClient(IntegrationClient):
     # --- helpers de auth (JWT bearer flow) -------------------------------
 
     async def _get_access_token(self) -> str:
+        # Double-check pattern: o cache rapido fora do lock evita
+        # custo de aquisicao do lock no caminho quente; dentro do
+        # lock conferimos de novo porque outra coroutine pode ter
+        # renovado o token enquanto esperavamos.
         now = time.time()
         if (
             self._access_token
             and self._access_token_expires_at - now > 60
         ):
             return self._access_token
+        async with self._token_lock:
+            now = time.time()
+            if (
+                self._access_token
+                and self._access_token_expires_at - now > 60
+            ):
+                return self._access_token
+            return await self._refresh_access_token_locked(now)
+
+    async def _refresh_access_token_locked(self, now: float) -> str:
+        """Roda a troca JWT->access_token. Chamador deve segurar o lock."""
         if self._service_account is None:
             raise DocumentAIAuthError("service account JSON ausente")
         sa = self._service_account
@@ -244,15 +266,16 @@ class GoogleDocumentAIClient(IntegrationClient):
                 f"oauth2 Google status {r.status_code}: {r.text[:200]}"
             )
         token_data = r.json()
-        self._access_token = token_data.get("access_token")
-        self._access_token_expires_at = (
-            now + int(token_data.get("expires_in", 3600))
-        )
-        if not self._access_token:
+        access_token = token_data.get("access_token")
+        if not access_token:
             raise DocumentAIAuthError(
                 "oauth2 Google sem `access_token` na resposta"
             )
-        return self._access_token
+        self._access_token = access_token
+        self._access_token_expires_at = (
+            now + int(token_data.get("expires_in", 3600))
+        )
+        return access_token
 
     # --- normalizacao da resposta ---------------------------------------
 
