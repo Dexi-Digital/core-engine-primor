@@ -101,6 +101,7 @@ async def create_certidao_endpoint(
 async def dispatch_certidao_alerts_endpoint(
     payload: CertidaoAlertaDispatchPayload,
     db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
 ) -> CertidaoAlertaSummary:
     """On-demand dispatch dos alertas de vencimento. Normalmente rodado
     pelo Celery beat 1x/dia.

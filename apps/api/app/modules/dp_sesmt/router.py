@@ -27,9 +27,17 @@ from app.integrations.viacep.client import (
 )
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
+from app.modules.dp_sesmt import afastamentos as afastamentos_svc
 from app.modules.dp_sesmt import service
+from app.modules.dp_sesmt.afastamentos import (
+    compute_dcb_status,
+    compute_pericia_status,
+)
 from app.modules.dp_sesmt.aso_alerts import compute_aso_status
 from app.modules.dp_sesmt.schemas import (
+    AfastamentoCreate,
+    AfastamentoRead,
+    AfastamentoUpdate,
     CepLookupOut,
     CnpjLookupOut,
     CpfLookupOut,
@@ -105,6 +113,7 @@ async def list_employees_endpoint(
 async def dispatch_aso_alerts_endpoint(
     recipients: list[str] | None = None,
     db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
 ) -> dict:
     """Dispara manualmente o cron de alertas de ASO.
 
@@ -270,3 +279,147 @@ async def dossie_cpf(
     finally:
         await directdata.aclose()
     return CpfLookupOut.model_validate(result)
+
+
+# --- Afastamentos INSS (D4) -------------------------------------------------
+
+
+def _to_afastamento_read(row) -> AfastamentoRead:
+    """Materializa um Afastamento ORM em AfastamentoRead com campos
+    computados (`dcb_status`, `pericia_status`, dias restantes).
+    """
+    base = AfastamentoRead.model_validate(row).model_dump()
+    base["dcb_status"] = compute_dcb_status(row.dcb)
+    base["pericia_status"] = compute_pericia_status(row.data_pericia)
+    from datetime import date as _date
+
+    today = _date.today()
+    base["dias_para_dcb"] = (
+        (row.dcb - today).days if row.dcb is not None else None
+    )
+    base["dias_para_pericia"] = (
+        (row.data_pericia - today).days
+        if row.data_pericia is not None
+        else None
+    )
+    return AfastamentoRead.model_validate(base)
+
+
+@router.get("/afastamentos", response_model=list[AfastamentoRead])
+async def list_afastamentos_endpoint(
+    employee_id: int | None = Query(None),
+    status: str | None = Query(None, max_length=32),
+    db: AsyncSession = Depends(get_db),
+) -> list[AfastamentoRead]:
+    rows = await afastamentos_svc.list_afastamentos(
+        db, employee_id=employee_id, status=status
+    )
+    return [_to_afastamento_read(r) for r in rows]
+
+
+@router.post(
+    "/afastamentos", response_model=AfastamentoRead, status_code=201
+)
+async def create_afastamento_endpoint(
+    payload: AfastamentoCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> AfastamentoRead:
+    row = await afastamentos_svc.create_afastamento(
+        db,
+        actor=current_user.email,
+        **payload.model_dump(),
+    )
+    if row is None:
+        raise HTTPException(
+            404, f"Funcionario {payload.employee_id} nao encontrado"
+        )
+    return _to_afastamento_read(row)
+
+
+@router.get(
+    "/afastamentos/{afastamento_id}", response_model=AfastamentoRead
+)
+async def get_afastamento_endpoint(
+    afastamento_id: int, db: AsyncSession = Depends(get_db)
+) -> AfastamentoRead:
+    row = await afastamentos_svc.get_afastamento(db, afastamento_id)
+    if row is None:
+        raise HTTPException(
+            404, f"Afastamento {afastamento_id} nao encontrado"
+        )
+    return _to_afastamento_read(row)
+
+
+@router.put(
+    "/afastamentos/{afastamento_id}", response_model=AfastamentoRead
+)
+async def update_afastamento_endpoint(
+    afastamento_id: int,
+    payload: AfastamentoUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> AfastamentoRead:
+    fields = payload.model_dump(exclude_unset=True)
+    row = await afastamentos_svc.update_afastamento(
+        db, afastamento_id, actor=current_user.email, **fields
+    )
+    if row is None:
+        raise HTTPException(
+            404, f"Afastamento {afastamento_id} nao encontrado"
+        )
+    return _to_afastamento_read(row)
+
+
+@router.delete("/afastamentos/{afastamento_id}", status_code=204)
+async def delete_afastamento_endpoint(
+    afastamento_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> None:
+    deleted = await afastamentos_svc.delete_afastamento(
+        db, afastamento_id, actor=current_user.email
+    )
+    if not deleted:
+        raise HTTPException(
+            404, f"Afastamento {afastamento_id} nao encontrado"
+        )
+
+
+@router.post("/afastamentos/alerts/dispatch", response_model=dict)
+async def dispatch_afastamento_alerts_endpoint(
+    recipients: list[str] | None = None,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    """Dispara manualmente os alertas de DCB/pericia de afastamentos.
+
+    Em prod o cron roda 1x/dia (08h10). Se `recipients` nao for
+    informado, usa `INSS_ALERT_EMAILS` da env (mesmo padrao do A.2).
+    """
+    settings = get_settings()
+    if not settings.resend_api_key:
+        raise HTTPException(503, "RESEND_API_KEY nao configurada")
+    if recipients is None or len(recipients) == 0:
+        env_val = os.getenv("INSS_ALERT_EMAILS", "").strip()
+        recipients = [e.strip() for e in env_val.split(",") if e.strip()]
+    if not recipients:
+        raise HTTPException(
+            422,
+            "Nenhum destinatario informado e INSS_ALERT_EMAILS vazia",
+        )
+    from app.integrations.resend.client import ResendClient
+
+    resend = ResendClient(api_key=settings.resend_api_key)
+    try:
+        summary = await afastamentos_svc.dispatch_afastamento_alerts(
+            db, resend, recipients=recipients
+        )
+    finally:
+        await resend.aclose()
+    return {
+        "total_afastamentos": summary.total_afastamentos,
+        "sent": summary.sent,
+        "skipped": summary.skipped,
+        "failed": summary.failed,
+    }
