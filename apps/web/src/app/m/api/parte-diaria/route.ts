@@ -40,17 +40,30 @@ export async function POST(req: Request) {
     );
   }
 
-  const upstream = await fetch(
-    `${API_BASE}/api/v1/manutencao-frota/partes-diarias/manual`,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${token}`,
+  // Sem try/catch o fetch joga em caso de API down/DNS-fail e o
+  // Next.js devolve 500 HTML generico -- form.tsx so cai no fallback
+  // de fila offline em 503 (sw) ou em catch do fetch dele. Devolvemos
+  // 503 explicitamente aqui para preservar o contrato offline-first
+  // quando o backend FastAPI esta fora mas o Next.js esta de pe.
+  let upstream: globalThis.Response;
+  try {
+    upstream = await fetch(
+      `${API_BASE}/api/v1/manutencao-frota/partes-diarias/manual`,
+      {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
       },
-      body: JSON.stringify(payload),
-    },
-  );
+    );
+  } catch {
+    return NextResponse.json(
+      { detail: "API indisponivel -- tente novamente" },
+      { status: 503 },
+    );
+  }
 
   // Stream-through: preservamos o status (200=duplicata/idempotente,
   // 201=nova; 422=validacao) para o caller (form/queue) decidir UI.
