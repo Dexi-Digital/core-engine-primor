@@ -18,6 +18,7 @@ from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -816,7 +817,21 @@ async def create_parte_diaria_manual(
         ocr_source="manual_pwa",
     )
     db.add(parte)
-    await db.commit()
+    try:
+        await db.commit()
+    except IntegrityError:
+        # TOCTOU: requisicao concorrente (ex.: duas tabs do PWA
+        # drenando a mesma fila simultaneamente) ja gravou uma
+        # parte com este client_uuid entre o fast-path acima e
+        # o commit. Indice unique parcial em PG explode aqui.
+        # Tratamos como idempotente: rollback, busca a row que
+        # ganhou o race, devolve como `criada_agora=False`.
+        await db.rollback()
+        if client_uuid:
+            existing = await find_parte_diaria_by_client_uuid(db, client_uuid)
+            if existing is not None:
+                return existing, False
+        raise
     await db.refresh(parte)
     await _record_audit(
         db,

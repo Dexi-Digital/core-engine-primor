@@ -1014,3 +1014,90 @@ async def test_consumo_ignora_horimetro_de_partes_pendentes_ou_erro(
     # Alerta dispara comparando com 240 (revisada) -- nao com 140
     # (pendente, que seria ignorada).
     assert consumo["alerta_manutencao_preventiva"] is True
+
+
+@pytest.mark.asyncio
+async def test_manual_post_idempotente_em_race_toctou(
+    db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regressao do finding Devin Review #24: simula race entre o
+    fast-path (find_by_uuid) e o commit. Se uma requisicao concorrente
+    inserir entre os dois, o IntegrityError do unique deve ser
+    capturado e tratado como idempotente (devolve a row existente).
+
+    SQLite nao enforça o partial unique do PG (o `postgresql_where`
+    da migration so se aplica em PG), entao mockamos `db.commit` pra
+    levantar IntegrityError UMA VEZ -- simulando o cenario PG real
+    em que duas tabs do PWA drenam a mesma fila e a primeira ja
+    inseriu antes da segunda commitar."""
+    from datetime import date as date_cls
+
+    from sqlalchemy.exc import IntegrityError
+
+    from app.modules.manutencao_frota import service as parte_service
+    from app.modules.manutencao_frota.models import PARTE_REVISADO
+
+    uuid = "race-toctou-1234"
+
+    # Row "vencedora" do race -- a que ja existe no banco quando
+    # o commit da nossa requisicao falha.
+    vencedora = ParteDiaria(
+        veiculo_id=None,
+        data=date_cls(2025, 9, 1),
+        operador="concorrente",
+        client_uuid=uuid,
+        ocr_status=PARTE_REVISADO,
+        ocr_source="manual_pwa",
+    )
+    db_session.add(vencedora)
+    await db_session.commit()
+    await db_session.refresh(vencedora)
+    vencedora_id = vencedora.id
+
+    # Fast-path miss: simulamos que NESTA leitura (antes do commit)
+    # a row concorrente ainda nao existia para esta sessao. Forca o
+    # codigo a tentar inserir.
+    real_find = parte_service.find_parte_diaria_by_client_uuid
+    call_count = {"n": 0}
+
+    async def fake_find(db: AsyncSession, cu: str) -> ParteDiaria | None:
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return None  # fast-path: nao acha
+        return await real_find(db, cu)  # post-rollback: acha
+
+    monkeypatch.setattr(
+        parte_service, "find_parte_diaria_by_client_uuid", fake_find
+    )
+
+    # Forca commit a levantar IntegrityError UMA vez -- simulando
+    # o unique-constraint do PG quando a request concorrente
+    # comitou antes. Segunda chamada (apos rollback) e dispensavel
+    # mas o handler nao tenta de novo de qualquer forma.
+    real_commit = db_session.commit
+    commit_calls = {"n": 0}
+
+    async def fake_commit() -> None:
+        commit_calls["n"] += 1
+        if commit_calls["n"] == 1:
+            raise IntegrityError("simulated", {}, Exception("unique violation"))
+        await real_commit()
+
+    monkeypatch.setattr(db_session, "commit", fake_commit)
+
+    parte, criada = await parte_service.create_parte_diaria_manual(
+        db_session,
+        payload={
+            "data": date_cls(2025, 9, 1),
+            "operador": "duplicado",
+            "client_uuid": uuid,
+        },
+        actor="test@primor.com",
+    )
+
+    assert criada is False
+    assert parte.id == vencedora_id
+    assert parte.operador == "concorrente"
+    assert call_count["n"] == 2  # fast-path miss + post-rollback re-find
+    assert commit_calls["n"] == 1  # so a tentativa que falhou

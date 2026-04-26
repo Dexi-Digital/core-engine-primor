@@ -22,6 +22,7 @@ import {
   drainQueue,
   enqueueParte,
   listPending,
+  newClientUuid,
   type PartePayload,
   type QueuedParte,
 } from "@/lib/pwa-offline-queue";
@@ -167,10 +168,17 @@ export default function ParteDiariaMobileForm() {
     setSubmitting(true);
     setFeedback(null);
     const payload = toPayload(form);
+    // UUID gerado UMA VEZ por submit -- mesmo valor enviado online e
+    // gravado na fila offline em caso de fallback. Sem isso, se a
+    // request online tem o response perdido (rede de obra) e cai no
+    // catch, o enqueue gerava UUID novo e o retry duplicava no
+    // backend (que so dedup pelo UUID original).
+    const client_uuid = newClientUuid();
+    const bodyWithUuid = { ...payload, client_uuid };
 
     if (!navigator.onLine) {
       // Offline: grava no IndexedDB direto sem nem tentar fetch.
-      const item = await enqueueParte(payload);
+      await enqueueParte(payload, client_uuid);
       setFeedback({
         kind: "queued",
         msg: "Sem sinal -- parte salva localmente. Sincroniza quando voltar.",
@@ -191,9 +199,6 @@ export default function ParteDiariaMobileForm() {
            listener de window.online. */
       }
       setSubmitting(false);
-      // mark item used so the linter doesn't warn -- it's also useful
-      // logging for tests.
-      console.debug("queued", item.client_uuid);
       return;
     }
 
@@ -201,11 +206,11 @@ export default function ParteDiariaMobileForm() {
       const res = await fetch("/m/api/parte-diaria", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify(bodyWithUuid),
       });
       if (res.status === 503) {
         // SW devolveu 503 (network falhou apesar do navigator.onLine).
-        await enqueueParte(payload);
+        await enqueueParte(payload, client_uuid);
         setFeedback({
           kind: "queued",
           msg: "Sem conexao -- parte salva localmente.",
@@ -220,8 +225,14 @@ export default function ParteDiariaMobileForm() {
         setFeedback({ kind: "error", msg: `Erro ${res.status}: ${text}` });
       }
     } catch {
-      // Fetch lancou (DNS, rede caida sem o SW). Grava na fila.
-      await enqueueParte(payload);
+      // Fetch lancou (DNS, rede caida sem o SW) OU response foi
+      // perdido apos o servidor ter aceitado -- nao temos como
+      // distinguir do client. Enfileira com o MESMO client_uuid
+      // que foi enviado: se o servidor ja persistiu, o retry vai
+      // bater no fast-path de idempotencia (200) e ser drenado;
+      // se nao persistiu, vira nova row (201). Sem duplicata em
+      // nenhum dos casos.
+      await enqueueParte(payload, client_uuid);
       setFeedback({
         kind: "queued",
         msg: "Sem sinal -- parte salva localmente.",

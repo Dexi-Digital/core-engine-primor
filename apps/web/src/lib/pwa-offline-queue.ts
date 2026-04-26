@@ -62,17 +62,28 @@ function openDb(): Promise<IDBDatabase> {
   });
 }
 
-function genUuid(): string {
-  // crypto.randomUUID disponivel em todos navegadores que rodam SW
-  // (Chrome 92+, Safari 15+, Firefox 95+). Fallback nao precisa.
+/**
+ * UUID v4 gerado pelo browser. Disponivel em Chrome 92+, Safari 15+,
+ * Firefox 95+ -- mesmas versoes que suportam Service Worker.
+ */
+export function newClientUuid(): string {
   return crypto.randomUUID();
 }
 
+/**
+ * Adiciona uma parte na fila offline. `client_uuid` e parametro
+ * obrigatorio (gerado pelo caller no momento do submit, nao aqui)
+ * para garantir que o MESMO UUID seja usado tanto na tentativa
+ * online quanto no fallback offline. Sem isso, se a request online
+ * tem o response perdido (rede ruim de obra), o retry pela fila
+ * usaria um UUID novo e o backend criaria duplicata.
+ */
 export async function enqueueParte(
   payload: PartePayload,
+  client_uuid: string,
 ): Promise<QueuedParte> {
   const item: QueuedParte = {
-    client_uuid: genUuid(),
+    client_uuid,
     payload: { ...payload },
     enqueued_at: new Date().toISOString(),
     attempts: 0,
