@@ -171,8 +171,223 @@ async def test_observability_health_returns_aggregated_payload(
     body = resp.json()
     assert "status" in body
     assert "checks" in body
-    assert set(body["checks"].keys()) == {"db", "redis", "storage"}
+    assert set(body["checks"].keys()) == {
+        "db",
+        "redis",
+        "storage",
+        "celery_workers",
+    }
     assert "correlation_id" in body
     # Cada check deve ter `status` legivel (nao crashou silenciosamente)
-    for name in ("db", "redis", "storage"):
+    for name in ("db", "redis", "storage", "celery_workers"):
         assert "status" in body["checks"][name]
+
+
+# --- celery workers check --------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_check_celery_workers_ok_when_ping_returns_replies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Workers respondendo -> status=ok + contagem + nomes ordenados."""
+    from app.modules.observability import router as obs_router
+
+    class _FakeInspect:
+        def __init__(self, timeout: float) -> None:
+            self.timeout = timeout
+
+        def ping(self) -> dict:
+            return {
+                "celery@worker-2": {"ok": "pong"},
+                "celery@worker-1": {"ok": "pong"},
+            }
+
+    class _FakeControl:
+        def inspect(self, timeout: float) -> _FakeInspect:
+            return _FakeInspect(timeout)
+
+    class _FakeDispatcher:
+        control = _FakeControl()
+
+    monkeypatch.setattr(
+        "app.modules.manutencao_frota.service.get_celery_dispatcher",
+        lambda: _FakeDispatcher(),
+    )
+    result = await obs_router._check_celery_workers()
+    assert result["status"] == "ok"
+    assert result["workers"] == 2
+    assert result["worker_names"] == ["celery@worker-1", "celery@worker-2"]
+    assert "latency_ms" in result
+
+
+@pytest.mark.asyncio
+async def test_check_celery_workers_degraded_when_no_replies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Broker up mas nenhum worker ouvindo -> status=degraded (nao error).
+
+    Cenario real: deploy novo antes do worker subir. API deve continuar
+    respondendo 200 no readiness porque request sincrono funciona; so os
+    pipelines async ficam parados.
+    """
+    from app.modules.observability import router as obs_router
+
+    class _FakeInspect:
+        def __init__(self, timeout: float) -> None:
+            pass
+
+        def ping(self) -> None:
+            # Celery retorna None quando broadcast nao recebe resposta
+            return None
+
+    class _FakeControl:
+        def inspect(self, timeout: float) -> _FakeInspect:
+            return _FakeInspect(timeout)
+
+    class _FakeDispatcher:
+        control = _FakeControl()
+
+    monkeypatch.setattr(
+        "app.modules.manutencao_frota.service.get_celery_dispatcher",
+        lambda: _FakeDispatcher(),
+    )
+    result = await obs_router._check_celery_workers()
+    assert result["status"] == "degraded"
+    assert result["workers"] == 0
+    assert "note" in result
+
+
+@pytest.mark.asyncio
+async def test_check_celery_workers_error_when_broker_crashes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Excecao no ping (ex: broker refusou conexao) -> status=error."""
+    from app.modules.observability import router as obs_router
+
+    class _FakeInspect:
+        def __init__(self, timeout: float) -> None:
+            pass
+
+        def ping(self) -> None:
+            raise ConnectionRefusedError("broker down")
+
+    class _FakeControl:
+        def inspect(self, timeout: float) -> _FakeInspect:
+            return _FakeInspect(timeout)
+
+    class _FakeDispatcher:
+        control = _FakeControl()
+
+    monkeypatch.setattr(
+        "app.modules.manutencao_frota.service.get_celery_dispatcher",
+        lambda: _FakeDispatcher(),
+    )
+    result = await obs_router._check_celery_workers()
+    assert result["status"] == "error"
+    assert "broker down" in result.get("error", "")
+
+
+@pytest.mark.asyncio
+async def test_aggregated_health_degraded_when_workers_down(
+    api_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Mesmo com DB/storage ok, 0 workers -> payload.status=degraded.
+
+    Critico: status textual sinaliza pra UI/monitoring, mas HTTP
+    continua 200 (workers nao sao criticos pra servir request sync).
+    """
+    from app.modules.observability import router as obs_router
+
+    async def _ok_db() -> dict:
+        return {"status": "ok", "latency_ms": 0.1}
+
+    async def _ok_redis() -> dict:
+        return {"status": "ok", "latency_ms": 0.1}
+
+    async def _ok_storage() -> dict:
+        return {"status": "ok", "backend": "local", "latency_ms": 0.1}
+
+    async def _no_workers() -> dict:
+        return {
+            "status": "degraded",
+            "workers": 0,
+            "latency_ms": 1.2,
+            "note": "broker ok mas nenhum worker Celery respondeu",
+        }
+
+    monkeypatch.setattr(obs_router, "_check_db", _ok_db)
+    monkeypatch.setattr(obs_router, "_check_redis", _ok_redis)
+    monkeypatch.setattr(obs_router, "_check_storage", _ok_storage)
+    monkeypatch.setattr(obs_router, "_check_celery_workers", _no_workers)
+
+    resp = await api_client.get("/api/v1/observability/health")
+    # HTTP ainda 200 -- workers nao sao criticos pra rotation do LB
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "degraded"
+    assert body["checks"]["celery_workers"]["status"] == "degraded"
+
+
+# --- k8s-style aliases (/healthz, /readyz) --------------------------------
+
+
+@pytest.mark.asyncio
+async def test_healthz_alias_matches_health_payload(
+    api_client: AsyncClient,
+) -> None:
+    """`/healthz` (convencao k8s) devolve mesma resposta do `/health`."""
+    original = await api_client.get("/health")
+    alias = await api_client.get("/healthz")
+    assert original.status_code == 200
+    assert alias.status_code == 200
+    # version + status devem bater (correlation_id difere entre requests)
+    o_body = original.json()
+    a_body = alias.json()
+    assert o_body["status"] == a_body["status"]
+    assert o_body["version"] == a_body["version"]
+
+
+@pytest.mark.asyncio
+async def test_readyz_alias_matches_observability_health_payload(
+    api_client: AsyncClient,
+) -> None:
+    """`/readyz` delega pro agregador -- mesmo schema `checks`/`status`."""
+    original = await api_client.get("/api/v1/observability/health")
+    alias = await api_client.get("/readyz")
+    assert original.status_code == alias.status_code
+    o_body = original.json()
+    a_body = alias.json()
+    assert set(o_body["checks"].keys()) == set(a_body["checks"].keys())
+    assert o_body["version"] == a_body["version"]
+
+
+@pytest.mark.asyncio
+async def test_readyz_returns_503_when_critical_fails(
+    api_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`/readyz` retorna 503 quando DB falha -- contrato k8s readiness."""
+    from app.modules.observability import router as obs_router
+
+    async def _fail_db() -> dict:
+        return {"status": "error", "latency_ms": 0.1, "error": "db unreachable"}
+
+    async def _ok_redis() -> dict:
+        return {"status": "ok", "latency_ms": 0.1}
+
+    async def _ok_storage() -> dict:
+        return {"status": "ok", "backend": "local", "latency_ms": 0.1}
+
+    async def _ok_workers() -> dict:
+        return {"status": "ok", "workers": 1, "latency_ms": 0.1}
+
+    monkeypatch.setattr(obs_router, "_check_db", _fail_db)
+    monkeypatch.setattr(obs_router, "_check_redis", _ok_redis)
+    monkeypatch.setattr(obs_router, "_check_storage", _ok_storage)
+    monkeypatch.setattr(obs_router, "_check_celery_workers", _ok_workers)
+
+    resp = await api_client.get("/readyz")
+    assert resp.status_code == 503
+    body = resp.json()
+    assert body["status"] == "degraded"
+    assert body["checks"]["db"]["status"] == "error"

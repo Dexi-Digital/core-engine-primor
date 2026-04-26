@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -26,6 +27,9 @@ from app.modules.licitacoes.empresa_documentos import (
 from app.modules.licitacoes.router import router as licitacoes_router
 from app.modules.manutencao_frota.router import router as manutencao_router
 from app.modules.obras.router import router as obras_router
+from app.modules.observability.router import (
+    health as _observability_health_handler,
+)
 from app.modules.observability.router import router as observability_router
 from app.modules.onedrive_sync.router import router as onedrive_sync_router
 
@@ -95,6 +99,20 @@ def create_app() -> FastAPI:
     @app.get("/health", tags=["meta"])
     async def health() -> dict[str, str]:
         return {"status": "ok", "version": settings.app_version}
+
+    # Aliases k8s-style: `/healthz` (liveness) aponta pra mesma resposta
+    # de `/health` -- sinaliza so que o processo FastAPI esta up.
+    # `/readyz` (readiness) delega pro agregador do modulo observability
+    # -- 503 quando DB/Redis/storage falharem. Probe do k8s deveria usar
+    # esses nomes curtos por convencao; os endpoints originais ficam
+    # por compat backwards.
+    @app.get("/healthz", tags=["meta"])
+    async def healthz() -> dict[str, str]:
+        return {"status": "ok", "version": settings.app_version}
+
+    @app.get("/readyz", tags=["meta"])
+    async def readyz(request: Request) -> JSONResponse:
+        return await _observability_health_handler(request)
 
     app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
     app.include_router(dp_sesmt_router, prefix="/api/v1/dp-sesmt", tags=["dp-sesmt"])

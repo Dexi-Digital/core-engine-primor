@@ -97,6 +97,77 @@ async def _check_redis() -> dict[str, Any]:
         await redis.aclose()
 
 
+async def _check_celery_workers() -> dict[str, Any]:
+    """Valida que ao menos 1 worker Celery esta responsivo no broker.
+
+    Diferente de `_check_redis()` (que so bate `PING` no broker), este
+    check dispara `inspect().ping()` -- broadcast via broker esperando
+    resposta dos consumers. Se nenhum worker responder dentro do
+    timeout, o readiness fica `degraded` (nao `error`): a API pode
+    continuar servindo request sincrono mesmo com workers down; so os
+    pipelines async (OCR de parte diaria, alertas de ASO/CND, sync
+    OneDrive) ficam parados -- isso a UI mostra na pagina de status.
+
+    Reusa o dispatcher singleton (`get_celery_dispatcher`) pra nao
+    alocar pool novo por check. `inspect().ping()` e sync/blocking, por
+    isso roda em thread via `asyncio.to_thread` com timeout.
+    """
+    started = time.perf_counter()
+    try:
+        from app.modules.manutencao_frota.service import (
+            get_celery_dispatcher,
+        )
+    except ImportError as exc:  # pragma: no cover
+        return {
+            "status": "skipped",
+            "error": f"celery dispatcher module missing: {exc}",
+        }
+
+    def _ping() -> dict[str, Any] | None:
+        dispatcher = get_celery_dispatcher()
+        # timeout interno do Celery -- menor que o wrapper externo pra
+        # garantir que a thread retorna antes de `wait_for` cancelar.
+        inspector = dispatcher.control.inspect(
+            timeout=CHECK_TIMEOUT_SECONDS - 0.25
+        )
+        return inspector.ping()
+
+    try:
+        replies = await asyncio.wait_for(
+            asyncio.to_thread(_ping), timeout=CHECK_TIMEOUT_SECONDS
+        )
+    except TimeoutError:
+        return {
+            "status": "timeout",
+            "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+            "error": f"celery inspect.ping exceeded {CHECK_TIMEOUT_SECONDS}s",
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "status": "error",
+            "latency_ms": round((time.perf_counter() - started) * 1000, 2),
+            "error": str(exc)[:256],
+        }
+
+    latency = round((time.perf_counter() - started) * 1000, 2)
+    # `inspect.ping()` devolve `None` quando nao ha worker ouvindo (o
+    # broadcast termina sem reply). Tambem pode devolver `{}` em alguns
+    # casos de broker mock/stub -- tratamos os dois igual.
+    if not replies:
+        return {
+            "status": "degraded",
+            "latency_ms": latency,
+            "workers": 0,
+            "note": "broker ok mas nenhum worker Celery respondeu",
+        }
+    return {
+        "status": "ok",
+        "latency_ms": latency,
+        "workers": len(replies),
+        "worker_names": sorted(replies.keys()),
+    }
+
+
 async def _check_storage() -> dict[str, Any]:
     """Verifica acesso ao backend de storage configurado."""
     settings = get_settings()
@@ -189,19 +260,35 @@ async def health(request: Request) -> JSONResponse:
     OCR/edital nao funciona.
     """
     settings = get_settings()
-    db_check, redis_check, storage_check = await asyncio.gather(
-        _check_db(), _check_redis(), _check_storage()
+    db_check, redis_check, storage_check, workers_check = await asyncio.gather(
+        _check_db(),
+        _check_redis(),
+        _check_storage(),
+        _check_celery_workers(),
     )
     checks = {
         "db": db_check,
         "redis": redis_check,
         "storage": storage_check,
+        "celery_workers": workers_check,
     }
+    # DB + Redis + storage bloqueiam request sincrono -- `error`/`timeout`
+    # nesses viram 503. `celery_workers` ausente NAO bloqueia 200: API
+    # continua respondendo reads/writes mesmo sem worker. `workers` com
+    # status "degraded" (0 workers) sinaliza mas nao tira de rotacao.
+    critical_keys = {"db", "redis", "storage"}
     critical_failed = any(
-        c.get("status") in {"error", "timeout"} for c in checks.values()
+        checks[key].get("status") in {"error", "timeout"}
+        for key in critical_keys
     )
+    workers_degraded = workers_check.get("status") in {
+        "degraded",
+        "error",
+        "timeout",
+    }
+    status = "degraded" if critical_failed or workers_degraded else "ok"
     payload = {
-        "status": "degraded" if critical_failed else "ok",
+        "status": status,
         "version": settings.app_version,
         "correlation_id": getattr(request.state, "correlation_id", None),
         "checks": checks,
