@@ -19,6 +19,8 @@ type ParteDiaria = {
   horimetro_fim: string | null;
   km_inicio: number | null;
   km_fim: number | null;
+  combustivel_litros: string | null;
+  combustivel_custo: string | null;
   observacoes: string | null;
   ocr_status: string;
   ocr_source: string;
@@ -27,6 +29,16 @@ type ParteDiaria = {
   ocr_error_msg: string | null;
   created_at: string;
   updated_at: string;
+};
+
+type ParteDiariaConsumo = {
+  parte_diaria_id: number;
+  horas_trabalhadas: string | null;
+  km_rodados: number | null;
+  consumo_litros_por_hora: string | null;
+  consumo_km_por_litro: string | null;
+  custo_por_hora: string | null;
+  alerta_manutencao_preventiva: boolean;
 };
 
 const STATUS_BADGE: Record<string, string> = {
@@ -42,6 +54,18 @@ async function fetchParte(id: string): Promise<ParteDiaria | null> {
   try {
     return await apiFetch<ParteDiaria>(
       `/api/v1/manutencao-frota/partes-diarias/${id}`,
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function fetchConsumo(
+  id: string | number,
+): Promise<ParteDiariaConsumo | null> {
+  try {
+    return await apiFetch<ParteDiariaConsumo>(
+      `/api/v1/manutencao-frota/partes-diarias/${id}/consumo`,
     );
   } catch {
     return null;
@@ -89,6 +113,8 @@ async function salvarRevisao(formData: FormData): Promise<void> {
     horimetro_fim: numericOrNull(formData.get("horimetro_fim")),
     km_inicio: numericOrNull(formData.get("km_inicio")),
     km_fim: numericOrNull(formData.get("km_fim")),
+    combustivel_litros: numericOrNull(formData.get("combustivel_litros")),
+    combustivel_custo: numericOrNull(formData.get("combustivel_custo")),
     observacoes: String(formData.get("observacoes") ?? "").trim() || null,
   };
   await apiFetch(`/api/v1/manutencao-frota/partes-diarias/${id}`, {
@@ -107,6 +133,10 @@ export default async function ParteDiariaDetail({
   const { id } = await params;
   const parte = await fetchParte(id);
   if (!parte) notFound();
+  // Consumo e alerta dependem de campos que podem nao existir
+  // ainda (ex.: ocr pendente sem horimetro) -- silenciosamente
+  // null se a parte ainda nao tem dados pra calcular.
+  const consumo = await fetchConsumo(parte.id);
 
   return (
     <div className="flex flex-col gap-6">
@@ -163,6 +193,71 @@ export default async function ParteDiariaDetail({
           <strong>Erro OCR:</strong> {parte.ocr_error_msg}
         </div>
       )}
+
+      {consumo?.alerta_manutencao_preventiva && (
+        <div className="rounded-md border-2 border-amber-400 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <strong>Alerta de manutenção preventiva.</strong> Este
+          equipamento atravessou um múltiplo de 250 horas de uso desde
+          o último apontamento — agendar revisão (troca de óleo motor,
+          filtros, etc.) conforme manual do fabricante.
+        </div>
+      )}
+
+      <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
+        <h2 className="text-base font-semibold">Consumo</h2>
+        <p className="mt-1 text-xs text-slate-500">
+          Calculado a partir dos campos abaixo. Métricas vazias = falta
+          de dado (horímetro / km / combustível) na parte ou na
+          predecessora do mesmo veículo.
+        </p>
+        {consumo === null ? (
+          <p className="mt-3 text-sm text-slate-500">
+            Sem dados suficientes para calcular consumo ainda.
+          </p>
+        ) : (
+          <dl className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-3">
+            <ConsumoMetric
+              label="Horas trabalhadas"
+              value={
+                consumo.horas_trabalhadas
+                  ? `${consumo.horas_trabalhadas} h`
+                  : null
+              }
+            />
+            <ConsumoMetric
+              label="KM rodados"
+              value={
+                consumo.km_rodados !== null ? `${consumo.km_rodados} km` : null
+              }
+            />
+            <ConsumoMetric
+              label="Consumo (L/h)"
+              value={consumo.consumo_litros_por_hora}
+            />
+            <ConsumoMetric
+              label="Consumo (km/L)"
+              value={consumo.consumo_km_por_litro}
+            />
+            <ConsumoMetric
+              label="Custo por hora"
+              value={
+                consumo.custo_por_hora ? `R$ ${consumo.custo_por_hora}` : null
+              }
+            />
+            <ConsumoMetric
+              label="Manutenção 250h"
+              value={
+                consumo.alerta_manutencao_preventiva
+                  ? "Marco atravessado"
+                  : "Sem gatilho"
+              }
+              tone={
+                consumo.alerta_manutencao_preventiva ? "alert" : "default"
+              }
+            />
+          </dl>
+        )}
+      </section>
 
       <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
         <h2 className="text-base font-semibold">Campos extraídos</h2>
@@ -262,6 +357,28 @@ export default async function ParteDiariaDetail({
               className="rounded-md border border-slate-300 px-3 py-2 text-sm"
             />
           </label>
+          <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
+            Combustível (litros)
+            <input
+              name="combustivel_litros"
+              type="number"
+              step="0.001"
+              min={0}
+              defaultValue={parte.combustivel_litros ?? ""}
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
+            Custo combustível (R$)
+            <input
+              name="combustivel_custo"
+              type="number"
+              step="0.01"
+              min={0}
+              defaultValue={parte.combustivel_custo ?? ""}
+              className="rounded-md border border-slate-300 px-3 py-2 text-sm"
+            />
+          </label>
           <label className="flex flex-col gap-1 text-xs font-medium text-slate-700 sm:col-span-2">
             Observações
             <textarea
@@ -288,6 +405,31 @@ export default async function ParteDiariaDetail({
           </pre>
         </section>
       )}
+    </div>
+  );
+}
+
+function ConsumoMetric({
+  label,
+  value,
+  tone = "default",
+}: {
+  label: string;
+  value: string | null;
+  tone?: "default" | "alert";
+}) {
+  return (
+    <div>
+      <dt className="text-xs uppercase tracking-wide text-slate-500">
+        {label}
+      </dt>
+      <dd
+        className={`mt-1 text-base font-semibold ${
+          tone === "alert" ? "text-amber-700" : "text-slate-900"
+        }`}
+      >
+        {value ?? "—"}
+      </dd>
     </div>
   );
 }
