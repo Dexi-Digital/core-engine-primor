@@ -32,6 +32,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.db import get_db
+from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.models import User
 from app.modules.licitacoes.storage import EditaisStorage
 from app.modules.manutencao_frota import service
 from app.modules.manutencao_frota.schemas import (
@@ -96,12 +98,14 @@ async def list_veiculos_endpoint(
 async def create_veiculo_endpoint(
     payload: VeiculoCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> VeiculoRead:
     data = payload.model_dump()
     documentos = data.pop("documentos", None) or None
     veiculo = await service.create_veiculo(
         db,
         documentos=documentos,
+        actor=current_user.email,
         **data,
     )
     return VeiculoRead.model_validate(veiculo)
@@ -123,9 +127,12 @@ async def update_veiculo_endpoint(
     veiculo_id: int,
     payload: VeiculoUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> VeiculoRead:
     fields = payload.model_dump(exclude_unset=True)
-    row = await service.update_veiculo(db, veiculo_id, **fields)
+    row = await service.update_veiculo(
+        db, veiculo_id, actor=current_user.email, **fields
+    )
     if row is None:
         raise HTTPException(status_code=404, detail="veiculo nao encontrado")
     return VeiculoRead.model_validate(row)
@@ -135,8 +142,11 @@ async def update_veiculo_endpoint(
 async def delete_veiculo_endpoint(
     veiculo_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> None:
-    ok = await service.delete_veiculo(db, veiculo_id)
+    ok = await service.delete_veiculo(
+        db, veiculo_id, actor=current_user.email
+    )
     if not ok:
         raise HTTPException(status_code=404, detail="veiculo nao encontrado")
 
@@ -153,9 +163,10 @@ async def add_documento_endpoint(
     veiculo_id: int,
     payload: DocumentoVeiculoCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> DocumentoVeiculoRead:
     row = await service.add_documento(
-        db, veiculo_id, **payload.model_dump()
+        db, veiculo_id, actor=current_user.email, **payload.model_dump()
     )
     if row is None:
         raise HTTPException(status_code=404, detail="veiculo nao encontrado")
@@ -170,9 +181,12 @@ async def update_documento_endpoint(
     documento_id: int,
     payload: DocumentoVeiculoUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> DocumentoVeiculoRead:
     fields = payload.model_dump(exclude_unset=True)
-    row = await service.update_documento(db, documento_id, **fields)
+    row = await service.update_documento(
+        db, documento_id, actor=current_user.email, **fields
+    )
     if row is None:
         raise HTTPException(status_code=404, detail="documento nao encontrado")
     return DocumentoVeiculoRead.model_validate(row)
@@ -185,8 +199,11 @@ async def update_documento_endpoint(
 async def delete_documento_endpoint(
     documento_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> None:
-    ok = await service.delete_documento(db, documento_id)
+    ok = await service.delete_documento(
+        db, documento_id, actor=current_user.email
+    )
     if not ok:
         raise HTTPException(status_code=404, detail="documento nao encontrado")
 
@@ -214,10 +231,11 @@ async def consultar_detran_endpoint(
     payload: ConsultaDetranRequest,
     db: AsyncSession = Depends(get_db),
     client: Any = Depends(get_infosimples_dep),
+    current_user: User = Depends(get_current_user),
 ) -> ConsultaDetranRead:
     try:
         consulta = await service.consultar_detran(
-            db, veiculo_id, payload.uf, client=client
+            db, veiculo_id, payload.uf, client=client, actor=current_user.email
         )
     except ValueError as exc:
         # `veiculo nao encontrado` ou `uf nao suportada`. UF invalida
@@ -326,6 +344,7 @@ async def upload_parte_diaria_endpoint(
     db: AsyncSession = Depends(get_db),
     storage: EditaisStorage = Depends(get_partes_diarias_storage),
     dispatch_ocr: OcrDispatcher = Depends(get_ocr_dispatcher),
+    current_user: User = Depends(get_current_user),
 ) -> ParteDiariaRead:
     """Upload do anexo + dispatch da task OCR para o worker (fila `manutencao`).
 
@@ -349,6 +368,7 @@ async def upload_parte_diaria_endpoint(
         filename=arquivo.filename or "parte-diaria.pdf",
         mime_type=arquivo.content_type or "application/octet-stream",
         storage=storage,
+        actor=current_user.email,
     )
     # Pre-fill por form fields (operador conhece o veiculo/obra antes
     # mesmo do OCR rodar). Assim, se OCR falhar, dados manuais nao
@@ -358,6 +378,7 @@ async def upload_parte_diaria_endpoint(
             db,
             parte.id,
             {k: v for k, v in {"veiculo_id": veiculo_id, "obra": obra}.items() if v},
+            actor=current_user.email,
         )
     try:
         await dispatch_ocr(parte.id)
@@ -366,7 +387,7 @@ async def upload_parte_diaria_endpoint(
         # o operador. Anexo ja esta persistido entao reprocessar funciona.
         logger.warning("Falha ao enfileirar OCR parte_diaria=%s: %s", parte.id, exc)
         await service.mark_parte_diaria_erro(
-            db, parte.id, f"falha ao enfileirar OCR: {exc}"
+            db, parte.id, f"falha ao enfileirar OCR: {exc}", actor=current_user.email
         )
     parte = await service.get_parte_diaria(db, parte.id)
     return ParteDiariaRead.model_validate(parte)
@@ -425,9 +446,12 @@ async def update_parte_diaria_endpoint(
     parte_id: int,
     payload: ParteDiariaUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> ParteDiariaRead:
     fields = payload.model_dump(exclude_unset=True)
-    row = await service.update_parte_diaria(db, parte_id, fields)
+    row = await service.update_parte_diaria(
+        db, parte_id, fields, actor=current_user.email
+    )
     if row is None:
         raise HTTPException(status_code=404, detail="parte_diaria nao encontrada")
     return ParteDiariaRead.model_validate(row)
@@ -441,8 +465,11 @@ async def delete_parte_diaria_endpoint(
     parte_id: int,
     db: AsyncSession = Depends(get_db),
     storage: EditaisStorage = Depends(get_partes_diarias_storage),
+    current_user: User = Depends(get_current_user),
 ) -> None:
-    ok = await service.delete_parte_diaria(db, parte_id, storage=storage)
+    ok = await service.delete_parte_diaria(
+        db, parte_id, storage=storage, actor=current_user.email
+    )
     if not ok:
         raise HTTPException(status_code=404, detail="parte_diaria nao encontrada")
 
@@ -456,6 +483,7 @@ async def reprocessar_parte_diaria_endpoint(
     parte_id: int,
     db: AsyncSession = Depends(get_db),
     dispatch_ocr: OcrDispatcher = Depends(get_ocr_dispatcher),
+    current_user: User = Depends(get_current_user),
 ) -> ParteDiariaRead:
     """Re-dispatcha a task OCR (util pos-erro ou troca de processor).
 
@@ -468,14 +496,17 @@ async def reprocessar_parte_diaria_endpoint(
         raise HTTPException(status_code=404, detail="parte_diaria nao encontrada")
     # Reseta status para pendente (caso esteja em 'erro' ou 'processado').
     await service.update_parte_diaria(
-        db, parte_id, {"ocr_status": "pendente", "ocr_error_msg": None}
+        db,
+        parte_id,
+        {"ocr_status": "pendente", "ocr_error_msg": None},
+        actor=current_user.email,
     )
     try:
         await dispatch_ocr(parte_id)
     except Exception as exc:
         logger.warning("Falha ao re-enfileirar OCR parte_diaria=%s: %s", parte_id, exc)
         await service.mark_parte_diaria_erro(
-            db, parte_id, f"falha ao enfileirar OCR: {exc}"
+            db, parte_id, f"falha ao enfileirar OCR: {exc}", actor=current_user.email
         )
     parte = await service.get_parte_diaria(db, parte_id)
     return ParteDiariaRead.model_validate(parte)

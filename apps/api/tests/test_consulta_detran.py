@@ -1,4 +1,5 @@
 """Testes de consulta Detran (Modulo B.3) -- service + router."""
+
 from __future__ import annotations
 
 from typing import Any
@@ -98,10 +99,15 @@ def fake_failing_client():
     app.dependency_overrides.pop(get_infosimples_dep, None)
 
 
-async def _criar_veiculo(api_client: AsyncClient, placa: str = "ABC1234") -> int:
+async def _criar_veiculo(
+    api_client: AsyncClient,
+    auth_headers: dict[str, str],
+    placa: str = "ABC1234",
+) -> int:
     r = await api_client.post(
         "/api/v1/manutencao-frota/veiculos",
         json={"placa": placa, "renavam": "12345678900"},
+        headers=auth_headers,
     )
     assert r.status_code == 201, r.text
     return r.json()["id"]
@@ -115,11 +121,13 @@ async def test_consultar_detran_sucesso(
     api_client: AsyncClient,
     db_session: AsyncSession,
     fake_ok_client: FakeOkClient,
+    auth_headers: dict[str, str],
 ) -> None:
-    vid = await _criar_veiculo(api_client)
+    vid = await _criar_veiculo(api_client, auth_headers)
     r = await api_client.post(
         f"/api/v1/manutencao-frota/veiculos/{vid}/consultar-detran",
         json={"uf": "sp"},
+        headers=auth_headers,
     )
     assert r.status_code == 201, r.text
     body = r.json()
@@ -135,23 +143,25 @@ async def test_consultar_detran_sucesso(
 
 @pytest.mark.asyncio
 async def test_consultar_detran_uf_invalida_retorna_422(
-    api_client: AsyncClient, fake_ok_client: FakeOkClient
+    api_client: AsyncClient, fake_ok_client: FakeOkClient, auth_headers: dict[str, str]
 ) -> None:
-    vid = await _criar_veiculo(api_client)
+    vid = await _criar_veiculo(api_client, auth_headers)
     r = await api_client.post(
         f"/api/v1/manutencao-frota/veiculos/{vid}/consultar-detran",
         json={"uf": "RJ"},
+        headers=auth_headers,
     )
     assert r.status_code == 422
 
 
 @pytest.mark.asyncio
 async def test_consultar_detran_veiculo_nao_existe_retorna_404(
-    api_client: AsyncClient, fake_ok_client: FakeOkClient
+    api_client: AsyncClient, fake_ok_client: FakeOkClient, auth_headers: dict[str, str]
 ) -> None:
     r = await api_client.post(
         "/api/v1/manutencao-frota/veiculos/99999/consultar-detran",
         json={"uf": "SP"},
+        headers=auth_headers,
     )
     assert r.status_code == 404
 
@@ -160,15 +170,17 @@ async def test_consultar_detran_veiculo_nao_existe_retorna_404(
 async def test_consultar_detran_sem_credencial_retorna_mock(
     api_client: AsyncClient,
     db_session: AsyncSession,
+    auth_headers: dict[str, str],
 ) -> None:
     # Sem dependency override -- usa o singleton real, que cai em mock
     # porque INFOSIMPLES_TOKEN nao esta setado em testes.
     service.reset_infosimples_singleton()
-    vid = await _criar_veiculo(api_client)
+    vid = await _criar_veiculo(api_client, auth_headers)
     try:
         r = await api_client.post(
             f"/api/v1/manutencao-frota/veiculos/{vid}/consultar-detran",
             json={"uf": "SP"},
+            headers=auth_headers,
         )
     finally:
         prev = service.reset_infosimples_singleton()
@@ -188,11 +200,13 @@ async def test_consultar_detran_erro_grava_row_status_erro(
     api_client: AsyncClient,
     db_session: AsyncSession,
     fake_failing_client: FakeFailingClient,
+    auth_headers: dict[str, str],
 ) -> None:
-    vid = await _criar_veiculo(api_client)
+    vid = await _criar_veiculo(api_client, auth_headers)
     r = await api_client.post(
         f"/api/v1/manutencao-frota/veiculos/{vid}/consultar-detran",
         json={"uf": "SP"},
+        headers=auth_headers,
     )
     # Mesmo em erro de upstream, devolvemos 201 com status='erro' --
     # service NAO propaga para o router, deixa a UI renderizar inline.
@@ -211,11 +225,13 @@ async def test_consultar_detran_materializa_ipva_e_licenciamento(
     api_client: AsyncClient,
     db_session: AsyncSession,
     fake_ok_client: FakeOkClient,
+    auth_headers: dict[str, str],
 ) -> None:
-    vid = await _criar_veiculo(api_client)
+    vid = await _criar_veiculo(api_client, auth_headers)
     r = await api_client.post(
         f"/api/v1/manutencao-frota/veiculos/{vid}/consultar-detran",
         json={"uf": "SP"},
+        headers=auth_headers,
     )
     assert r.status_code == 201
 
@@ -235,6 +251,7 @@ async def test_consultar_detran_materializa_ipva_e_licenciamento(
 async def test_consultar_detran_payload_sem_datas_nao_cria_documentos(
     api_client: AsyncClient,
     db_session: AsyncSession,
+    auth_headers: dict[str, str],
 ) -> None:
     # Cliente que devolve payload sem ipva/licenciamento -- nao deve
     # criar rows em frota_documentos.
@@ -252,10 +269,11 @@ async def test_consultar_detran_payload_sem_datas_nao_cria_documentos(
     )
     app.dependency_overrides[get_infosimples_dep] = lambda: client
     try:
-        vid = await _criar_veiculo(api_client)
+        vid = await _criar_veiculo(api_client, auth_headers)
         r = await api_client.post(
             f"/api/v1/manutencao-frota/veiculos/{vid}/consultar-detran",
             json={"uf": "MG"},
+            headers=auth_headers,
         )
         assert r.status_code == 201
         q = select(DocumentoVeiculo).where(
@@ -276,15 +294,15 @@ async def test_consulta_grava_audit_log(
     api_client: AsyncClient,
     db_session: AsyncSession,
     fake_ok_client: FakeOkClient,
+    auth_headers: dict[str, str],
 ) -> None:
-    vid = await _criar_veiculo(api_client)
+    vid = await _criar_veiculo(api_client, auth_headers)
     await api_client.post(
         f"/api/v1/manutencao-frota/veiculos/{vid}/consultar-detran",
         json={"uf": "SP"},
+        headers=auth_headers,
     )
-    q = select(AuditLog).where(
-        AuditLog.resource == "manutencao_frota.consulta_detran"
-    )
+    q = select(AuditLog).where(AuditLog.resource == "manutencao_frota.consulta_detran")
     rows = list((await db_session.execute(q)).scalars().all())
     assert len(rows) == 1
     assert rows[0].action == "create"
@@ -295,11 +313,13 @@ async def test_consulta_erro_grava_audit_log_action_error(
     api_client: AsyncClient,
     db_session: AsyncSession,
     fake_failing_client: FakeFailingClient,
+    auth_headers: dict[str, str],
 ) -> None:
-    vid = await _criar_veiculo(api_client)
+    vid = await _criar_veiculo(api_client, auth_headers)
     await api_client.post(
         f"/api/v1/manutencao-frota/veiculos/{vid}/consultar-detran",
         json={"uf": "SP"},
+        headers=auth_headers,
     )
     q = select(AuditLog).where(
         AuditLog.resource == "manutencao_frota.consulta_detran",
@@ -316,18 +336,18 @@ async def test_consulta_erro_grava_audit_log_action_error(
 async def test_listar_consultas_por_veiculo(
     api_client: AsyncClient,
     fake_ok_client: FakeOkClient,
+    auth_headers: dict[str, str],
 ) -> None:
-    vid = await _criar_veiculo(api_client)
+    vid = await _criar_veiculo(api_client, auth_headers)
     for _ in range(3):
         r = await api_client.post(
             f"/api/v1/manutencao-frota/veiculos/{vid}/consultar-detran",
             json={"uf": "SP"},
+            headers=auth_headers,
         )
         assert r.status_code == 201
 
-    r = await api_client.get(
-        f"/api/v1/manutencao-frota/veiculos/{vid}/consultas"
-    )
+    r = await api_client.get(f"/api/v1/manutencao-frota/veiculos/{vid}/consultas")
     assert r.status_code == 200
     body = r.json()
     assert body["total"] == 3
@@ -338,21 +358,22 @@ async def test_listar_consultas_por_veiculo(
 async def test_listar_consultas_global_filtra_por_uf(
     api_client: AsyncClient,
     fake_ok_client: FakeOkClient,
+    auth_headers: dict[str, str],
 ) -> None:
-    v1 = await _criar_veiculo(api_client, "ABC1234")
-    v2 = await _criar_veiculo(api_client, "XYZ9876")
+    v1 = await _criar_veiculo(api_client, auth_headers, "ABC1234")
+    v2 = await _criar_veiculo(api_client, auth_headers, "XYZ9876")
     await api_client.post(
         f"/api/v1/manutencao-frota/veiculos/{v1}/consultar-detran",
         json={"uf": "SP"},
+        headers=auth_headers,
     )
     await api_client.post(
         f"/api/v1/manutencao-frota/veiculos/{v2}/consultar-detran",
         json={"uf": "MG"},
+        headers=auth_headers,
     )
 
-    r = await api_client.get(
-        "/api/v1/manutencao-frota/consultas-detran?uf=SP"
-    )
+    r = await api_client.get("/api/v1/manutencao-frota/consultas-detran?uf=SP")
     assert r.status_code == 200
     body = r.json()
     assert body["total"] == 1
@@ -363,9 +384,7 @@ async def test_listar_consultas_global_filtra_por_uf(
 async def test_listar_consultas_veiculo_404_se_inexistente(
     api_client: AsyncClient, fake_ok_client: FakeOkClient
 ) -> None:
-    r = await api_client.get(
-        "/api/v1/manutencao-frota/veiculos/99999/consultas"
-    )
+    r = await api_client.get("/api/v1/manutencao-frota/veiculos/99999/consultas")
     assert r.status_code == 404
 
 
@@ -377,22 +396,20 @@ async def test_delete_veiculo_remove_consultas_em_cascata(
     api_client: AsyncClient,
     db_session: AsyncSession,
     fake_ok_client: FakeOkClient,
+    auth_headers: dict[str, str],
 ) -> None:
-    vid = await _criar_veiculo(api_client)
+    vid = await _criar_veiculo(api_client, auth_headers)
     await api_client.post(
         f"/api/v1/manutencao-frota/veiculos/{vid}/consultar-detran",
         json={"uf": "SP"},
+        headers=auth_headers,
     )
     # Confirmar 1 row
-    total = (
-        await db_session.execute(select(func.count(ConsultaDetran.id)))
-    ).scalar_one()
+    total = (await db_session.execute(select(func.count(ConsultaDetran.id)))).scalar_one()
     assert total == 1
 
-    r = await api_client.delete(f"/api/v1/manutencao-frota/veiculos/{vid}")
+    r = await api_client.delete(f"/api/v1/manutencao-frota/veiculos/{vid}", headers=auth_headers)
     assert r.status_code == 204
 
-    total = (
-        await db_session.execute(select(func.count(ConsultaDetran.id)))
-    ).scalar_one()
+    total = (await db_session.execute(select(func.count(ConsultaDetran.id)))).scalar_one()
     assert total == 0

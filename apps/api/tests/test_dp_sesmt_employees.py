@@ -1,4 +1,5 @@
 """CRUD de funcionarios + dossie endpoints (Modulo A)."""
+
 from __future__ import annotations
 
 import httpx
@@ -26,7 +27,7 @@ VALID_CPF_2 = "39053344705"
 
 @pytest.mark.asyncio
 async def test_create_employee_persiste_e_normaliza_cpf(
-    api_client: AsyncClient,
+    api_client: AsyncClient, auth_headers: dict[str, str]
 ) -> None:
     resp = await api_client.post(
         "/api/v1/dp-sesmt/employees",
@@ -36,6 +37,7 @@ async def test_create_employee_persiste_e_normaliza_cpf(
             "cargo": "Pedreiro",
             "obra": "Obra Centro",
         },
+        headers=auth_headers,
     )
     assert resp.status_code == 201, resp.text
     body = resp.json()
@@ -47,7 +49,7 @@ async def test_create_employee_persiste_e_normaliza_cpf(
 
 @pytest.mark.asyncio
 async def test_create_employee_rejeita_cpf_invalido(
-    api_client: AsyncClient,
+    api_client: AsyncClient, auth_headers: dict[str, str]
 ) -> None:
     resp = await api_client.post(
         "/api/v1/dp-sesmt/employees",
@@ -56,6 +58,7 @@ async def test_create_employee_rejeita_cpf_invalido(
             "nome_completo": "Quem Quer",
             "cargo": "Pedreiro",
         },
+        headers=auth_headers,
     )
     assert resp.status_code == 422
     assert "CPF" in resp.text or "cpf" in resp.text
@@ -63,21 +66,23 @@ async def test_create_employee_rejeita_cpf_invalido(
 
 @pytest.mark.asyncio
 async def test_create_employee_409_em_cpf_duplicado(
-    api_client: AsyncClient,
+    api_client: AsyncClient, auth_headers: dict[str, str]
 ) -> None:
     payload = {
         "cpf": VALID_CPF_1,
         "nome_completo": "Joao da Silva",
         "cargo": "Pedreiro",
     }
-    r1 = await api_client.post("/api/v1/dp-sesmt/employees", json=payload)
+    r1 = await api_client.post("/api/v1/dp-sesmt/employees", json=payload, headers=auth_headers)
     assert r1.status_code == 201
-    r2 = await api_client.post("/api/v1/dp-sesmt/employees", json=payload)
+    r2 = await api_client.post("/api/v1/dp-sesmt/employees", json=payload, headers=auth_headers)
     assert r2.status_code == 409
 
 
 @pytest.mark.asyncio
-async def test_list_employees_filtros_e_busca(api_client: AsyncClient) -> None:
+async def test_list_employees_filtros_e_busca(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
     # Cria 2 funcionarios distintos.
     await api_client.post(
         "/api/v1/dp-sesmt/employees",
@@ -87,6 +92,7 @@ async def test_list_employees_filtros_e_busca(api_client: AsyncClient) -> None:
             "cargo": "Pedreiro",
             "obra": "Obra A",
         },
+        headers=auth_headers,
     )
     await api_client.post(
         "/api/v1/dp-sesmt/employees",
@@ -97,37 +103,32 @@ async def test_list_employees_filtros_e_busca(api_client: AsyncClient) -> None:
             "obra": "Obra B",
             "status": "afastado",
         },
+        headers=auth_headers,
     )
 
     r = await api_client.get("/api/v1/dp-sesmt/employees")
     assert r.status_code == 200
     assert r.json()["total"] == 2
 
-    r = await api_client.get(
-        "/api/v1/dp-sesmt/employees", params={"obra": "Obra A"}
-    )
+    r = await api_client.get("/api/v1/dp-sesmt/employees", params={"obra": "Obra A"})
     assert r.json()["total"] == 1
     assert r.json()["items"][0]["nome_completo"] == "Joao da Silva"
 
-    r = await api_client.get(
-        "/api/v1/dp-sesmt/employees", params={"status": "afastado"}
-    )
+    r = await api_client.get("/api/v1/dp-sesmt/employees", params={"status": "afastado"})
     assert r.json()["total"] == 1
 
-    r = await api_client.get(
-        "/api/v1/dp-sesmt/employees", params={"search": "Maria"}
-    )
+    r = await api_client.get("/api/v1/dp-sesmt/employees", params={"search": "Maria"})
     assert r.json()["total"] == 1
 
     # Busca por CPF com mascara deve normalizar.
-    r = await api_client.get(
-        "/api/v1/dp-sesmt/employees", params={"search": "111.444"}
-    )
+    r = await api_client.get("/api/v1/dp-sesmt/employees", params={"search": "111.444"})
     assert r.json()["total"] == 1
 
 
 @pytest.mark.asyncio
-async def test_update_employee_partial(api_client: AsyncClient) -> None:
+async def test_update_employee_partial(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
     r = await api_client.post(
         "/api/v1/dp-sesmt/employees",
         json={
@@ -135,11 +136,13 @@ async def test_update_employee_partial(api_client: AsyncClient) -> None:
             "nome_completo": "Joao da Silva",
             "cargo": "Pedreiro",
         },
+        headers=auth_headers,
     )
     employee_id = r.json()["id"]
     r = await api_client.put(
         f"/api/v1/dp-sesmt/employees/{employee_id}",
         json={"status": "afastado", "observacoes": "INSS"},
+        headers=auth_headers,
     )
     assert r.status_code == 200
     body = r.json()
@@ -149,7 +152,9 @@ async def test_update_employee_partial(api_client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_with_empregos_anteriores(api_client: AsyncClient) -> None:
+async def test_create_with_empregos_anteriores(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
     r = await api_client.post(
         "/api/v1/dp-sesmt/employees",
         json={
@@ -166,6 +171,7 @@ async def test_create_with_empregos_anteriores(api_client: AsyncClient) -> None:
                 }
             ],
         },
+        headers=auth_headers,
     )
     assert r.status_code == 201, r.text
     body = r.json()
@@ -174,7 +180,7 @@ async def test_create_with_empregos_anteriores(api_client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_delete_employee(api_client: AsyncClient) -> None:
+async def test_delete_employee(api_client: AsyncClient, auth_headers: dict[str, str]) -> None:
     r = await api_client.post(
         "/api/v1/dp-sesmt/employees",
         json={
@@ -182,9 +188,10 @@ async def test_delete_employee(api_client: AsyncClient) -> None:
             "nome_completo": "Joao",
             "cargo": "Pedreiro",
         },
+        headers=auth_headers,
     )
     employee_id = r.json()["id"]
-    r = await api_client.delete(f"/api/v1/dp-sesmt/employees/{employee_id}")
+    r = await api_client.delete(f"/api/v1/dp-sesmt/employees/{employee_id}", headers=auth_headers)
     assert r.status_code == 204
     r = await api_client.get(f"/api/v1/dp-sesmt/employees/{employee_id}")
     assert r.status_code == 404
@@ -196,9 +203,7 @@ async def test_delete_employee(api_client: AsyncClient) -> None:
 def _override_viacep(handler):
     def _factory() -> ViaCEPClient:
         transport = httpx.MockTransport(handler)
-        http = httpx.AsyncClient(
-            base_url="https://viacep.com.br", transport=transport
-        )
+        http = httpx.AsyncClient(base_url="https://viacep.com.br", transport=transport)
         return ViaCEPClient(client=http)
 
     return _factory
@@ -207,9 +212,7 @@ def _override_viacep(handler):
 def _override_brasilapi(handler):
     def _factory() -> BrasilAPIClient:
         transport = httpx.MockTransport(handler)
-        http = httpx.AsyncClient(
-            base_url="https://brasilapi.com.br", transport=transport
-        )
+        http = httpx.AsyncClient(base_url="https://brasilapi.com.br", transport=transport)
         return BrasilAPIClient(client=http)
 
     return _factory
@@ -223,9 +226,7 @@ def _override_directdata():
 
 
 @pytest.mark.asyncio
-async def test_dossie_cep_ok(
-    api_client: AsyncClient, db_session: AsyncSession
-) -> None:
+async def test_dossie_cep_ok(api_client: AsyncClient, db_session: AsyncSession) -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -250,6 +251,7 @@ async def test_dossie_cep_ok(
 
     # Log de auditoria foi gravado.
     from sqlalchemy import select
+
     rows = (await db_session.execute(select(DossieConsultaLog))).scalars().all()
     assert any(r.fonte == "viacep" and r.sucesso for r in rows)
 
@@ -281,9 +283,7 @@ async def test_dossie_cnpj_ok(api_client: AsyncClient) -> None:
 
     app.dependency_overrides[_get_brasilapi] = _override_brasilapi(handler)
     try:
-        r = await api_client.get(
-            "/api/v1/dp-sesmt/dossie/cnpj/00000000000191"
-        )
+        r = await api_client.get("/api/v1/dp-sesmt/dossie/cnpj/00000000000191")
         assert r.status_code == 200
         assert r.json()["razao_social"] == "Banco do Brasil"
     finally:
@@ -294,9 +294,7 @@ async def test_dossie_cnpj_ok(api_client: AsyncClient) -> None:
 async def test_dossie_cpf_modo_mock(api_client: AsyncClient) -> None:
     app.dependency_overrides[_get_directdata] = _override_directdata()
     try:
-        r = await api_client.get(
-            f"/api/v1/dp-sesmt/dossie/cpf/{VALID_CPF_1}"
-        )
+        r = await api_client.get(f"/api/v1/dp-sesmt/dossie/cpf/{VALID_CPF_1}")
         assert r.status_code == 200
         body = r.json()
         assert body["source"] == "directdata_mock"
@@ -320,7 +318,7 @@ async def test_dossie_cpf_invalido_400(api_client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_update_employee_rejeita_status_arbitrario(
-    api_client: AsyncClient,
+    api_client: AsyncClient, auth_headers: dict[str, str]
 ) -> None:
     """Devin Review #10: EmployeeUpdate aceitava qualquer string de
     status porque herdava de BaseModel direto, sem o validator.
@@ -328,11 +326,13 @@ async def test_update_employee_rejeita_status_arbitrario(
     r = await api_client.post(
         "/api/v1/dp-sesmt/employees",
         json={"cpf": VALID_CPF_1, "nome_completo": "Joao", "cargo": "Pedreiro"},
+        headers=auth_headers,
     )
     employee_id = r.json()["id"]
     bad = await api_client.put(
         f"/api/v1/dp-sesmt/employees/{employee_id}",
         json={"status": "fantasma"},
+        headers=auth_headers,
     )
     assert bad.status_code == 422
     # Garante que o status ficou intocado.
@@ -342,7 +342,7 @@ async def test_update_employee_rejeita_status_arbitrario(
 
 @pytest.mark.asyncio
 async def test_create_update_delete_geram_audit_log(
-    api_client: AsyncClient, db_session: AsyncSession
+    api_client: AsyncClient, db_session: AsyncSession, auth_headers: dict[str, str]
 ) -> None:
     """AGENTS.md: mutacoes em recurso sensivel devem gravar em audit_log."""
     from sqlalchemy import select
@@ -352,31 +352,31 @@ async def test_create_update_delete_geram_audit_log(
     r = await api_client.post(
         "/api/v1/dp-sesmt/employees",
         json={"cpf": VALID_CPF_1, "nome_completo": "Joao", "cargo": "Pedreiro"},
+        headers=auth_headers,
     )
     employee_id = r.json()["id"]
     await api_client.put(
         f"/api/v1/dp-sesmt/employees/{employee_id}",
         json={"status": "afastado"},
+        headers=auth_headers,
     )
-    await api_client.delete(f"/api/v1/dp-sesmt/employees/{employee_id}")
+    await api_client.delete(f"/api/v1/dp-sesmt/employees/{employee_id}", headers=auth_headers)
 
-    rows = (
-        (await db_session.execute(select(AuditLog).order_by(AuditLog.id)))
-        .scalars()
-        .all()
-    )
-    actions = [r.action for r in rows if r.resource == "dp_sesmt.employee"]
+    rows = (await db_session.execute(select(AuditLog).order_by(AuditLog.id))).scalars().all()
+    employee_rows = [r for r in rows if r.resource == "dp_sesmt.employee"]
+    actions = [r.action for r in employee_rows]
     assert actions == ["create", "update", "delete"]
     # Resource_id correto e metadata gravados.
-    for r in rows:
-        if r.resource == "dp_sesmt.employee":
-            assert r.resource_id == str(employee_id)
-            assert r.metadata_json  # JSON serializado nao-vazio
+    for r in employee_rows:
+        assert r.resource_id == str(employee_id)
+        assert r.metadata_json  # JSON serializado nao-vazio
+        # Regressao PR #20: actor agora vem do JWT, nao mais hardcoded "system".
+        assert r.actor == "test-admin@primor.com"
 
 
 @pytest.mark.asyncio
 async def test_update_sem_mudanca_real_nao_polui_audit(
-    api_client: AsyncClient, db_session: AsyncSession
+    api_client: AsyncClient, db_session: AsyncSession, auth_headers: dict[str, str]
 ) -> None:
     """Update sem alteracao efetiva nao deve gerar AuditLog (evita ruido)."""
     from sqlalchemy import select
@@ -386,15 +386,15 @@ async def test_update_sem_mudanca_real_nao_polui_audit(
     r = await api_client.post(
         "/api/v1/dp-sesmt/employees",
         json={"cpf": VALID_CPF_1, "nome_completo": "Joao", "cargo": "Pedreiro"},
+        headers=auth_headers,
     )
     employee_id = r.json()["id"]
     # Send same status -- nada deve mudar.
     await api_client.put(
         f"/api/v1/dp-sesmt/employees/{employee_id}",
         json={"status": "ativo"},
+        headers=auth_headers,
     )
-    rows = (
-        (await db_session.execute(select(AuditLog))).scalars().all()
-    )
-    update_rows = [r for r in rows if r.action == "update"]
+    rows = (await db_session.execute(select(AuditLog))).scalars().all()
+    update_rows = [r for r in rows if r.action == "update" and r.resource == "dp_sesmt.employee"]
     assert update_rows == []

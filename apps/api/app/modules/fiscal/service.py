@@ -32,6 +32,9 @@ logger = logging.getLogger(__name__)
 # valores -- LGPD/contabil. Toda criacao/envio/erro precisa virar uma
 # linha em audit_log.
 _AUDIT_RESOURCE = "fiscal.documento"
+# Default usado em paths sem usuario logado (worker de retry, importacao
+# automatica do escritorio contabil etc.). Mutacoes vindas de requests
+# HTTP devem passar `actor=current_user.email` -- ver router.
 _AUDIT_ACTOR_PLACEHOLDER = "system"
 
 
@@ -75,6 +78,7 @@ async def import_xml(
     storage: EditaisStorage,
     filename: str = "documento.xml",
     source: str | None = None,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
 ) -> DocumentoFiscal:
     """Recebe bytes de um XML, parseia, persiste storage + DB.
 
@@ -163,6 +167,7 @@ async def import_xml(
         db,
         action="create",
         resource_id=doc.id,
+        actor=actor,
         metadata={
             "tipo": doc.tipo,
             "chave_acesso": doc.chave_acesso,
@@ -242,6 +247,7 @@ async def update_documento(
     *,
     observacoes: str | None = None,
     status_envio: str | None = None,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
 ) -> DocumentoFiscal | None:
     doc = await get_documento(db, doc_id)
     if doc is None:
@@ -272,6 +278,7 @@ async def update_documento(
         db,
         action="update",
         resource_id=doc.id,
+        actor=actor,
         metadata={"changed": changed},
     )
     return doc
@@ -282,6 +289,7 @@ async def delete_documento(
     doc_id: int,
     *,
     storage: EditaisStorage,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
 ) -> bool:
     doc = await get_documento(db, doc_id)
     if doc is None:
@@ -306,6 +314,7 @@ async def delete_documento(
         db,
         action="delete",
         resource_id=doc_id,
+        actor=actor,
         metadata=snapshot,
     )
     return True
@@ -317,6 +326,7 @@ async def enviar_para_dominio(
     *,
     dominio_client: Any,
     storage: EditaisStorage,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
 ) -> DocumentoFiscal:
     """Envia o XML do documento para a Dominio.
 
@@ -345,6 +355,7 @@ async def enviar_para_dominio(
             db,
             action="enviar_erro",
             resource_id=doc.id,
+            actor=actor,
             metadata={"error": doc.error_msg, "retry_count": doc.retry_count},
         )
         return doc
@@ -364,6 +375,7 @@ async def enviar_para_dominio(
             db,
             action="enviar_erro",
             resource_id=doc.id,
+            actor=actor,
             metadata={
                 "error": doc.error_msg,
                 "auth": True,
@@ -380,6 +392,7 @@ async def enviar_para_dominio(
             db,
             action="enviar_erro",
             resource_id=doc.id,
+            actor=actor,
             metadata={"error": doc.error_msg, "retry_count": doc.retry_count},
         )
         return doc
@@ -394,6 +407,7 @@ async def enviar_para_dominio(
         db,
         action="enviar_ok",
         resource_id=doc.id,
+        actor=actor,
         metadata={
             "protocolo": doc.protocolo_dominio,
             "tipo": doc.tipo,

@@ -15,6 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.integrations.resend.client import ResendClient
+from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.models import User
 from app.modules.licitacoes.certidoes import (
     TIPOS_VALIDOS,
     compute_status,
@@ -74,6 +76,7 @@ async def list_certidoes_endpoint(
 async def create_certidao_endpoint(
     payload: CertidaoCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> CertidaoRead:
     if payload.tipo not in TIPOS_VALIDOS:
         # Aceitamos string livre para "OUTRO/custom"; 422 seria mais
@@ -89,6 +92,7 @@ async def create_certidao_endpoint(
         arquivo_path=payload.arquivo_path,
         orgao_emissor=payload.orgao_emissor,
         observacoes=payload.observacoes,
+        actor=current_user.email,
     )
     return _certidao_to_read(row)
 
@@ -153,9 +157,12 @@ async def update_certidao_endpoint(
     certidao_id: int,
     payload: CertidaoUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> CertidaoRead:
     fields = payload.model_dump(exclude_unset=True)
-    row = await update_certidao(db, certidao_id, **fields)
+    row = await update_certidao(
+        db, certidao_id, actor=current_user.email, **fields
+    )
     if row is None:
         raise HTTPException(status_code=404, detail="Certidao nao encontrada")
     return _certidao_to_read(row)
@@ -165,7 +172,8 @@ async def update_certidao_endpoint(
 async def delete_certidao_endpoint(
     certidao_id: int,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> None:
-    ok = await delete_certidao(db, certidao_id)
+    ok = await delete_certidao(db, certidao_id, actor=current_user.email)
     if not ok:
         raise HTTPException(status_code=404, detail="Certidao nao encontrada")

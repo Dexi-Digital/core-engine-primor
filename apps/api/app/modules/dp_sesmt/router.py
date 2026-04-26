@@ -25,6 +25,8 @@ from app.integrations.viacep.client import (
     ViaCEPError,
     ViaCEPNotFoundError,
 )
+from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.models import User
 from app.modules.dp_sesmt import service
 from app.modules.dp_sesmt.aso_alerts import compute_aso_status
 from app.modules.dp_sesmt.schemas import (
@@ -142,6 +144,7 @@ async def dispatch_aso_alerts_endpoint(
 async def create_employee_endpoint(
     payload: EmployeeCreate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> EmployeeRead:
     existing = await service.get_employee_by_cpf(db, payload.cpf)
     if existing is not None:
@@ -150,6 +153,7 @@ async def create_employee_endpoint(
     employee = await service.create_employee(
         db,
         empregos_anteriores=payload.empregos_anteriores,
+        actor=current_user.email,
         **data,
     )
     return EmployeeRead.model_validate(employee)
@@ -170,9 +174,12 @@ async def update_employee_endpoint(
     employee_id: int,
     payload: EmployeeUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> EmployeeRead:
     fields = payload.model_dump(exclude_unset=True)
-    employee = await service.update_employee(db, employee_id, **fields)
+    employee = await service.update_employee(
+        db, employee_id, actor=current_user.email, **fields
+    )
     if employee is None:
         raise HTTPException(404, f"Funcionario {employee_id} nao encontrado")
     return EmployeeRead.model_validate(employee)
@@ -180,9 +187,13 @@ async def update_employee_endpoint(
 
 @router.delete("/employees/{employee_id}", status_code=204)
 async def delete_employee_endpoint(
-    employee_id: int, db: AsyncSession = Depends(get_db)
+    employee_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> None:
-    deleted = await service.delete_employee(db, employee_id)
+    deleted = await service.delete_employee(
+        db, employee_id, actor=current_user.email
+    )
     if not deleted:
         raise HTTPException(404, f"Funcionario {employee_id} nao encontrado")
 

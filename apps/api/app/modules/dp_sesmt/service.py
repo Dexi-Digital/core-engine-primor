@@ -52,8 +52,9 @@ async def start_onboarding(cpf: str) -> str:
 # grava em audit_log". Funcionarios contem ASO + dados pessoais + salario,
 # entao toda criacao/edicao/exclusao precisa virar uma linha em audit_log.
 _AUDIT_RESOURCE = "dp_sesmt.employee"
-# Placeholder ate termos auth com identidade real do usuario; quando o
-# middleware de auth chegar, threadeamos o user_id pra dentro do service.
+# Default usado em paths sem usuario logado (cron, seed, OCR worker etc.).
+# Mutacoes vindas de requests HTTP devem passar `actor=current_user.email`
+# explicitamente -- ver router.
 _AUDIT_ACTOR_PLACEHOLDER = "system"
 
 
@@ -81,6 +82,7 @@ async def create_employee(
     db: AsyncSession,
     *,
     empregos_anteriores: Sequence[Any] | None = None,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
     **fields: Any,
 ) -> Employee:
     if "cpf" in fields:
@@ -97,6 +99,7 @@ async def create_employee(
         db,
         action="create",
         resource_id=employee.id,
+        actor=actor,
         metadata={
             "cpf": employee.cpf,
             "nome_completo": employee.nome_completo,
@@ -206,7 +209,11 @@ async def list_employees(
 
 
 async def update_employee(
-    db: AsyncSession, employee_id: int, **fields: Any
+    db: AsyncSession,
+    employee_id: int,
+    *,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
+    **fields: Any,
 ) -> Employee | None:
     row = await db.get(Employee, employee_id)
     if row is None:
@@ -224,12 +231,18 @@ async def update_employee(
             db,
             action="update",
             resource_id=employee_id,
+            actor=actor,
             metadata={"changed": changed},
         )
     return await get_employee(db, employee_id)
 
 
-async def delete_employee(db: AsyncSession, employee_id: int) -> bool:
+async def delete_employee(
+    db: AsyncSession,
+    employee_id: int,
+    *,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
+) -> bool:
     row = await db.get(Employee, employee_id)
     if row is None:
         return False
@@ -244,6 +257,7 @@ async def delete_employee(db: AsyncSession, employee_id: int) -> bool:
         db,
         action="delete",
         resource_id=employee_id,
+        actor=actor,
         metadata=snapshot,
     )
     return True

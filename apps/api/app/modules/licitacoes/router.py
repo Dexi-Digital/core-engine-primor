@@ -24,6 +24,8 @@ from app.integrations.onedrive.client import build_onedrive_client
 from app.integrations.onedrive.storage import OneDriveStorage
 from app.integrations.pncp.client import PncpClient
 from app.integrations.resend.client import ResendClient
+from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.models import User
 from app.modules.dp_sesmt.schemas import ModuleStatus
 from app.modules.licitacoes.analise import (
     analyze_edital_for_licitacao,
@@ -190,6 +192,7 @@ async def ingest_endpoint(
     max_paginas: int | None = Query(None, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
     client: PncpClient = Depends(get_pncp_client),
+    _: User = Depends(get_current_user),
 ) -> IngestResult:
     """Kick off a PNCP ingestion for the given window.
 
@@ -231,6 +234,7 @@ async def list_saved_queries_endpoint(
 async def create_saved_query_endpoint(
     payload: SavedQueryCreate,
     db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
 ) -> SavedQueryRead:
     row = await create_saved_query(
         db,
@@ -250,6 +254,7 @@ async def create_saved_query_endpoint(
 async def delete_saved_query_endpoint(
     saved_query_id: int,
     db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
 ) -> None:
     ok = await delete_saved_query(db, saved_query_id)
     if not ok:
@@ -262,6 +267,7 @@ async def dispatch_boletins_endpoint(
         None, description="Se informado, despacha apenas essa query"
     ),
     db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
 ) -> BoletimDispatchSummary:
     """On-demand dispatch. Normally triggered by Celery beat 3x/dia.
 
@@ -311,6 +317,7 @@ async def download_edital_endpoint(
     db: AsyncSession = Depends(get_db),
     pncp: PncpClient = Depends(get_pncp_client),
     storage: EditaisStorage = Depends(get_editais_storage),
+    _: User = Depends(get_current_user),
 ) -> EditalDownloadResult:
     """Fetch edital + anexos from PNCP for `licitacao_id`. Idempotent.
 
@@ -357,6 +364,7 @@ async def run_edital_analise_endpoint(
     db: AsyncSession = Depends(get_db),
     storage: EditaisStorage = Depends(get_editais_storage),
     llm: LLMProvider = Depends(get_llm_provider),
+    _: User = Depends(get_current_user),
 ) -> EditalAnaliseRead:
     """Execute a LLM-based analysis of the downloaded edital.
 

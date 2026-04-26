@@ -28,6 +28,8 @@ from app.core.config import get_settings
 from app.core.db import get_db
 from app.integrations.onedrive.client import build_onedrive_client
 from app.integrations.onedrive.storage import OneDriveStorage
+from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.models import User
 from app.modules.dp_sesmt.schemas import ModuleStatus
 from app.modules.fiscal.parser import FiscalParseError
 from app.modules.fiscal.schemas import (
@@ -115,6 +117,7 @@ async def upload_documento(
     source: str | None = Query(default=None, max_length=64),
     db: AsyncSession = Depends(get_db),
     storage: EditaisStorage = Depends(get_fiscal_storage),
+    current_user: User = Depends(get_current_user),
 ) -> DocumentoFiscalRead:
     """Recebe um XML, parseia, persiste storage + DB.
 
@@ -131,6 +134,7 @@ async def upload_documento(
             storage=storage,
             filename=arquivo.filename or "documento.xml",
             source=source,
+            actor=current_user.email,
         )
     except FiscalParseError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -185,6 +189,7 @@ async def update_endpoint(
     doc_id: int,
     payload: DocumentoFiscalUpdate,
     db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> DocumentoFiscalRead:
     try:
         doc = await update_documento(
@@ -192,6 +197,7 @@ async def update_endpoint(
             doc_id,
             observacoes=payload.observacoes,
             status_envio=payload.status_envio,
+            actor=current_user.email,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -205,8 +211,11 @@ async def delete_endpoint(
     doc_id: int,
     db: AsyncSession = Depends(get_db),
     storage: EditaisStorage = Depends(get_fiscal_storage),
+    current_user: User = Depends(get_current_user),
 ) -> None:
-    ok = await delete_documento(db, doc_id, storage=storage)
+    ok = await delete_documento(
+        db, doc_id, storage=storage, actor=current_user.email
+    )
     if not ok:
         raise HTTPException(status_code=404, detail="documento nao encontrado")
 
@@ -220,6 +229,7 @@ async def enviar_endpoint(
     db: AsyncSession = Depends(get_db),
     storage: EditaisStorage = Depends(get_fiscal_storage),
     dominio_client: Any = Depends(get_dominio_dep),
+    current_user: User = Depends(get_current_user),
 ) -> DocumentoFiscalEnvioResponse:
     """Dispara envio sincrono para a Dominio.
 
@@ -239,7 +249,11 @@ async def enviar_endpoint(
             protocolo_dominio=doc.protocolo_dominio,
         )
     doc = await enviar_para_dominio(
-        db, doc_id, dominio_client=dominio_client, storage=storage
+        db,
+        doc_id,
+        dominio_client=dominio_client,
+        storage=storage,
+        actor=current_user.email,
     )
     return DocumentoFiscalEnvioResponse(
         documento_id=doc.id,

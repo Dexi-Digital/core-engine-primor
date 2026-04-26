@@ -1,4 +1,5 @@
 """Test fixtures: in-memory SQLite + async session override for the FastAPI app."""
+
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
@@ -32,6 +33,62 @@ async def api_client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, No
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         yield client
     app.dependency_overrides.pop(get_db, None)
+
+
+# --- Auth helpers ----------------------------------------------------------
+#
+# A maioria dos endpoints que muta recurso (POST/PUT/PATCH/DELETE) agora
+# exige `Depends(get_current_user)` para gravar `actor` real no audit_log
+# (LGPD / AGENTS.md). Para tests que precisam atravessar esses guards,
+# use a fixture `auth_headers` -- ela cria um admin de teste e devolve
+# `{"Authorization": "Bearer <jwt>"}` pra anexar nos requests.
+#
+# Tests que verificam comportamento de 401 NAO devem usar essa fixture
+# -- continuam chamando `api_client` sem header.
+
+
+_TEST_ADMIN_EMAIL = "test-admin@primor.com"
+_TEST_ADMIN_PASSWORD = "hunter22zz"
+
+
+@pytest_asyncio.fixture
+async def admin_user(db_session: AsyncSession):
+    """Cria um admin de teste no DB.
+
+    Cria via `auth_service.create_user` para passar pelos validadores
+    (hash de senha, normalizacao de email, audit do create). O actor
+    do audit e `system:test-fixture` -- sao mutacoes geradas pelo
+    test setup, nao por usuario logado.
+    """
+    from app.modules.auth import service as auth_service
+
+    return await auth_service.create_user(
+        db_session,
+        email=_TEST_ADMIN_EMAIL,
+        nome="Test Admin",
+        password=_TEST_ADMIN_PASSWORD,
+        role="admin",
+        module_roles=None,
+        is_active=True,
+        actor="system:test-fixture",
+    )
+
+
+@pytest_asyncio.fixture
+async def auth_headers(admin_user, api_client: AsyncClient) -> dict[str, str]:
+    """Header `Authorization: Bearer <jwt>` para um admin de teste.
+
+    Use em qualquer chamada que muta recurso -- esses endpoints exigem
+    JWT para gravar actor real no audit_log. Tests que verificam o
+    caminho de 401 (sem token / token expirado / token invalido) NAO
+    devem usar essa fixture.
+    """
+    resp = await api_client.post(
+        "/api/v1/auth/login",
+        json={"email": _TEST_ADMIN_EMAIL, "password": _TEST_ADMIN_PASSWORD},
+    )
+    assert resp.status_code == 200, resp.text
+    return {"Authorization": f"Bearer {resp.json()['access_token']}"}
 
 
 @pytest.fixture
