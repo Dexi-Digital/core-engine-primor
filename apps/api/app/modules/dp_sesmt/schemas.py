@@ -7,7 +7,13 @@ from decimal import Decimal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.dp_sesmt.cpf import is_valid_cpf, normalize_cpf
-from app.modules.dp_sesmt.models import STATUSES_VALIDOS
+from app.modules.dp_sesmt.models import (
+    AFASTAMENTO_EM_ANDAMENTO,
+    AFASTAMENTO_STATUSES_VALIDOS,
+    BENEFICIO_B31,
+    BENEFICIOS_VALIDOS,
+    STATUSES_VALIDOS,
+)
 
 
 def _ensure_status_canonico(v: str | None) -> str | None:
@@ -235,4 +241,103 @@ class EmployeeOnboardingRequest(BaseModel):
     nome_completo: str
     cargo: str
     data_admissao: str
-    obra_id: str | None = None
+
+
+# --- Afastamentos INSS (D4) -------------------------------------------------
+
+
+def _ensure_beneficio_canonico(v: str | None) -> str | None:
+    if v is None:
+        return v
+    if v not in BENEFICIOS_VALIDOS:
+        raise ValueError(
+            "beneficio_tipo deve ser um de: "
+            + ", ".join(sorted(BENEFICIOS_VALIDOS))
+        )
+    return v
+
+
+def _ensure_afastamento_status_canonico(v: str | None) -> str | None:
+    if v is None:
+        return v
+    if v not in AFASTAMENTO_STATUSES_VALIDOS:
+        raise ValueError(
+            "status do afastamento deve ser um de: "
+            + ", ".join(sorted(AFASTAMENTO_STATUSES_VALIDOS))
+        )
+    return v
+
+
+class AfastamentoBase(BaseModel):
+    employee_id: int
+    beneficio_tipo: str = Field(default=BENEFICIO_B31, max_length=16)
+    numero_beneficio: str | None = Field(default=None, max_length=32)
+    cid: str | None = Field(default=None, max_length=16)
+    data_inicio: date
+    dcb: date | None = None
+    data_pericia: date | None = None
+    data_retorno: date | None = None
+    status: str = Field(default=AFASTAMENTO_EM_ANDAMENTO, max_length=32)
+    observacoes: str | None = None
+
+    @field_validator("beneficio_tipo")
+    @classmethod
+    def _v_beneficio(cls, v: str | None) -> str | None:
+        return _ensure_beneficio_canonico(v)
+
+    @field_validator("status")
+    @classmethod
+    def _v_status(cls, v: str | None) -> str | None:
+        return _ensure_afastamento_status_canonico(v)
+
+
+class AfastamentoCreate(AfastamentoBase):
+    pass
+
+
+class AfastamentoUpdate(BaseModel):
+    """Update parcial. employee_id nao pode mudar."""
+
+    beneficio_tipo: str | None = Field(default=None, max_length=16)
+    numero_beneficio: str | None = Field(default=None, max_length=32)
+    cid: str | None = Field(default=None, max_length=16)
+    data_inicio: date | None = None
+    dcb: date | None = None
+    data_pericia: date | None = None
+    data_retorno: date | None = None
+    status: str | None = Field(default=None, max_length=32)
+    observacoes: str | None = None
+
+    @field_validator("beneficio_tipo")
+    @classmethod
+    def _v_beneficio(cls, v: str | None) -> str | None:
+        return _ensure_beneficio_canonico(v)
+
+    @field_validator("status")
+    @classmethod
+    def _v_status(cls, v: str | None) -> str | None:
+        return _ensure_afastamento_status_canonico(v)
+
+
+class AfastamentoRead(AfastamentoBase):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    created_at: datetime
+    updated_at: datetime
+    # Campos computados (nao persistidos): preenchidos pelo router.
+    dcb_status: str | None = None  # "vigente" | "vencendo" | "vencido" | None
+    dias_para_dcb: int | None = None
+    pericia_status: str | None = None
+    dias_para_pericia: int | None = None
+
+
+class AfastamentoAlertaDispatchPayload(BaseModel):
+    recipients: list[str] = Field(default_factory=list)
+
+
+class AfastamentoAlertaSummary(BaseModel):
+    total_afastamentos: int
+    sent: int
+    skipped: int
+    failed: int
+    results: list[dict] = Field(default_factory=list)

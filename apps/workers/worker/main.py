@@ -84,6 +84,14 @@ celery_app.conf.beat_schedule = {
         "task": "worker.tasks.dp_sesmt.dispatch_aso_alerts",
         "schedule": crontab(hour="8", minute="5"),
     },
+    # D.4: alertas de DCB / pericia de afastamentos INSS uma vez por dia
+    # (08h10). 5min apos ASO para escalonar burst no Resend.
+    # Idempotente via `dp_afastamentos_alertas_log`
+    # (uniq afastamento_id + kind + janela).
+    "afastamento-alerts-daily": {
+        "task": "worker.tasks.dp_sesmt.dispatch_afastamento_alerts",
+        "schedule": crontab(hour="8", minute="10"),
+    },
 }
 
 

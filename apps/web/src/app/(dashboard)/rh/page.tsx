@@ -27,6 +27,14 @@ export default function RHPage() {
               → Funcionários (cadastro + dossiê)
             </Link>
           </li>
+          <li>
+            <Link
+              href="/rh/afastamentos"
+              className="text-slate-700 hover:text-slate-900 hover:underline"
+            >
+              → Afastamentos INSS (DCB + perícia)
+            </Link>
+          </li>
         </ul>
       </nav>
     </div>

@@ -231,3 +231,114 @@ class EmployeeAsoAlertaLog(Base):
             "employee_id", "janela", name="uq_aso_alerta_employee_janela"
         ),
     )
+
+
+# Tipos de beneficio INSS (Demanda 4 - acompanhamento de afastados).
+# Codigos sao os usados no Meu INSS/eSocial. "OUTRO" cobre licenca-
+# maternidade, ausencia justificada que nao gere beneficio etc.
+BENEFICIO_B31 = "B31"  # auxilio por incapacidade temporaria (auxilio-doenca)
+BENEFICIO_B91 = "B91"  # auxilio-acidente (apos consolidacao de sequela)
+BENEFICIO_B32 = "B32"  # aposentadoria por invalidez
+BENEFICIO_OUTRO = "OUTRO"
+BENEFICIOS_VALIDOS = frozenset(
+    {BENEFICIO_B31, BENEFICIO_B91, BENEFICIO_B32, BENEFICIO_OUTRO}
+)
+
+AFASTAMENTO_EM_ANDAMENTO = "em_andamento"
+AFASTAMENTO_ENCERRADO = "encerrado"
+AFASTAMENTO_REABILITADO = "reabilitado"
+AFASTAMENTO_STATUSES_VALIDOS = frozenset(
+    {AFASTAMENTO_EM_ANDAMENTO, AFASTAMENTO_ENCERRADO, AFASTAMENTO_REABILITADO}
+)
+
+
+class Afastamento(Base):
+    """Acompanhamento de afastamento INSS (Demanda 4).
+
+    Cobre o ciclo do beneficio: data de inicio, DCB (Data de Cessacao do
+    Beneficio = previsao do fim do auxilio), data da pericia medica
+    (proxima ou ultima -- a UI sobreescreve), e status atual.
+
+    Mantemos o numero do beneficio + CID para o RH conseguir abrir o
+    Meu INSS rapidamente sem precisar voltar pro arquivo fisico. Nao
+    e obrigatorio (nem todo afastamento gera beneficio do INSS, ex.:
+    licenca nao remunerada de ate 15 dias).
+
+    Alertas (ver `afastamentos.py`):
+    - DCB se aproximando (30/15/7/0 dias) -- empresa precisa avisar
+      o INSS se vai pedir prorrogacao ou nao.
+    - Pericia medica (15/7/0 dias) -- funcionario precisa comparecer.
+    """
+
+    __tablename__ = "dp_afastamentos"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    employee_id: Mapped[int] = mapped_column(
+        ForeignKey("dp_employees.id", ondelete="CASCADE"), index=True
+    )
+    beneficio_tipo: Mapped[str] = mapped_column(
+        String(16), default=BENEFICIO_B31, server_default=BENEFICIO_B31
+    )
+    numero_beneficio: Mapped[str | None] = mapped_column(
+        String(32), nullable=True
+    )
+    cid: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    data_inicio: Mapped[date] = mapped_column(Date)
+    dcb: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    data_pericia: Mapped[date | None] = mapped_column(
+        Date, nullable=True, index=True
+    )
+    data_retorno: Mapped[date | None] = mapped_column(Date, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default=AFASTAMENTO_EM_ANDAMENTO,
+        server_default=AFASTAMENTO_EM_ANDAMENTO,
+        index=True,
+    )
+    observacoes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AfastamentoAlertaLog(Base):
+    """Idempotencia dos alertas de afastamento INSS.
+
+    Mesma logica do `EmployeeAsoAlertaLog`, com a diferenca que aqui o
+    unique e `(afastamento_id, kind, janela)` -- ha dois tipos de
+    alerta (DCB e pericia) e cada tipo tem suas proprias janelas.
+    """
+
+    __tablename__ = "dp_afastamentos_alertas_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    afastamento_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("dp_afastamentos.id", ondelete="CASCADE"),
+        index=True,
+    )
+    kind: Mapped[str] = mapped_column(String(16))  # "dcb" | "pericia"
+    janela: Mapped[str] = mapped_column(String(32))
+    sent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    recipients: Mapped[list[str]] = mapped_column(JSON)
+    resend_message_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(32), default="sent")
+    error_message: Mapped[str | None] = mapped_column(
+        String(1024), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "afastamento_id",
+            "kind",
+            "janela",
+            name="uq_afastamento_alerta_kind_janela",
+        ),
+    )
