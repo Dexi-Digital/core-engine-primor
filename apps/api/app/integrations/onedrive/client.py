@@ -301,7 +301,20 @@ class OneDriveClient(IntegrationClient):
         prefix = self._root_folder
         sub = relative_path.strip("/")
         full = f"{prefix}/{sub}" if prefix and sub else (prefix or sub)
-        return await self._list_recursive(full, recursive=recursive)
+        items = await self._list_recursive(full, recursive=recursive)
+        # `_list_recursive` devolve paths absolutos a partir da raiz do
+        # drive (ex: `MotorCentral/editais/dp/42/NR12.pdf`). Os consumers
+        # (parser.parse_path, service.run_sync) esperam paths relativos
+        # ao `root_folder` -- o mock ja faz esse strip, manter paridade.
+        root = prefix.strip("/")
+        if root:
+            for item in items:
+                p = item["path"]
+                if p.startswith(root + "/"):
+                    item["path"] = p[len(root) + 1 :]
+                elif p == root:
+                    item["path"] = ""
+        return items
 
     async def _list_recursive(
         self, path: str, *, recursive: bool

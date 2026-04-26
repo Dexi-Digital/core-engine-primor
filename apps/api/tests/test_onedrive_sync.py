@@ -1,13 +1,14 @@
 """Tests pro sync OneDrive -> tabelas de documentos (D1 fase 2)."""
 from __future__ import annotations
 
+import httpx
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.models import AuditLog
-from app.integrations.onedrive.client import OneDriveMockClient
+from app.integrations.onedrive.client import OneDriveClient, OneDriveMockClient
 from app.modules.dp_sesmt.models import Employee, EmployeeDocument
 from app.modules.licitacoes.models import EmpresaDocumento
 from app.modules.manutencao_frota.models import DocumentoVeiculo, Veiculo
@@ -98,6 +99,81 @@ async def test_mock_client_list_folder_nao_recursive() -> None:
     items = await client.list_folder(recursive=False)
     paths = {it["path"] for it in items}
     assert paths == {"SICAF.pdf"}
+
+
+# --------------------------- real OneDriveClient.list_folder --------------
+
+
+@pytest.mark.asyncio
+async def test_real_client_list_folder_strips_root_prefix() -> None:
+    """Regressao: path devolvido deve ser relativo ao `root_folder`.
+
+    O Graph API devolve paths absolutos a partir da raiz do drive
+    (`MotorCentral/editais/dp/42/NR12.pdf`). O parser de sync espera
+    paths relativos (`dp/42/NR12.pdf`). Sem o strip do prefixo, o sync
+    falharia em producao (`MotorCentral` nao e area valida) enquanto o
+    mock passa -- bug silencioso.
+    """
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path.endswith("/oauth2/v2.0/token"):
+            return httpx.Response(
+                200, json={"access_token": "tok", "expires_in": 3600}
+            )
+        # children da raiz MotorCentral/editais
+        if "/root:/MotorCentral/editais:/children" in str(req.url):
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "id": "F1",
+                            "name": "dp",
+                            "folder": {"childCount": 1},
+                        },
+                        {
+                            "id": "I1",
+                            "name": "SICAF.pdf",
+                            "size": 1024,
+                            "lastModifiedDateTime": "2026-01-01T00:00:00Z",
+                        },
+                    ]
+                },
+            )
+        # children da subpasta dp
+        if "/root:/MotorCentral/editais/dp:/children" in str(req.url):
+            return httpx.Response(
+                200,
+                json={
+                    "value": [
+                        {
+                            "id": "I2",
+                            "name": "NR12.pdf",
+                            "size": 2048,
+                            "lastModifiedDateTime": "2026-02-01T00:00:00Z",
+                            # Graph manda `parentReference.path` mas o nosso
+                            # cliente nao le isso -- constroi path ele mesmo.
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(404)
+
+    client = OneDriveClient(
+        tenant_id="t",
+        client_id="c",
+        client_secret="s",
+        drive_id="d",
+        root_folder="MotorCentral/editais",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        items = await client.list_folder()
+    finally:
+        await client.aclose()
+
+    paths = {it["path"] for it in items}
+    assert paths == {"SICAF.pdf", "dp/NR12.pdf"}
 
 
 # --------------------------- service.run_sync ------------------------------
