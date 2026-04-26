@@ -32,6 +32,9 @@ type Employee = {
   bairro: string | null;
   cidade: string | null;
   uf: string | null;
+  aso_data: string | null;
+  aso_validade: string | null;
+  aso_status: string | null;
   empregos_anteriores: EmpregoAnterior[];
 };
 
@@ -62,13 +65,50 @@ const STATUS_BADGE: Record<string, string> = {
   desligado: "bg-slate-200 text-slate-600",
 };
 
+// Cores das badges de ASO. Convencao mesma do D.6 (cendoes):
+// vencido = vermelho, vencendo = ambar, vigente = verde, sem_validade = neutro.
+const ASO_BADGE: Record<string, string> = {
+  vigente: "bg-emerald-100 text-emerald-700",
+  vencendo: "bg-amber-100 text-amber-700",
+  vencido: "bg-red-100 text-red-700",
+  sem_validade: "bg-slate-100 text-slate-500",
+};
+
+const ASO_FILTROS: Array<[string, string]> = [
+  ["vigente", "Vigente"],
+  ["vencendo", "Vencendo (<=30d)"],
+  ["vencido", "Vencido"],
+  ["sem_validade", "Sem validade"],
+];
+
+function asoBadgeLabel(emp: Employee): string {
+  const status = emp.aso_status ?? "sem_validade";
+  if (status === "sem_validade" || !emp.aso_validade) return "sem ASO";
+  // Calcula dias restantes; se ja vencido, mostra "vencido X d".
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const validade = new Date(`${emp.aso_validade}T00:00:00`);
+  const days = Math.round(
+    (validade.getTime() - today.getTime()) / (1000 * 60 * 60 * 24),
+  );
+  if (status === "vencido") return `vencido ha ${Math.abs(days)}d`;
+  if (status === "vencendo") return `vence em ${days}d`;
+  return "vigente";
+}
+
 async function fetchEmployees(
-  params: { status?: string; obra?: string; search?: string } = {},
+  params: {
+    status?: string;
+    obra?: string;
+    search?: string;
+    aso_status?: string;
+  } = {},
 ): Promise<EmployeeListResponse | null> {
   const qs = new URLSearchParams();
   if (params.status) qs.set("status", params.status);
   if (params.obra) qs.set("obra", params.obra);
   if (params.search) qs.set("search", params.search);
+  if (params.aso_status) qs.set("aso_status", params.aso_status);
   const path = `/api/v1/dp-sesmt/employees${qs.toString() ? `?${qs}` : ""}`;
   try {
     return await apiFetch<EmployeeListResponse>(path);
@@ -104,6 +144,10 @@ async function createEmployee(formData: FormData): Promise<void> {
     bairro: String(formData.get("bairro") ?? "").trim() || null,
     cidade: String(formData.get("cidade") ?? "").trim() || null,
     uf: String(formData.get("uf") ?? "").trim() || null,
+    aso_data: String(formData.get("aso_data") ?? "").trim() || null,
+    aso_validade: String(formData.get("aso_validade") ?? "").trim() || null,
+    aso_resultado:
+      String(formData.get("aso_resultado") ?? "").trim() || null,
     observacoes: String(formData.get("observacoes") ?? "").trim() || null,
   };
   await apiFetch("/api/v1/dp-sesmt/employees", {
@@ -124,7 +168,12 @@ async function deleteEmployee(formData: FormData): Promise<void> {
 export default async function FuncionariosPage({
   searchParams,
 }: {
-  searchParams: Promise<{ status?: string; obra?: string; search?: string }>;
+  searchParams: Promise<{
+    status?: string;
+    obra?: string;
+    search?: string;
+    aso_status?: string;
+  }>;
 }) {
   const params = await searchParams;
   const data = await fetchEmployees(params);
@@ -193,6 +242,23 @@ export default async function FuncionariosPage({
             className="rounded border border-slate-300 px-2 py-1 text-sm"
           />
         </label>
+        <label className="flex flex-col gap-1 text-xs">
+          <span className="font-medium uppercase tracking-wide text-slate-500">
+            ASO
+          </span>
+          <select
+            name="aso_status"
+            defaultValue={params.aso_status ?? ""}
+            className="rounded border border-slate-300 px-2 py-1 text-sm"
+          >
+            <option value="">— todos —</option>
+            {ASO_FILTROS.map(([v, l]) => (
+              <option key={v} value={v}>
+                {l}
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="flex items-end">
           <button
             type="submit"
@@ -229,6 +295,7 @@ export default async function FuncionariosPage({
                 <th className="px-4 py-2 text-left">Cargo</th>
                 <th className="px-4 py-2 text-left">Obra / Setor</th>
                 <th className="px-4 py-2 text-left">Status</th>
+                <th className="px-4 py-2 text-left">ASO</th>
                 <th className="px-4 py-2 text-left">Admissão</th>
                 <th className="px-4 py-2 text-right">Ações</th>
               </tr>
@@ -266,6 +333,17 @@ export default async function FuncionariosPage({
                       }`}
                     >
                       {emp.status}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2">
+                    <span
+                      className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
+                        ASO_BADGE[emp.aso_status ?? "sem_validade"] ??
+                        "bg-slate-100 text-slate-500"
+                      }`}
+                      title={emp.aso_validade ?? undefined}
+                    >
+                      {asoBadgeLabel(emp)}
                     </span>
                   </td>
                   <td className="px-4 py-2 text-xs">
@@ -326,6 +404,14 @@ export default async function FuncionariosPage({
 
           <Field name="cidade" label="Cidade" />
           <Field name="uf" label="UF" />
+
+          <Field name="aso_data" label="ASO - data do exame" type="date" />
+          <Field name="aso_validade" label="ASO - validade" type="date" />
+          <Field
+            name="aso_resultado"
+            label="ASO - resultado"
+            placeholder="apto / inapto / apto_restricoes"
+          />
 
           <label className="md:col-span-3 flex flex-col gap-1 text-xs">
             <span className="font-medium uppercase tracking-wide text-slate-500">

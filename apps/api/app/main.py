@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import get_settings
 from app.core.logging import configure_logging
+from app.core.middleware import CorrelationIdMiddleware
 from app.modules.dp_sesmt.router import router as dp_sesmt_router
 from app.modules.financeiro_contratos.router import router as financeiro_router
 from app.modules.fiscal.router import router as fiscal_router
@@ -15,6 +16,7 @@ from app.modules.ia_tools.router import router as ia_tools_router
 from app.modules.licitacoes.certidoes_router import router as certidoes_router
 from app.modules.licitacoes.router import router as licitacoes_router
 from app.modules.manutencao_frota.router import router as manutencao_router
+from app.modules.observability.router import router as observability_router
 
 
 @asynccontextmanager
@@ -59,13 +61,18 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # Ordem importa: CORS por fora, correlation por dentro -- assim
+    # o `correlation_id` ja esta bound quando o handler logga, e o
+    # OPTIONS preflight do CORS nao consome o ID atoa.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["X-Correlation-ID"],
     )
+    app.add_middleware(CorrelationIdMiddleware)
 
     @app.get("/health", tags=["meta"])
     async def health() -> dict[str, str]:
@@ -84,6 +91,11 @@ def create_app() -> FastAPI:
     app.include_router(licitacoes_router, prefix="/api/v1/licitacoes", tags=["licitacoes"])
     app.include_router(ia_tools_router, prefix="/api/v1/ia", tags=["ia-tools"])
     app.include_router(fiscal_router, prefix="/api/v1/fiscal", tags=["fiscal"])
+    app.include_router(
+        observability_router,
+        prefix="/api/v1/observability",
+        tags=["observability"],
+    )
 
     return app
 

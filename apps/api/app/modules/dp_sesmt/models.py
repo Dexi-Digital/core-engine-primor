@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import date, datetime
 
 from sqlalchemy import (
+    JSON,
     Boolean,
     Date,
     DateTime,
@@ -20,6 +21,7 @@ from sqlalchemy import (
     Numeric,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -185,4 +187,47 @@ class DossieConsultaLog(Base):
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class EmployeeAsoAlertaLog(Base):
+    """Idempotencia do cron diario de alertas de ASO (A.2).
+
+    Mesmo padrao do `CertidaoAlertaLog`: UniqueConstraint
+    `(employee_id, janela)` impede que o cron diario reenvie email da
+    mesma janela do mesmo funcionario. As janelas (30/15/7/0) sao
+    armazenadas como string ("30d", "15d"...) para manter compat com
+    a serializacao usada no service de certidoes.
+
+    Status:
+    - `sent`: email entregue ao Resend (resend_message_id presente)
+    - `failed`: erro ao enviar (error_message presente). Cron tenta
+      novamente na proxima execucao -- a row e atualizada in-place.
+    """
+
+    __tablename__ = "dp_aso_alertas_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    employee_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("dp_employees.id", ondelete="CASCADE"),
+        index=True,
+    )
+    janela: Mapped[str] = mapped_column(String(32))
+    sent_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    recipients: Mapped[list[str]] = mapped_column(JSON)
+    resend_message_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
+    status: Mapped[str] = mapped_column(String(32), default="sent")
+    error_message: Mapped[str | None] = mapped_column(
+        String(1024), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "employee_id", "janela", name="uq_aso_alerta_employee_janela"
+        ),
     )
