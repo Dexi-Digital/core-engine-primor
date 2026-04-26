@@ -159,6 +159,21 @@ async def update_user_endpoint(
     user = await auth_service.get_user_by_id(db, user_id)
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Usuario nao encontrado")
+    # Anti-lockout: admin nao pode se auto-rebaixar (role) nem se
+    # auto-desativar (is_active=False). Sem isso, o unico admin do
+    # sistema poderia se trancar fora -- recovery exigiria intervencao
+    # direta no DB ou ADMIN_EMAIL diferente no env (idempotente).
+    if user.id == actor.id:
+        if payload.role is not None and payload.role != actor.role:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Nao e possivel alterar o proprio role (use outro admin)",
+            )
+        if payload.is_active is not None and payload.is_active != actor.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Nao e possivel alterar o proprio is_active (use outro admin)",
+            )
     return await auth_service.update_user(
         db,
         user,
