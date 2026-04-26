@@ -9,7 +9,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.models import AuditLog
-from app.modules.diagnostico.checklists import applicable_dp_requirements
+from app.modules.diagnostico.checklists import (
+    CHECKLIST_DP_FUNCIONARIO,
+    applicable_dp_requirements,
+)
 from app.modules.diagnostico.models import (
     AREA_DP,
     AREA_EMPRESA,
@@ -29,6 +32,7 @@ from app.modules.dp_sesmt.models import (
     DOC_EMP_NR18,
     DOC_EMP_NR35,
     DOC_EMP_OS,
+    DOC_EMP_TIPOS_VALIDOS,
     DOC_EMP_TOXICOLOGICO,
     Employee,
     EmployeeDocument,
@@ -126,6 +130,32 @@ async def _create_obra(
 
 
 # ----------------------------- domain helpers tests -----------------------
+
+
+def test_checklist_dp_doc_tipos_aceitos_pela_api() -> None:
+    """Regressao: tipos do checklist DP precisam ser aceitos pela
+    API de EmployeeDocument.
+
+    Sem isso, requirements como CTPS / CONTRATO_TRABALHO /
+    FICHA_REGISTRO seriam impossiveis de satisfazer (POST com tipo
+    nao listado em DOC_EMP_TIPOS_VALIDOS volta 422), entao todo
+    funcionario apareceria com `ausente` permanente para esses
+    requirements -- inflando o ausente_count e deflacionando a %
+    de conformidade.
+
+    ASO continua flat em `Employee.aso_*` (compat com A.2 alertas em
+    prod) e por isso e o unico tipo do checklist DP que nao precisa
+    estar em DOC_EMP_TIPOS_VALIDOS.
+    """
+    tipos_no_checklist = {req.doc_tipo for req in CHECKLIST_DP_FUNCIONARIO}
+    # ASO e populado em colunas dedicadas em Employee, nao em
+    # EmployeeDocument -- ver runner._evaluate_dp_employee.
+    tipos_via_employee_document = tipos_no_checklist - {"ASO"}
+    faltantes = tipos_via_employee_document - DOC_EMP_TIPOS_VALIDOS
+    assert not faltantes, (
+        f"Tipos do checklist DP que a API rejeita: {sorted(faltantes)}. "
+        "Adicione em DOC_EMP_TIPOS_VALIDOS + DOC_EMP_LABELS."
+    )
 
 
 @pytest.mark.asyncio

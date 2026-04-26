@@ -376,6 +376,12 @@ class AfastamentoAlertaLog(Base):
 # A coluna `tipo` no banco e String livre, para permitir adicionar novos
 # tipos sem migration. Esses sao os tipos esperados pelo motor de
 # diagnostico documental (D1) -- ver app.modules.diagnostico.checklists.
+# Documentos contratuais basicos (CLT) -- exigidos para todo funcionario
+# CLT (avaliados pelo checklist DP do diagnostico documental).
+DOC_EMP_CTPS = "CTPS"  # Carteira de Trabalho e Previdencia Social
+DOC_EMP_CONTRATO_TRABALHO = "CONTRATO_TRABALHO"
+DOC_EMP_FICHA_REGISTRO = "FICHA_REGISTRO"
+
 DOC_EMP_NR10 = "NR10"  # Eletricidade -- so se is_eletricista
 DOC_EMP_NR12 = "NR12"  # Maquinas/equipamentos -- so se is_operador_maquina
 DOC_EMP_NR18 = "NR18"  # Construcao civil -- obrigatorio em obras
@@ -397,6 +403,9 @@ DOC_EMP_OUTRO = "OUTRO"
 
 DOC_EMP_TIPOS_VALIDOS: frozenset[str] = frozenset(
     {
+        DOC_EMP_CTPS,
+        DOC_EMP_CONTRATO_TRABALHO,
+        DOC_EMP_FICHA_REGISTRO,
         DOC_EMP_NR10,
         DOC_EMP_NR12,
         DOC_EMP_NR18,
@@ -419,6 +428,9 @@ DOC_EMP_TIPOS_VALIDOS: frozenset[str] = frozenset(
 )
 
 DOC_EMP_LABELS: dict[str, str] = {
+    DOC_EMP_CTPS: "CTPS (Carteira de Trabalho)",
+    DOC_EMP_CONTRATO_TRABALHO: "Contrato de trabalho",
+    DOC_EMP_FICHA_REGISTRO: "Ficha de registro",
     DOC_EMP_NR10: "NR-10 (Eletricidade)",
     DOC_EMP_NR12: "NR-12 (Maquinas/Equipamentos)",
     DOC_EMP_NR18: "NR-18 (Construcao Civil)",

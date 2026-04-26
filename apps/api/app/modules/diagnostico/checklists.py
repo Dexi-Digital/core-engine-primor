@@ -19,8 +19,11 @@ from dataclasses import dataclass, field
 from app.modules.dp_sesmt.models import (
     DOC_EMP_ACORDO_COMPENSACAO,
     DOC_EMP_CONTRATO_EXPERIENCIA,
+    DOC_EMP_CONTRATO_TRABALHO,
+    DOC_EMP_CTPS,
     DOC_EMP_DECL_FAMILIA,
     DOC_EMP_FICHA_EPI,
+    DOC_EMP_FICHA_REGISTRO,
     DOC_EMP_FICHA_SALARIO_FAMILIA,
     DOC_EMP_LABELS,
     DOC_EMP_LISTA_INTEGRACAO,
@@ -97,18 +100,18 @@ CHECKLIST_DP_FUNCIONARIO: list[DocumentRequirement] = [
     ),
     DocumentRequirement(
         area="dp",
-        doc_tipo="CTPS",
-        doc_label="CTPS (Carteira de Trabalho)",
+        doc_tipo=DOC_EMP_CTPS,
+        doc_label=DOC_EMP_LABELS[DOC_EMP_CTPS],
     ),
     DocumentRequirement(
         area="dp",
-        doc_tipo="CONTRATO_TRABALHO",
-        doc_label="Contrato de trabalho",
+        doc_tipo=DOC_EMP_CONTRATO_TRABALHO,
+        doc_label=DOC_EMP_LABELS[DOC_EMP_CONTRATO_TRABALHO],
     ),
     DocumentRequirement(
         area="dp",
-        doc_tipo="FICHA_REGISTRO",
-        doc_label="Ficha de registro",
+        doc_tipo=DOC_EMP_FICHA_REGISTRO,
+        doc_label=DOC_EMP_LABELS[DOC_EMP_FICHA_REGISTRO],
     ),
     DocumentRequirement(
         area="dp",
