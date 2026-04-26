@@ -42,9 +42,26 @@ type FormState = {
   observacoes: string;
 };
 
+/**
+ * Data de hoje em ISO yyyy-mm-dd, NO TIMEZONE LOCAL do dispositivo.
+ *
+ * `new Date().toISOString().slice(0, 10)` converte para UTC antes de
+ * formatar -- na pratica, depois das 21h em horario de Brasilia
+ * (UTC-3) o default vinha como "amanha". Apontador de obra em turno
+ * da noite assinava parte com data errada e a query de horimetro
+ * anterior em service.py:964 (ordenada por data) ficava furada.
+ */
+function todayISOLocal(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 const EMPTY: FormState = {
   veiculo_id: "",
-  data: new Date().toISOString().slice(0, 10),
+  data: todayISOLocal(),
   operador: "",
   obra: "",
   horimetro_inicio: "",

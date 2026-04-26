@@ -774,7 +774,14 @@ async def create_parte_diaria_manual(
     Retorna `(parte, criada_agora)` -- caller usa o flag pra decidir
     o status code (201 vs 200).
     """
-    client_uuid = payload.get("client_uuid")
+    # Normaliza client_uuid: trata string vazia como ausente. Pydantic
+    # nao tem min_length na schema (campo opcional), e "" passa
+    # validacao mas e gravado como NOT NULL no banco -- caindo no
+    # unique parcial e gerando IntegrityError em qualquer segundo
+    # POST com "". Tratar como None aqui evita esse modo de falha
+    # tanto no fast-path quanto no recovery do TOCTOU.
+    raw_uuid = payload.get("client_uuid")
+    client_uuid = raw_uuid or None
     if client_uuid:
         existing = await find_parte_diaria_by_client_uuid(db, client_uuid)
         if existing is not None:

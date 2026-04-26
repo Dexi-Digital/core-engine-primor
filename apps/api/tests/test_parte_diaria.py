@@ -1208,3 +1208,33 @@ async def test_consumo_tiebreaker_por_id_quando_mesma_data(
     assert consumo is not None
     # Tarde (id maior) escolhida -- nao cruza marco de 250h.
     assert consumo["alerta_manutencao_preventiva"] is False
+
+
+@pytest.mark.asyncio
+async def test_manual_post_client_uuid_string_vazia_tratada_como_ausente(
+    api_client: AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    """Regressao do finding Devin Review #24: client_uuid="" passa
+    pela validacao Pydantic mas e gravado como NOT NULL no PG. Em
+    qualquer segundo POST com "", o unique parcial dispara
+    IntegrityError e o recovery (`if client_uuid:`) e falsy --
+    deveria voltar 500. Service deve normalizar "" -> None antes
+    do flow para evitar o modo de falha."""
+    res1 = await api_client.post(
+        "/api/v1/manutencao-frota/partes-diarias/manual",
+        json={"data": "2025-09-20", "operador": "primeiro", "client_uuid": ""},
+        headers=auth_headers,
+    )
+    assert res1.status_code == 201, res1.text
+
+    # Segundo POST com mesmo client_uuid="": antes do fix isso
+    # quebrava com 500 no IntegrityError. Apos o fix "" e tratado
+    # como None, ambos POSTs criam rows distintas (sem dedup).
+    res2 = await api_client.post(
+        "/api/v1/manutencao-frota/partes-diarias/manual",
+        json={"data": "2025-09-20", "operador": "segundo", "client_uuid": ""},
+        headers=auth_headers,
+    )
+    assert res2.status_code == 201, res2.text
+    assert res2.json()["id"] != res1.json()["id"]
