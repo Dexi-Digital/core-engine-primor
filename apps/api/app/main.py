@@ -27,6 +27,7 @@ from app.modules.licitacoes.router import router as licitacoes_router
 from app.modules.manutencao_frota.router import router as manutencao_router
 from app.modules.obras.router import router as obras_router
 from app.modules.observability.router import router as observability_router
+from app.modules.onedrive_sync.router import router as onedrive_sync_router
 
 
 @asynccontextmanager
@@ -121,6 +122,7 @@ def create_app() -> FastAPI:
     app.include_router(obras_router)
     app.include_router(dp_employee_docs_router)
     app.include_router(empresa_documentos_router)
+    app.include_router(onedrive_sync_router)
 
     return app
 

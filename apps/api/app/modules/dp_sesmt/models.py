@@ -481,6 +481,24 @@ class EmployeeDocument(Base):
         String(32), default="manual", server_default="manual"
     )
 
+    # --- Sync OneDrive (D1 fase 2) ---
+    # Item id no Microsoft Graph, quando a row foi criada/atualizada via
+    # sync da pasta OneDrive. Unique parcial `IS NOT NULL` no banco
+    # (ver migration dd3e4f5a6b7c) garante idempotencia.
+    onedrive_item_id: Mapped[str | None] = mapped_column(
+        String(128), nullable=True
+    )
+    onedrive_path: Mapped[str | None] = mapped_column(
+        String(1024), nullable=True
+    )
+    onedrive_last_modified: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    onedrive_sync_run_id: Mapped[int | None] = mapped_column(
+        ForeignKey("onedrive_sync_runs.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
