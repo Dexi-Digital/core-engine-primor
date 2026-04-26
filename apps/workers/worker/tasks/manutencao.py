@@ -81,7 +81,61 @@ def rpa_despachante(placa: str) -> dict[str, object]:
     return {"stub": True, "placa": placa}
 
 
-@celery_app.task(name="worker.tasks.manutencao.ocr_parte_diaria")
-def ocr_parte_diaria(file_key: str) -> dict[str, object]:
-    # Stub -- Modulo B.2 ainda nao implementado.
-    return {"stub": True, "file_key": file_key}
+@celery_app.task(
+    name="worker.tasks.manutencao.ocr_parte_diaria",
+    bind=True,
+    autoretry_for=(ConnectionError, TimeoutError),
+    retry_kwargs={"max_retries": 3},
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+)
+def ocr_parte_diaria(self, parte_id: int) -> dict[str, object]:
+    """Roda OCR de uma parte diaria (Modulo B.2) via Document AI.
+
+    Args:
+        parte_id: PK em `partes_diarias`.
+
+    Retorna `{parte_id, ocr_status, source, error_msg}` ou
+    `{error: ...}` se carga do app falhou. O service nao propaga
+    excecao do Document AI -- guarda como `ocr_status='erro'`.
+    Retentamos so em falhas de transporte/timeout (autoretry_for).
+    """
+    return asyncio.run(_run_ocr_parte_diaria(parte_id))
+
+
+async def _run_ocr_parte_diaria(parte_id: int) -> dict[str, object]:
+    try:
+        from pathlib import Path
+
+        from app.core.config import get_settings
+        from app.core.db import SessionLocal
+        from app.modules.licitacoes.storage import LocalStorage
+        from app.modules.manutencao_frota.service import (
+            get_documentai_client,
+            processar_ocr_parte_diaria,
+        )
+    except ImportError as exc:  # pragma: no cover
+        return {"error": f"API package not available in worker: {exc}"}
+
+    settings = get_settings()
+    client = get_documentai_client(settings)
+    # Worker nao usa OneDrive (geraria pool TCP por task) -- usa o
+    # backend local mesmo. Caso queira OneDrive, plug-in similar ao
+    # router/get_partes_diarias_storage. Em prod, normalmente o anexo
+    # esta acessivel via FS compartilhado entre API e worker.
+    base = Path(settings.editais_storage_path).parent
+    storage = LocalStorage(base / settings.parte_diaria_storage_subdir)
+    try:
+        async with SessionLocal() as session:
+            parte = await processar_ocr_parte_diaria(
+                session, parte_id, client=client, storage=storage
+            )
+        return {
+            "parte_id": parte.id,
+            "ocr_status": parte.ocr_status,
+            "source": parte.ocr_source,
+            "error_msg": parte.ocr_error_msg,
+        }
+    finally:
+        await client.aclose()

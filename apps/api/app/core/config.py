@@ -95,6 +95,21 @@ class Settings(BaseSettings):
     infosimples_token: str | None = Field(default=None)
     infosimples_base_url: str = Field(default="https://api.infosimples.com")
 
+    # Google Document AI (Modulo B.2 -- OCR de Parte Diaria).
+    # Sem credenciais (qualquer um dos 3 vazio), o adapter cai no
+    # `GoogleDocumentAIMockClient` -- mesmo padrao Infosimples/Dominio.
+    # `credentials_json` e o JSON inteiro da service account, em uma
+    # unica string (escape de `\n` no env e ok). `processor_id` e o
+    # identificador do processor criado no console Document AI.
+    google_documentai_credentials_json: str | None = Field(default=None)
+    gcp_project_id: str | None = Field(default=None)
+    documentai_processor_id: str | None = Field(default=None)
+    documentai_location: str = Field(default="us")
+    # Subpasta no storage onde os anexos das partes diarias ficam.
+    parte_diaria_storage_subdir: str = Field(
+        default="MotorCentral/partes-diarias"
+    )
+
 
 @lru_cache
 def get_settings() -> Settings:

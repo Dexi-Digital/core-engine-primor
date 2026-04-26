@@ -16,12 +16,26 @@ Endpoints:
 from __future__ import annotations
 
 import logging
-from typing import Any
+from collections.abc import AsyncIterator, Awaitable, Callable
+from pathlib import Path
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    UploadFile,
+)
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.db import get_db
+from app.integrations.onedrive.client import build_onedrive_client
+from app.integrations.onedrive.storage import OneDriveStorage
+from app.modules.licitacoes.storage import EditaisStorage, LocalStorage
 from app.modules.manutencao_frota import service
 from app.modules.manutencao_frota.schemas import (
     ConsultaDetranListResponse,
@@ -31,6 +45,9 @@ from app.modules.manutencao_frota.schemas import (
     DocumentoVeiculoRead,
     DocumentoVeiculoUpdate,
     ModuleStatus,
+    ParteDiariaListResponse,
+    ParteDiariaRead,
+    ParteDiariaUpdate,
     VeiculoCreate,
     VeiculoListResponse,
     VeiculoRead,
@@ -255,3 +272,226 @@ async def list_consultas_global_endpoint(
         items=[ConsultaDetranRead.model_validate(r) for r in rows],
         total=total,
     )
+
+
+# --- B.2 -- Parte Diaria (OCR via Document AI) ----------------------------
+
+
+async def get_partes_diarias_storage() -> AsyncIterator[EditaisStorage]:
+    """Storage dedicado para anexos de parte diaria.
+
+    Mesmo backend (`STORAGE_BACKEND=local|onedrive`) do storage de
+    editais/fiscal, em pasta separada (`parte_diaria_storage_subdir`)
+    para nao misturar namespaces. Local: filesystem; OneDrive: pasta
+    no drive Microsoft 365 do tenant.
+    """
+    settings = get_settings()
+    backend = (settings.storage_backend or "local").lower()
+    if backend == "onedrive":
+        client = build_onedrive_client(
+            tenant_id=settings.ms_graph_tenant_id,
+            client_id=settings.ms_graph_client_id,
+            client_secret=settings.ms_graph_client_secret,
+            drive_id=settings.ms_graph_drive_id,
+            root_folder=settings.parte_diaria_storage_subdir,
+        )
+        try:
+            yield OneDriveStorage(client)
+        finally:
+            await client.aclose()
+        return
+    base = Path(settings.editais_storage_path).parent
+    yield LocalStorage(base / settings.parte_diaria_storage_subdir)
+
+
+def get_documentai_dep() -> Any:
+    """Singleton-friendly accessor para o `GoogleDocumentAIClient`.
+
+    Mantido para retrocompatibilidade mas nao e mais usado pelo router
+    (OCR roda no worker via `get_ocr_dispatcher`). Util caso alguem
+    monte um endpoint custom que chame OCR sincrono fora do flow B.2.
+    """
+    return service.get_documentai_singleton()
+
+
+# AGENTS.md: OCR roda SEMPRE no worker (Celery). O dispatcher e
+# injetado para que testes possam substituir por uma versao "eager"
+# (executa OCR sincrono in-process, no mesmo db session da request),
+# sem precisar de Redis/celery rodando.
+OcrDispatcher = Callable[[int], Awaitable[None]]
+
+
+def get_ocr_dispatcher() -> OcrDispatcher:
+    async def _dispatch(parte_id: int) -> None:
+        # O `send_task` da Celery e sync e tipicamente retorna em <5ms
+        # (so escreve no broker Redis) -- nao bloqueia request.
+        service.enqueue_ocr_parte_diaria(parte_id)
+
+    return _dispatch
+
+
+@router.post(
+    "/partes-diarias",
+    response_model=ParteDiariaRead,
+    status_code=202,
+)
+async def upload_parte_diaria_endpoint(
+    arquivo: Annotated[UploadFile, File(description="PDF/JPG/PNG da parte diaria")],
+    veiculo_id: Annotated[int | None, Form()] = None,
+    obra: Annotated[str | None, Form()] = None,
+    db: AsyncSession = Depends(get_db),
+    storage: EditaisStorage = Depends(get_partes_diarias_storage),
+    dispatch_ocr: OcrDispatcher = Depends(get_ocr_dispatcher),
+) -> ParteDiariaRead:
+    """Upload do anexo + dispatch da task OCR para o worker (fila `manutencao`).
+
+    Conforme AGENTS.md, OCR roda SEMPRE no worker -- nunca bloqueia a API.
+    O endpoint:
+      1. Cria a row com `ocr_status='pendente'` e persiste o anexo.
+      2. Aplica pre-fill manual (`veiculo_id`/`obra` opcionais).
+      3. Dispatcha `worker.tasks.manutencao.ocr_parte_diaria` por nome.
+      4. Devolve 202 + ParteDiariaRead com status `pendente`.
+
+    A UI faz polling/refresh para ver o status virar `processado`/`erro`.
+    Falha do dispatcher (broker down) marca a row como `erro` para o
+    operador poder retentar via `/reprocessar` quando o broker voltar.
+    """
+    content = await arquivo.read()
+    if not content:
+        raise HTTPException(status_code=422, detail="arquivo vazio")
+    parte = await service.create_parte_diaria(
+        db,
+        content=content,
+        filename=arquivo.filename or "parte-diaria.pdf",
+        mime_type=arquivo.content_type or "application/octet-stream",
+        storage=storage,
+    )
+    # Pre-fill por form fields (operador conhece o veiculo/obra antes
+    # mesmo do OCR rodar). Assim, se OCR falhar, dados manuais nao
+    # somem.
+    if veiculo_id or obra:
+        await service.update_parte_diaria(
+            db,
+            parte.id,
+            {k: v for k, v in {"veiculo_id": veiculo_id, "obra": obra}.items() if v},
+        )
+    try:
+        await dispatch_ocr(parte.id)
+    except Exception as exc:
+        # Broker indisponivel: marca como erro com mensagem clara para
+        # o operador. Anexo ja esta persistido entao reprocessar funciona.
+        logger.warning("Falha ao enfileirar OCR parte_diaria=%s: %s", parte.id, exc)
+        await service.mark_parte_diaria_erro(
+            db, parte.id, f"falha ao enfileirar OCR: {exc}"
+        )
+    parte = await service.get_parte_diaria(db, parte.id)
+    return ParteDiariaRead.model_validate(parte)
+
+
+@router.get(
+    "/partes-diarias",
+    response_model=ParteDiariaListResponse,
+)
+async def list_partes_diarias_endpoint(
+    veiculo_id: int | None = Query(None),
+    obra: str | None = Query(None, max_length=200),
+    ocr_status: str | None = Query(None, max_length=16),
+    placa: str | None = Query(None, max_length=8),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> ParteDiariaListResponse:
+    offset = (page - 1) * page_size
+    rows, total = await service.list_partes_diarias(
+        db,
+        veiculo_id=veiculo_id,
+        obra=obra,
+        ocr_status=ocr_status,
+        placa=placa,
+        limit=page_size,
+        offset=offset,
+    )
+    return ParteDiariaListResponse(
+        items=[ParteDiariaRead.model_validate(r) for r in rows],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.get(
+    "/partes-diarias/{parte_id}",
+    response_model=ParteDiariaRead,
+)
+async def get_parte_diaria_endpoint(
+    parte_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> ParteDiariaRead:
+    row = await service.get_parte_diaria(db, parte_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="parte_diaria nao encontrada")
+    return ParteDiariaRead.model_validate(row)
+
+
+@router.patch(
+    "/partes-diarias/{parte_id}",
+    response_model=ParteDiariaRead,
+)
+async def update_parte_diaria_endpoint(
+    parte_id: int,
+    payload: ParteDiariaUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> ParteDiariaRead:
+    fields = payload.model_dump(exclude_unset=True)
+    row = await service.update_parte_diaria(db, parte_id, fields)
+    if row is None:
+        raise HTTPException(status_code=404, detail="parte_diaria nao encontrada")
+    return ParteDiariaRead.model_validate(row)
+
+
+@router.delete(
+    "/partes-diarias/{parte_id}",
+    status_code=204,
+)
+async def delete_parte_diaria_endpoint(
+    parte_id: int,
+    db: AsyncSession = Depends(get_db),
+    storage: EditaisStorage = Depends(get_partes_diarias_storage),
+) -> None:
+    ok = await service.delete_parte_diaria(db, parte_id, storage=storage)
+    if not ok:
+        raise HTTPException(status_code=404, detail="parte_diaria nao encontrada")
+
+
+@router.post(
+    "/partes-diarias/{parte_id}/reprocessar",
+    response_model=ParteDiariaRead,
+    status_code=202,
+)
+async def reprocessar_parte_diaria_endpoint(
+    parte_id: int,
+    db: AsyncSession = Depends(get_db),
+    dispatch_ocr: OcrDispatcher = Depends(get_ocr_dispatcher),
+) -> ParteDiariaRead:
+    """Re-dispatcha a task OCR (util pos-erro ou troca de processor).
+
+    Igual ao upload: roda no worker via Celery, nao bloqueia a API.
+    Devolve 202 com a row em `ocr_status='pendente'` -- a UI polla
+    ate virar `processado` ou `erro`.
+    """
+    parte = await service.get_parte_diaria(db, parte_id)
+    if parte is None:
+        raise HTTPException(status_code=404, detail="parte_diaria nao encontrada")
+    # Reseta status para pendente (caso esteja em 'erro' ou 'processado').
+    await service.update_parte_diaria(
+        db, parte_id, {"ocr_status": "pendente", "ocr_error_msg": None}
+    )
+    try:
+        await dispatch_ocr(parte_id)
+    except Exception as exc:
+        logger.warning("Falha ao re-enfileirar OCR parte_diaria=%s: %s", parte_id, exc)
+        await service.mark_parte_diaria_erro(
+            db, parte_id, f"falha ao enfileirar OCR: {exc}"
+        )
+    parte = await service.get_parte_diaria(db, parte_id)
+    return ParteDiariaRead.model_validate(parte)

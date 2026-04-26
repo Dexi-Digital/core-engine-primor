@@ -24,6 +24,12 @@ export default function ManutencaoPage() {
         >
           → Cadastro de veículos
         </Link>
+        <Link
+          href="/manutencao/partes-diarias"
+          className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-400 hover:text-slate-900"
+        >
+          → Partes diárias (OCR)
+        </Link>
       </nav>
     </div>
   );

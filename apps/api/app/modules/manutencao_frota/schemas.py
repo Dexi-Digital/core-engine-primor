@@ -240,3 +240,75 @@ class ConsultaDetranRead(BaseModel):
 class ConsultaDetranListResponse(BaseModel):
     items: list[ConsultaDetranRead]
     total: int
+
+
+# --- B.2 -- Parte Diaria (OCR via Document AI) -----------------------------
+
+
+def _ensure_parte_status(v: str) -> str:
+    from app.modules.manutencao_frota.models import PARTE_STATUSES
+
+    if v not in PARTE_STATUSES:
+        raise ValueError(
+            "ocr_status deve ser um de: " + ", ".join(sorted(PARTE_STATUSES))
+        )
+    return v
+
+
+class ParteDiariaUpdate(BaseModel):
+    """Revisao manual dos campos extraidos pelo OCR.
+
+    Todos opcionais -- o operador corrige so o que precisar. `ocr_status`
+    deixa marcar `revisado` apos conferencia.
+    """
+
+    data: date | None = None
+    veiculo_id: int | None = None
+    operador: str | None = Field(default=None, max_length=200)
+    obra: str | None = Field(default=None, max_length=200)
+    equipamento: str | None = Field(default=None, max_length=200)
+    placa: str | None = Field(default=None, max_length=8)
+    horimetro_inicio: Decimal | None = None
+    horimetro_fim: Decimal | None = None
+    km_inicio: int | None = None
+    km_fim: int | None = None
+    observacoes: str | None = None
+    ocr_status: str | None = None
+
+    @field_validator("ocr_status")
+    @classmethod
+    def _validate_status(cls, v: str | None) -> str | None:
+        return _ensure_parte_status(v) if v is not None else None
+
+
+class ParteDiariaRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    anexo_path: str | None = None
+    filename_original: str | None = None
+    mime_type: str | None = None
+    data: date | None = None
+    veiculo_id: int | None = None
+    operador: str | None = None
+    obra: str | None = None
+    equipamento: str | None = None
+    placa: str | None = None
+    horimetro_inicio: Decimal | None = None
+    horimetro_fim: Decimal | None = None
+    km_inicio: int | None = None
+    km_fim: int | None = None
+    observacoes: str | None = None
+    ocr_status: str
+    ocr_source: str
+    ocr_confidence: Decimal | None = None
+    ocr_payload: dict[str, Any] | None = None
+    ocr_error_msg: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ParteDiariaListResponse(BaseModel):
+    items: list[ParteDiariaRead]
+    total: int
+    page: int
+    page_size: int
