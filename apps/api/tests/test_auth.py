@@ -540,6 +540,54 @@ async def test_delete_self_proibido(
 
 
 @pytest.mark.asyncio
+async def test_patch_self_role_proibido(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Regressao Devin Review: admin nao pode se auto-rebaixar.
+
+    Sem este guard, o unico admin do sistema poderia trocar o proprio
+    role para `leitor` -- recovery exigiria re-seed via env (so funciona
+    se ADMIN_EMAIL diferir do email atual, ja que o seed e idempotente)
+    ou intervencao direta no DB.
+    """
+    admin = await _create_user(db_session, email="admin@primor.com", password="hunter22zz")
+    token = await _login_token(api_client, "admin@primor.com", "hunter22zz")
+    resp = await api_client.patch(
+        f"/api/v1/auth/users/{admin.id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"role": ROLE_LEITOR},
+    )
+    assert resp.status_code == 400, resp.text
+    # Sanity: role nao mudou no DB.
+    refreshed = await auth_service.get_user_by_id(db_session, admin.id)
+    assert refreshed is not None and refreshed.role == ROLE_ADMIN
+    # PATCH com mesmo role (no-op) deve passar -- guard so reage a mudanca.
+    resp_noop = await api_client.patch(
+        f"/api/v1/auth/users/{admin.id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"role": ROLE_ADMIN, "nome": "Admin Renomeado"},
+    )
+    assert resp_noop.status_code == 200, resp_noop.text
+
+
+@pytest.mark.asyncio
+async def test_patch_self_is_active_false_proibido(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Regressao Devin Review: admin nao pode se auto-desativar."""
+    admin = await _create_user(db_session, email="admin@primor.com", password="hunter22zz")
+    token = await _login_token(api_client, "admin@primor.com", "hunter22zz")
+    resp = await api_client.patch(
+        f"/api/v1/auth/users/{admin.id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"is_active": False},
+    )
+    assert resp.status_code == 400, resp.text
+    refreshed = await auth_service.get_user_by_id(db_session, admin.id)
+    assert refreshed is not None and refreshed.is_active is True
+
+
+@pytest.mark.asyncio
 async def test_patch_module_roles_dict_vazio_limpa_overrides(
     api_client: AsyncClient, db_session: AsyncSession
 ) -> None:
