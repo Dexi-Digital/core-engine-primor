@@ -11,9 +11,17 @@ type LoginPageProps = {
  * Sanitiza o `next` para prevenir open-redirect: so aceita paths
  * relativos (sem protocol/host). `//evil.com` em browsers vira
  * `https://evil.com`, entao tambem rejeitamos.
+ *
+ * Tambem rejeitamos /login e /logout como destinos -- caso contrario
+ * o usuario apos logar voltaria pra tela de login (loop) ou seria
+ * deslogado de imediato.
  */
 function sanitizeNext(raw: string): string {
   if (!raw.startsWith("/") || raw.startsWith("//")) {
+    return "/";
+  }
+  const bare = raw.split("?")[0];
+  if (bare === "/login" || bare === "/logout") {
     return "/";
   }
   return raw;

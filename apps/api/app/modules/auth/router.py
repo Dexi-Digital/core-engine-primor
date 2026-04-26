@@ -35,6 +35,7 @@ def _build_token_pair(user: User) -> TokenPair:
         access_token=create_access_token(sub, extra={"email": user.email}),
         refresh_token=create_refresh_token(sub),
         expires_in=settings.access_token_expire_minutes * 60,
+        refresh_expires_in=settings.refresh_token_expire_days * 24 * 60 * 60,
     )
 
 

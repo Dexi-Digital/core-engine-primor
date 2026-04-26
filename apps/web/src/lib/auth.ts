@@ -29,6 +29,7 @@ export type TokenPair = {
   refresh_token: string;
   token_type: string;
   expires_in: number;
+  refresh_expires_in: number;
 };
 
 export async function setAuthCookies(tokens: TokenPair): Promise<void> {
@@ -39,11 +40,10 @@ export async function setAuthCookies(tokens: TokenPair): Promise<void> {
   });
   store.set(REFRESH_COOKIE, tokens.refresh_token, {
     ...COOKIE_BASE,
-    // Refresh tem TTL maior (default 7d). Nao mandamos expires_in
-    // do refresh no payload (TokenPair so reporta o do access),
-    // entao deixamos "session-ish" -- o backend invalida quando o
-    // jwt-refresh expira.
-    maxAge: 60 * 60 * 24 * 7,
+    // Backend reporta `refresh_expires_in` em segundos -- isso mantem
+    // o cookie em sync com `refresh_token_expire_days` no .env (default
+    // 7d). Antes era hardcoded e podia divergir da config do servidor.
+    maxAge: tokens.refresh_expires_in,
   });
 }
 

@@ -16,6 +16,10 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const PUBLIC_PATHS = [
   "/login",
+  // /logout precisa estar na whitelist: caso contrario, em fluxo
+  // multi-tab o middleware redirecionava p/ /login?next=/logout e
+  // logo apos o login o usuario era deslogado de novo.
+  "/logout",
   "/favicon.ico",
 ];
 

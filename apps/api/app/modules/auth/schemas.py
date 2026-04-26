@@ -21,6 +21,10 @@ class TokenPair(BaseModel):
     refresh_token: str
     token_type: str = "bearer"
     expires_in: int  # seconds ate o access expirar (info para o cliente)
+    # `refresh_expires_in` permite o cliente alinhar o cookie do refresh
+    # com a config do backend (`refresh_token_expire_days`). Sem isso o
+    # frontend hardcodava 7d e ficava fora de sync se a config mudasse.
+    refresh_expires_in: int
 
 
 class RefreshRequest(BaseModel):

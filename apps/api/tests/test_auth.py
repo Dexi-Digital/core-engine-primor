@@ -80,6 +80,9 @@ async def test_login_ok(
     assert "refresh_token" in body
     # Access tem expires_in em segundos.
     assert body["expires_in"] >= 60
+    # `refresh_expires_in` permite o frontend manter o cookie do refresh
+    # em sync com a config do backend (regressao Devin Review).
+    assert body["refresh_expires_in"] >= 60 * 60 * 24  # ao menos 1 dia
 
 
 @pytest.mark.asyncio
