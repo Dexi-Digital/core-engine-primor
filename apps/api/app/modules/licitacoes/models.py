@@ -15,6 +15,7 @@ from sqlalchemy import (
     Integer,
     Numeric,
     String,
+    Text,
     UniqueConstraint,
     func,
 )
@@ -325,4 +326,73 @@ class CertidaoAlertaLog(Base):
 
     __table_args__ = (
         UniqueConstraint("certidao_id", "janela", name="uq_certidao_alerta_janela"),
+    )
+
+
+# --- D1: documentos societarios (separado de certidoes_empresa) -----------
+
+DOC_EMPRESA_CONTRATO_SOCIAL = "CONTRATO_SOCIAL"
+DOC_EMPRESA_ALTERACAO = "ALTERACAO_CONTRATUAL"
+DOC_EMPRESA_BALANCO = "BALANCO_PATRIMONIAL"
+DOC_EMPRESA_SICAF = "SICAF"
+DOC_EMPRESA_CAGEF = "CAGEF"
+DOC_EMPRESA_SUCAF = "SUCAF"
+DOC_EMPRESA_OUTRO = "OUTRO"
+
+DOC_EMPRESA_TIPOS_VALIDOS: frozenset[str] = frozenset(
+    {
+        DOC_EMPRESA_CONTRATO_SOCIAL,
+        DOC_EMPRESA_ALTERACAO,
+        DOC_EMPRESA_BALANCO,
+        DOC_EMPRESA_SICAF,
+        DOC_EMPRESA_CAGEF,
+        DOC_EMPRESA_SUCAF,
+        DOC_EMPRESA_OUTRO,
+    }
+)
+
+DOC_EMPRESA_LABELS: dict[str, str] = {
+    DOC_EMPRESA_CONTRATO_SOCIAL: "Contrato social",
+    DOC_EMPRESA_ALTERACAO: "Alteracao contratual",
+    DOC_EMPRESA_BALANCO: "Balanco patrimonial",
+    DOC_EMPRESA_SICAF: "SICAF (cadastro federal)",
+    DOC_EMPRESA_CAGEF: "CAGEF (cadastro estadual MG)",
+    DOC_EMPRESA_SUCAF: "SUCAF (cadastro municipal BH)",
+    DOC_EMPRESA_OUTRO: "Outro",
+}
+
+
+class EmpresaDocumento(Base):
+    """Documento societario / cadastro oficial da empresa.
+
+    Diferente de `CertidaoEmpresa` (CNDs/atestados, vencimento curto +
+    alerta 30/15/7/0), aqui ficam docs perenes ou de longa validade:
+    contrato social, alteracoes contratuais, balanco patrimonial,
+    cadastros SICAF/CAGEF/SUCAF.
+    """
+
+    __tablename__ = "empresa_documentos"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    empresa_cnpj: Mapped[str] = mapped_column(String(20), index=True)
+    tipo: Mapped[str] = mapped_column(String(64), index=True)
+    numero: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    emissao: Mapped[date | None] = mapped_column(Date, nullable=True)
+    validade: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    orgao_emissor: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    anexo_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    observacoes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(
+        String(32), default="manual", server_default="manual"
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_empresa_documentos_cnpj_tipo", "empresa_cnpj", "tipo"),
     )

@@ -23,10 +23,16 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.db import Base
+
+
+def _bool_false():
+    """Helper para `server_default` cross-DB de boolean false."""
+    return text("false")
 
 # Fontes de cadastro -- util para auditar de onde veio o funcionario.
 SOURCE_MANUAL = "manual"
@@ -118,6 +124,26 @@ class Employee(Base):
     aso_resultado: Mapped[str | None] = mapped_column(
         String(16), nullable=True
     )  # apto, inapto, apto_restricoes
+
+    # --- flags SST (D1) ---
+    # Disparam regras condicionais no checklist do diagnostico
+    # documental (ex.: is_motorista exige exame toxicologico,
+    # is_operador_maquina exige NR-12 + AET, is_alturas exige NR-35).
+    is_motorista: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=_bool_false()
+    )
+    is_operador_maquina: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=_bool_false()
+    )
+    is_admin_office: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=_bool_false()
+    )
+    is_alturas: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=_bool_false()
+    )
+    is_eletricista: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=_bool_false()
+    )
 
     # --- metadata ---
     source: Mapped[str] = mapped_column(
@@ -341,4 +367,111 @@ class AfastamentoAlertaLog(Base):
             "janela",
             name="uq_afastamento_alerta_kind_janela",
         ),
+    )
+
+
+# ------------------------- D1: Documentos por funcionario ------------------
+
+# Tipos canonicos de doc por funcionario (para uso em validators e UI).
+# A coluna `tipo` no banco e String livre, para permitir adicionar novos
+# tipos sem migration. Esses sao os tipos esperados pelo motor de
+# diagnostico documental (D1) -- ver app.modules.diagnostico.checklists.
+DOC_EMP_NR10 = "NR10"  # Eletricidade -- so se is_eletricista
+DOC_EMP_NR12 = "NR12"  # Maquinas/equipamentos -- so se is_operador_maquina
+DOC_EMP_NR18 = "NR18"  # Construcao civil -- obrigatorio em obras
+DOC_EMP_NR35 = "NR35"  # Trabalho em altura -- so se is_alturas
+DOC_EMP_TOXICOLOGICO = "TOXICOLOGICO"  # so se is_motorista
+DOC_EMP_OS = "ORDEM_SERVICO"  # OS de SST (NR-1)
+DOC_EMP_LISTA_INTEGRACAO = "LISTA_INTEGRACAO"
+DOC_EMP_FICHA_EPI = "FICHA_EPI"
+DOC_EMP_TERMO_LGPD = "TERMO_LGPD"
+DOC_EMP_CONTRATO_EXPERIENCIA = "CONTRATO_EXPERIENCIA"
+DOC_EMP_ACORDO_COMPENSACAO = "ACORDO_COMPENSACAO_HORAS"
+DOC_EMP_TERMO_VT = "TERMO_VT"  # renuncia ou aceite vale-transporte
+DOC_EMP_DECL_FAMILIA = "DECLARACAO_ENCARGOS_FAMILIA"
+DOC_EMP_FICHA_SALARIO_FAMILIA = "FICHA_SALARIO_FAMILIA"
+DOC_EMP_TERMO_RESPONSABILIDADE = "TERMO_RESPONSABILIDADE_CRACHA_EMAIL"
+DOC_EMP_RCT = "RCT"  # rescisao do contrato (demissao)
+DOC_EMP_PPP = "PPP"  # perfil profissiografico previdenciario
+DOC_EMP_OUTRO = "OUTRO"
+
+DOC_EMP_TIPOS_VALIDOS: frozenset[str] = frozenset(
+    {
+        DOC_EMP_NR10,
+        DOC_EMP_NR12,
+        DOC_EMP_NR18,
+        DOC_EMP_NR35,
+        DOC_EMP_TOXICOLOGICO,
+        DOC_EMP_OS,
+        DOC_EMP_LISTA_INTEGRACAO,
+        DOC_EMP_FICHA_EPI,
+        DOC_EMP_TERMO_LGPD,
+        DOC_EMP_CONTRATO_EXPERIENCIA,
+        DOC_EMP_ACORDO_COMPENSACAO,
+        DOC_EMP_TERMO_VT,
+        DOC_EMP_DECL_FAMILIA,
+        DOC_EMP_FICHA_SALARIO_FAMILIA,
+        DOC_EMP_TERMO_RESPONSABILIDADE,
+        DOC_EMP_RCT,
+        DOC_EMP_PPP,
+        DOC_EMP_OUTRO,
+    }
+)
+
+DOC_EMP_LABELS: dict[str, str] = {
+    DOC_EMP_NR10: "NR-10 (Eletricidade)",
+    DOC_EMP_NR12: "NR-12 (Maquinas/Equipamentos)",
+    DOC_EMP_NR18: "NR-18 (Construcao Civil)",
+    DOC_EMP_NR35: "NR-35 (Trabalho em Altura)",
+    DOC_EMP_TOXICOLOGICO: "Exame toxicologico",
+    DOC_EMP_OS: "Ordem de Servico (SST)",
+    DOC_EMP_LISTA_INTEGRACAO: "Lista de Integracao",
+    DOC_EMP_FICHA_EPI: "Ficha de EPI",
+    DOC_EMP_TERMO_LGPD: "Termo de Consentimento LGPD",
+    DOC_EMP_CONTRATO_EXPERIENCIA: "Contrato de Experiencia",
+    DOC_EMP_ACORDO_COMPENSACAO: "Acordo de Compensacao de Horas",
+    DOC_EMP_TERMO_VT: "Termo de Vale-Transporte",
+    DOC_EMP_DECL_FAMILIA: "Declaracao de Encargos de Familia",
+    DOC_EMP_FICHA_SALARIO_FAMILIA: "Ficha de Salario-Familia",
+    DOC_EMP_TERMO_RESPONSABILIDADE: "Termo de Responsabilidade (cracha/email)",
+    DOC_EMP_RCT: "Rescisao do Contrato (RCT)",
+    DOC_EMP_PPP: "Perfil Profissiografico Previdenciario (PPP)",
+    DOC_EMP_OUTRO: "Outro",
+}
+
+
+class EmployeeDocument(Base):
+    """Documento generico vinculado a um funcionario.
+
+    Cobre os doc types listados em `DOC_EMP_TIPOS_VALIDOS`. ASO continua
+    nas colunas `aso_*` em `Employee` (compat com A.2 alertas em prod).
+    Multiplas rows do mesmo tipo sao permitidas (historico anual de
+    NR-18, etc.); a UI / motor de diagnostico mostra a mais recente.
+    """
+
+    __tablename__ = "dp_employee_documents"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    employee_id: Mapped[int] = mapped_column(
+        ForeignKey("dp_employees.id", ondelete="CASCADE"), index=True
+    )
+    tipo: Mapped[str] = mapped_column(String(64), index=True)
+    numero: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    emissao: Mapped[date | None] = mapped_column(Date, nullable=True)
+    validade: Mapped[date | None] = mapped_column(
+        Date, nullable=True, index=True
+    )
+    anexo_path: Mapped[str | None] = mapped_column(
+        String(1024), nullable=True
+    )
+    observacoes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(
+        String(32), default="manual", server_default="manual"
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
