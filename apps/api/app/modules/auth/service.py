@@ -216,15 +216,21 @@ def _dummy_hash() -> str:
 async def authenticate(
     db: AsyncSession, *, email: str, password: str
 ) -> User | None:
-    """Retorna user ativo se senha bater, None caso contrario."""
+    """Retorna user ativo se senha bater, None caso contrario.
+
+    Sempre paga o custo de UMA verificacao bcrypt (~80ms) em qualquer
+    branch (user inexistente, inativo, ou senha errada) para nao
+    distinguir essas branches por timing.
+    """
     user = await get_user_by_email(db, email)
     if user is None:
-        # Verificamos uma hash dummy mesmo assim para nao revelar via
-        # timing se o email existe ou nao. `verify_password` em entrada
-        # invalida custa ~80ms (bcrypt), mesma ordem da branch valida.
         verify_password(password, _dummy_hash())
         return None
     if not user.is_active:
+        # Mesmo gasto de bcrypt que as outras branches falhas. Sem
+        # isso, accounts inativos respondem em ~0ms e ficam distintos
+        # de email-inexistente / senha-errada via timing.
+        verify_password(password, user.password_hash)
         return None
     if not verify_password(password, user.password_hash):
         return None

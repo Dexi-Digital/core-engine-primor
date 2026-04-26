@@ -52,14 +52,22 @@ def has_at_least(user: User, *, modulo: str | None, required: str) -> bool:
 
 
 def validate_module_roles(module_roles: dict | None) -> dict | None:
-    """Valida o dict de overrides; retorna None se vazio.
+    """Valida o dict de overrides.
 
     Mantem so chaves que sao modulos conhecidos e valores que sao roles
     validas. Falha early (`ValueError`) em entrada visivelmente quebrada
     em vez de silenciosamente descartar -- o admin que ta criando o
     usuario precisa saber que digitou errado.
+
+    Semantica de None vs `{}`:
+    - `None`  -> "nao tocar / sem overrides" (campo ausente no PATCH)
+    - `{}`    -> "limpar todos os overrides" (campo presente, vazio)
+
+    Preservar essa diferenca e o que permite o admin _limpar_ overrides
+    via PATCH `{"module_roles": {}}` (sem isso o validador colapsava
+    `{}` em `None` e o service nao distinguia "nao tocar" de "limpar").
     """
-    if not module_roles:
+    if module_roles is None:
         return None
     cleaned: dict[str, str] = {}
     for k, v in module_roles.items():
@@ -76,7 +84,7 @@ def validate_module_roles(module_roles: dict | None) -> dict | None:
                 f"role invalida em module_roles[{k!r}]: {v!r} (validas: {sorted(ROLES_VALIDOS)})"
             )
         cleaned[k] = v
-    return cleaned or None
+    return cleaned
 
 
 __all__ = [

@@ -7,11 +7,23 @@ type LoginPageProps = {
   searchParams: Promise<{ error?: string; next?: string }>;
 };
 
+/**
+ * Sanitiza o `next` para prevenir open-redirect: so aceita paths
+ * relativos (sem protocol/host). `//evil.com` em browsers vira
+ * `https://evil.com`, entao tambem rejeitamos.
+ */
+function sanitizeNext(raw: string): string {
+  if (!raw.startsWith("/") || raw.startsWith("//")) {
+    return "/";
+  }
+  return raw;
+}
+
 async function loginAction(formData: FormData) {
   "use server";
   const email = String(formData.get("email") ?? "").trim();
   const password = String(formData.get("password") ?? "");
-  const next = String(formData.get("next") ?? "/") || "/";
+  const next = sanitizeNext(String(formData.get("next") ?? "/"));
 
   if (!email || !password) {
     redirect(`/login?error=missing&next=${encodeURIComponent(next)}`);
@@ -45,7 +57,9 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   }
   const params = await searchParams;
   const errorMessage = params.error ? ERROR_MESSAGES[params.error] : null;
-  const next = params.next ?? "/";
+  // Tambem sanitizamos no render para nao ecoar `https://evil.com` em
+  // qualquer parte do HTML (defense in depth).
+  const next = sanitizeNext(params.next ?? "/");
 
   return (
     <main className="flex min-h-screen items-center justify-center bg-slate-50 px-4">

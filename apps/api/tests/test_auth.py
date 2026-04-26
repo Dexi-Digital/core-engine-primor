@@ -537,6 +537,78 @@ async def test_delete_self_proibido(
 
 
 @pytest.mark.asyncio
+async def test_patch_module_roles_dict_vazio_limpa_overrides(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    """Regressao Devin Review: PATCH `{"module_roles": {}}` deve limpar
+    overrides; antes da fix, validate_module_roles colapsava {} em None
+    e o service nao distinguia "nao tocar" de "limpar"."""
+    await _create_user(db_session, email="admin@primor.com", password="hunter22zz")
+    target = await _create_user(
+        db_session,
+        email="alvo@primor.com",
+        password="hunter22aa",
+        role=ROLE_LEITOR,
+        module_roles={"rh": ROLE_ADMIN},
+    )
+    token = await _login_token(api_client, "admin@primor.com", "hunter22zz")
+    resp = await api_client.patch(
+        f"/api/v1/auth/users/{target.id}",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"module_roles": {}},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["module_roles"] is None
+    # Audit registra o clear (changed.module_roles.to == None).
+    audits = (
+        await db_session.execute(
+            select(AuditLog)
+            .where(AuditLog.resource == "auth.user")
+            .where(AuditLog.resource_id == str(target.id))
+            .where(AuditLog.action == "update")
+        )
+    ).scalars().all()
+    assert len(audits) == 1
+    metadata = json.loads(audits[0].metadata_json or "{}")
+    assert metadata["changed"]["module_roles"]["to"] is None
+
+
+@pytest.mark.asyncio
+async def test_login_user_inativo_paga_custo_bcrypt(
+    api_client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regressao Devin Review: `authenticate()` com user inativo deve
+    chamar verify_password (mitigacao de timing-attack). Antes da fix,
+    a branch retornava em ~0ms e ficava distinguivel via timing."""
+    await _create_user(
+        db_session,
+        email="banido@primor.com",
+        password="hunter22dd",
+        is_active=False,
+    )
+
+    calls: list[str] = []
+    from app.modules.auth import service as svc
+
+    real_verify = svc.verify_password
+
+    def _spy(plain: str, hashed: str) -> bool:
+        calls.append(hashed)
+        return real_verify(plain, hashed)
+
+    monkeypatch.setattr(svc, "verify_password", _spy)
+
+    resp = await api_client.post(
+        "/api/v1/auth/login",
+        json={"email": "banido@primor.com", "password": "hunter22dd"},
+    )
+    assert resp.status_code == 401
+    # Houve EXATAMENTE uma chamada de verify_password no caminho
+    # is_active=False (com a hash real do user).
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_create_user_grava_audit_com_actor_email(
     api_client: AsyncClient, db_session: AsyncSession
 ) -> None:
