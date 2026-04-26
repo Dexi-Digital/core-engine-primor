@@ -321,3 +321,67 @@ async def test_real_client_oauth_falha_levanta_auth():
             )
     finally:
         await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_real_client_token_refresh_serializa_concorrente():
+    """Bug do Devin Review: 2 OCRs concorrentes batendo o token expirado
+    faziam 2 POSTs em /token paralelos (gastando rate-limit Google).
+
+    Com o `asyncio.Lock` em `_get_access_token`, mesmo N coroutines
+    iniciadas no mesmo `gather` acabam fazendo 1 unica chamada -- a
+    primeira renova, as demais reusam o cache.
+    """
+    import asyncio
+
+    counts = {"token": 0, "process": 0}
+    token_release = asyncio.Event()
+
+    async def slow_handler(request: Request) -> Response:
+        url = str(request.url)
+        if "oauth2.googleapis.com/token" in url:
+            counts["token"] += 1
+            # Simula latencia da Google -- garante que segundo `await`
+            # da segunda coroutine entra no lock antes do primeiro
+            # liberar. Sem o lock o handler eh chamado N vezes
+            # (counts['token'] > 1).
+            await token_release.wait()
+            return Response(
+                200, json={"access_token": "tk", "expires_in": 3600}
+            )
+        counts["process"] += 1
+        return Response(
+            200, json={"document": {"text": "x", "entities": []}}
+        )
+
+    # MockTransport aceita handlers async direto.
+    transport = MockTransport(slow_handler)
+    http = AsyncClient(transport=transport)
+    sa = _gen_service_account()
+    client = GoogleDocumentAIClient(
+        credentials_json=json.dumps(sa),
+        project_id="test-project",
+        processor_id="proc-1",
+        location="us",
+        client=http,
+    )
+    try:
+        # Dispara 5 chamadas concorrentes; sem token cacheado, todas
+        # vao para `_get_access_token` simultaneamente.
+        async def _call() -> None:
+            await client.processar_documento(
+                content=b"a", mime_type="application/pdf"
+            )
+
+        tasks = [asyncio.create_task(_call()) for _ in range(5)]
+        # Da chance pra todas as tasks chegarem no `await token_release`.
+        await asyncio.sleep(0.05)
+        token_release.set()
+        await asyncio.gather(*tasks)
+    finally:
+        await client.aclose()
+    assert counts["token"] == 1, (
+        f"esperava 1 chamada /token, foram {counts['token']} "
+        "(lock nao serializou refresh concorrente)"
+    )
+    assert counts["process"] == 5
