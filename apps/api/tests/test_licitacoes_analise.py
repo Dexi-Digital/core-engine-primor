@@ -1,4 +1,5 @@
 """Tests for D.5 -- analise LLM de editais."""
+
 from __future__ import annotations
 
 import io
@@ -44,11 +45,7 @@ def _make_minimal_pdf_with_text(text: str) -> bytes:
     using low-level primitives that pypdf can parse and read back.
     """
     # Escape parentheses and backslashes as the PDF text operator requires.
-    escaped = (
-        text.replace("\\", "\\\\")
-        .replace("(", "\\(")
-        .replace(")", "\\)")
-    )
+    escaped = text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
     # Minimal 1-page PDF with one Helvetica text showing (text).
     body = (
         b"%PDF-1.4\n"
@@ -102,9 +99,7 @@ async def _seed_edital_with_pdfs(
     db_session.add(licitacao)
     await db_session.flush()
 
-    edital = Edital(
-        licitacao_id=licitacao.id, source="pncp", status="completed"
-    )
+    edital = Edital(licitacao_id=licitacao.id, source="pncp", status="completed")
     db_session.add(edital)
     await db_session.flush()
 
@@ -144,7 +139,9 @@ class FakeLLMProvider:
     model = "fake-model"
     input_price_per_mtok = 0.0
 
-    def __init__(self, response: dict[str, Any] | None = None, *, raise_error: Exception | None = None):
+    def __init__(
+        self, response: dict[str, Any] | None = None, *, raise_error: Exception | None = None
+    ):
         self._response = response or {
             "prazo_execucao_dias": 180,
             "garantia_percentual": 5.0,
@@ -201,7 +198,10 @@ async def test_extract_text_skips_non_pdf_and_oversized(db_session, tmp_path):
     huge = _make_blank_pdf(pages=1) + b"\x00" * 100  # size_bytes forced below
 
     lic = Licitacao(
-        external_id="skip-test", source="pncp", orgao_cnpj="x", ano_compra=2026,
+        external_id="skip-test",
+        source="pncp",
+        orgao_cnpj="x",
+        ano_compra=2026,
         sequencial_compra=1,
     )
     db_session.add(lic)
@@ -218,22 +218,34 @@ async def test_extract_text_skips_non_pdf_and_oversized(db_session, tmp_path):
 
     anexos = [
         AnexoEdital(
-            edital_id=edital.id, sequencial_documento=1, titulo="a",
-            source_url="x", filename="edital.pdf",
+            edital_id=edital.id,
+            sequencial_documento=1,
+            titulo="a",
+            source_url="x",
+            filename="edital.pdf",
             storage_path=str(subdir / "edital.pdf"),
-            size_bytes=len(normal), content_type="application/pdf",
+            size_bytes=len(normal),
+            content_type="application/pdf",
         ),
         AnexoEdital(
-            edital_id=edital.id, sequencial_documento=2, titulo="b",
-            source_url="x", filename="projeto.zip",
+            edital_id=edital.id,
+            sequencial_documento=2,
+            titulo="b",
+            source_url="x",
+            filename="projeto.zip",
             storage_path=str(subdir / "projeto.zip"),
-            size_bytes=12, content_type="application/zip",
+            size_bytes=12,
+            content_type="application/zip",
         ),
         AnexoEdital(
-            edital_id=edital.id, sequencial_documento=3, titulo="c",
-            source_url="x", filename="huge.pdf",
+            edital_id=edital.id,
+            sequencial_documento=3,
+            titulo="c",
+            source_url="x",
+            filename="huge.pdf",
             storage_path=str(subdir / "huge.pdf"),
-            size_bytes=999_999_999, content_type="application/pdf",
+            size_bytes=999_999_999,
+            content_type="application/pdf",
         ),
     ]
     for a in anexos:
@@ -244,7 +256,9 @@ async def test_extract_text_skips_non_pdf_and_oversized(db_session, tmp_path):
     by_name = {x.filename: x for x in result.anexos}
     assert by_name["edital.pdf"].skipped_reason is None
     assert by_name["projeto.zip"].skipped_reason == "not-pdf"
-    assert by_name["huge.pdf"].skipped_reason and by_name["huge.pdf"].skipped_reason.startswith("too-large")
+    assert by_name["huge.pdf"].skipped_reason and by_name["huge.pdf"].skipped_reason.startswith(
+        "too-large"
+    )
 
 
 # ---------- analise service ----------
@@ -310,8 +324,11 @@ async def test_analyze_edital_is_idempotent_updates_single_row(db_session, tmp_p
 async def test_analyze_edital_raises_when_no_edital(db_session, tmp_path):
     storage = LocalStorage(tmp_path)
     lic = Licitacao(
-        external_id="no-edital", source="pncp",
-        orgao_cnpj="x", ano_compra=2026, sequencial_compra=1,
+        external_id="no-edital",
+        source="pncp",
+        orgao_cnpj="x",
+        ano_compra=2026,
+        sequencial_compra=1,
     )
     db_session.add(lic)
     await db_session.flush()
@@ -342,9 +359,7 @@ async def test_analyze_edital_handles_llm_error(db_session, tmp_path):
 @pytest.mark.anyio
 async def test_analyze_edital_empty_when_no_anexos(db_session, tmp_path):
     storage = LocalStorage(tmp_path)
-    licitacao, edital, _ = await _seed_edital_with_pdfs(
-        db_session, storage, pdfs=[]
-    )
+    licitacao, edital, _ = await _seed_edital_with_pdfs(db_session, storage, pdfs=[])
     edital.status = "empty"
     await db_session.flush()
 
@@ -375,7 +390,7 @@ async def test_get_analise_404_before_post(api_client, db_session, tmp_path):
 
 @pytest.mark.anyio
 async def test_post_analise_503_when_llm_unconfigured(
-    api_client, db_session, tmp_path, monkeypatch
+    api_client, db_session, tmp_path, monkeypatch, auth_headers: dict[str, str]
 ):
     """No ANTHROPIC_API_KEY / OPENAI_API_KEY -> service returns 503."""
     from app.core.config import get_settings
@@ -396,7 +411,7 @@ async def test_post_analise_503_when_llm_unconfigured(
     monkeypatch.setattr(settings, "openai_api_key", None)
     try:
         resp = await api_client.post(
-            f"/api/v1/licitacoes/{licitacao.id}/edital/analise"
+            f"/api/v1/licitacoes/{licitacao.id}/edital/analise", headers=auth_headers
         )
         assert resp.status_code == 503
         assert "ANTHROPIC_API_KEY" in resp.json()["detail"]
@@ -406,7 +421,7 @@ async def test_post_analise_503_when_llm_unconfigured(
 
 @pytest.mark.anyio
 async def test_post_then_get_analise_roundtrip(
-    api_client, db_session, tmp_path
+    api_client, db_session, tmp_path, auth_headers: dict[str, str]
 ):
     """End-to-end HTTP: POST runs the analysis, GET returns the persisted row."""
     from app.main import app
@@ -422,21 +437,23 @@ async def test_post_then_get_analise_roundtrip(
     )
     await db_session.commit()
 
-    fake = FakeLLMProvider(response={
-        "prazo_execucao_dias": 120,
-        "garantia_percentual": 3.0,
-        "bdi_maximo_percentual": 20.0,
-        "atestados_cat": [],
-        "visita_tecnica_obrigatoria": False,
-        "valor_estimado": None,
-        "modalidade": "Pregao",
-        "observacoes": "ok",
-    })
+    fake = FakeLLMProvider(
+        response={
+            "prazo_execucao_dias": 120,
+            "garantia_percentual": 3.0,
+            "bdi_maximo_percentual": 20.0,
+            "atestados_cat": [],
+            "visita_tecnica_obrigatoria": False,
+            "valor_estimado": None,
+            "modalidade": "Pregao",
+            "observacoes": "ok",
+        }
+    )
     app.dependency_overrides[get_editais_storage] = lambda: storage
     app.dependency_overrides[get_llm_provider] = lambda: fake
     try:
         post = await api_client.post(
-            f"/api/v1/licitacoes/{licitacao.id}/edital/analise"
+            f"/api/v1/licitacoes/{licitacao.id}/edital/analise", headers=auth_headers
         )
         assert post.status_code == 200, post.text
         body = post.json()
@@ -444,9 +461,7 @@ async def test_post_then_get_analise_roundtrip(
         assert body["prazo_execucao_dias"] == 120
         assert body["provider"] == "fake"
 
-        get = await api_client.get(
-            f"/api/v1/licitacoes/{licitacao.id}/edital/analise"
-        )
+        get = await api_client.get(f"/api/v1/licitacoes/{licitacao.id}/edital/analise")
         assert get.status_code == 200
         payload = get.json()
         assert payload["data"]["modalidade"] == "Pregao"
@@ -517,9 +532,7 @@ async def test_anthropic_provider_raises_llm_error_on_500():
     )
     provider = AnthropicProvider(api_key="sk-test", http_client=http)
     with pytest.raises(LLMError):
-        await provider.analyze(
-            text="x", schema=ANALYSIS_SCHEMA, system_prompt=SYSTEM_PROMPT
-        )
+        await provider.analyze(text="x", schema=ANALYSIS_SCHEMA, system_prompt=SYSTEM_PROMPT)
     await provider.aclose()
 
 
@@ -554,9 +567,7 @@ async def test_openai_provider_parses_json_schema_response():
         transport=httpx.MockTransport(handler), base_url="https://api.openai.com"
     )
     provider = OpenAIProvider(api_key="sk-test", http_client=http)
-    result = await provider.analyze(
-        text="x", schema=ANALYSIS_SCHEMA, system_prompt=SYSTEM_PROMPT
-    )
+    result = await provider.analyze(text="x", schema=ANALYSIS_SCHEMA, system_prompt=SYSTEM_PROMPT)
     await provider.aclose()
 
     assert result.data == {"prazo_execucao_dias": 150}
@@ -580,9 +591,7 @@ async def test_openai_provider_raises_on_invalid_json():
     )
     provider = OpenAIProvider(api_key="sk-test", http_client=http)
     with pytest.raises(LLMError):
-        await provider.analyze(
-            text="x", schema=ANALYSIS_SCHEMA, system_prompt=SYSTEM_PROMPT
-        )
+        await provider.analyze(text="x", schema=ANALYSIS_SCHEMA, system_prompt=SYSTEM_PROMPT)
     await provider.aclose()
 
 
@@ -605,8 +614,12 @@ class _StaticProvider:
         if self._raise:
             raise self._raise
         return LLMResult(
-            data=self._data, provider=self.name, model=self.model,
-            prompt_tokens=10, completion_tokens=5, cost_usd=0.0,
+            data=self._data,
+            provider=self.name,
+            model=self.model,
+            prompt_tokens=10,
+            completion_tokens=5,
+            cost_usd=0.0,
         )
 
     async def aclose(self) -> None:
@@ -618,9 +631,7 @@ async def test_cost_router_picks_cheapest_first():
     cheap = _StaticProvider("cheap", price=0.1, data={"from": "cheap"})
     expensive = _StaticProvider("expensive", price=5.0, data={"from": "expensive"})
     router = CostRoutedProvider([expensive, cheap])  # out-of-order input
-    result = await router.analyze(
-        text="x", schema=ANALYSIS_SCHEMA, system_prompt=SYSTEM_PROMPT
-    )
+    result = await router.analyze(text="x", schema=ANALYSIS_SCHEMA, system_prompt=SYSTEM_PROMPT)
     await router.aclose()
     assert result.data == {"from": "cheap"}
     assert cheap.called is True
@@ -632,9 +643,7 @@ async def test_cost_router_falls_back_on_llm_error():
     cheap = _StaticProvider("cheap", price=0.1, raise_error=LLMError("rate limit"))
     backup = _StaticProvider("backup", price=1.0, data={"from": "backup"})
     router = CostRoutedProvider([cheap, backup])
-    result = await router.analyze(
-        text="x", schema=ANALYSIS_SCHEMA, system_prompt=SYSTEM_PROMPT
-    )
+    result = await router.analyze(text="x", schema=ANALYSIS_SCHEMA, system_prompt=SYSTEM_PROMPT)
     await router.aclose()
     assert result.data == {"from": "backup"}
 
@@ -645,9 +654,7 @@ async def test_cost_router_raises_when_all_providers_fail():
     b = _StaticProvider("b", price=1.0, raise_error=LLMError("b down"))
     router = CostRoutedProvider([a, b])
     with pytest.raises(LLMError):
-        await router.analyze(
-            text="x", schema=ANALYSIS_SCHEMA, system_prompt=SYSTEM_PROMPT
-        )
+        await router.analyze(text="x", schema=ANALYSIS_SCHEMA, system_prompt=SYSTEM_PROMPT)
     await router.aclose()
 
 

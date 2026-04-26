@@ -1,4 +1,5 @@
 """Tests for D.6 certidoes/atestados domain."""
+
 from __future__ import annotations
 
 from datetime import date, timedelta
@@ -50,9 +51,7 @@ def test_janela_for_certidao_picks_smallest_remaining() -> None:
     # 0 dias (hoje) -> 0
     assert janela_for_certidao(today, today=today) == 0
     # ja venceu ha 1 dia -> None (alertas pos-vencimento ficam fora)
-    assert (
-        janela_for_certidao(today - timedelta(days=1), today=today) is None
-    )
+    assert janela_for_certidao(today - timedelta(days=1), today=today) is None
     # sem validade -> None
     assert janela_for_certidao(None, today=today) is None
 
@@ -78,9 +77,9 @@ def test_render_alerta_html_includes_essentials() -> None:
     assert "ABC-123" in html
     assert "05/05/2026" in html
     assert "Vence em 10 dia(s)" in html
-    assert (
-        "https://motorcentral.example/licitacoes/certidoes" in html
-    ), "deve linkar para o dashboard"
+    assert "https://motorcentral.example/licitacoes/certidoes" in html, (
+        "deve linkar para o dashboard"
+    )
 
 
 def test_render_alerta_html_today_uses_vencida_label() -> None:
@@ -90,9 +89,7 @@ def test_render_alerta_html_today_uses_vencida_label() -> None:
         tipo="FGTS",
         validade=date.today(),
     )
-    html = render_alerta_html(
-        cert, janela=0, public_base_url="https://x.example", dias_restantes=0
-    )
+    html = render_alerta_html(cert, janela=0, public_base_url="https://x.example", dias_restantes=0)
     assert "VENCIDA hoje" in html
 
 
@@ -168,9 +165,7 @@ async def test_list_certidoes_filters_by_status(db_session: AsyncSession) -> Non
     vigentes = await list_certidoes(db_session, status="vigente", today=today)
     vencendo = await list_certidoes(db_session, status="vencendo", today=today)
     vencidas = await list_certidoes(db_session, status="vencido", today=today)
-    sem_val = await list_certidoes(
-        db_session, status="sem_validade", today=today
-    )
+    sem_val = await list_certidoes(db_session, status="sem_validade", today=today)
     assert {r.tipo for r in vigentes} == {"CND_FEDERAL"}
     assert {r.tipo for r in vencendo} == {"FGTS"}
     assert {r.tipo for r in vencidas} == {"CNDT"}
@@ -180,9 +175,7 @@ async def test_list_certidoes_filters_by_status(db_session: AsyncSession) -> Non
 # --- dispatch (mock Resend via httpx.MockTransport) ---------------------------
 
 
-def _mock_resend_client(
-    captured: list[httpx.Request], message_id: str = "msg_xyz"
-) -> ResendClient:
+def _mock_resend_client(captured: list[httpx.Request], message_id: str = "msg_xyz") -> ResendClient:
     """Build a ResendClient pointing at a mock transport (no real HTTP)."""
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -234,11 +227,7 @@ async def test_dispatch_sends_for_certidao_in_window(
     assert "vence em 10 dia" in body.lower()  # subject
     assert "vence em 15 dia" not in body.lower()  # nao deve usar janela
     # Logged in DB
-    log = (
-        await db_session.execute(
-            CertidaoAlertaLog.__table__.select()
-        )
-    ).first()
+    log = (await db_session.execute(CertidaoAlertaLog.__table__.select())).first()
     assert log is not None
 
 
@@ -335,9 +324,7 @@ async def test_dispatch_retries_after_failure_without_unique_violation(
     assert summary1.sent == 0
 
     # Confirma que existe exatamente 1 log com status=failed.
-    logs = (
-        await db_session.execute(CertidaoAlertaLog.__table__.select())
-    ).all()
+    logs = (await db_session.execute(CertidaoAlertaLog.__table__.select())).all()
     assert len(logs) == 1
 
     # Segunda rodada: ainda falha. Sem o fix, isto crasharia com IntegrityError.
@@ -354,9 +341,7 @@ async def test_dispatch_retries_after_failure_without_unique_violation(
     )
     await fail_resend2.aclose()
     assert summary2.failed == 1
-    logs = (
-        await db_session.execute(CertidaoAlertaLog.__table__.select())
-    ).all()
+    logs = (await db_session.execute(CertidaoAlertaLog.__table__.select())).all()
     assert len(logs) == 1, "log deve ter sido atualizado in-place, nao duplicado"
 
     # Terceira rodada: agora o Resend volta. O log failed deve virar sent.
@@ -368,9 +353,7 @@ async def test_dispatch_retries_after_failure_without_unique_violation(
     await ok_resend.aclose()
     assert summary3.sent == 1
     assert summary3.failed == 0
-    logs = (
-        await db_session.execute(CertidaoAlertaLog.__table__.select())
-    ).all()
+    logs = (await db_session.execute(CertidaoAlertaLog.__table__.select())).all()
     assert len(logs) == 1, "ainda 1 log, agora promovido a sent"
 
 
@@ -403,14 +386,10 @@ async def test_dispatch_skips_with_empty_recipients(
 ) -> None:
     """Sem destinatarios -> early return, nem tenta hit no Resend."""
     today = date(2026, 4, 25)
-    await create_certidao(
-        db_session, empresa_cnpj="X", tipo="FGTS", validade=today
-    )
+    await create_certidao(db_session, empresa_cnpj="X", tipo="FGTS", validade=today)
     captured: list[httpx.Request] = []
     resend = _mock_resend_client(captured)
-    summary = await dispatch_expiration_alerts(
-        db_session, resend, recipients=[], today=today
-    )
+    summary = await dispatch_expiration_alerts(db_session, resend, recipients=[], today=today)
     await resend.aclose()
     assert summary.total_certidoes == 0
     assert summary.sent == 0
@@ -421,7 +400,9 @@ async def test_dispatch_skips_with_empty_recipients(
 
 
 @pytest.mark.asyncio
-async def test_crud_endpoints_full_lifecycle(api_client: AsyncClient) -> None:
+async def test_crud_endpoints_full_lifecycle(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
     # Create
     today = date(2026, 4, 25)
     payload = {
@@ -430,7 +411,7 @@ async def test_crud_endpoints_full_lifecycle(api_client: AsyncClient) -> None:
         "numero": "ABC",
         "validade": (today + timedelta(days=10)).isoformat(),
     }
-    r = await api_client.post("/api/v1/licitacoes/certidoes", json=payload)
+    r = await api_client.post("/api/v1/licitacoes/certidoes", json=payload, headers=auth_headers)
     assert r.status_code == 201, r.text
     certidao_id = r.json()["id"]
     assert r.json()["status_atual"] in {"vigente", "vencendo"}
@@ -449,12 +430,13 @@ async def test_crud_endpoints_full_lifecycle(api_client: AsyncClient) -> None:
     r = await api_client.put(
         f"/api/v1/licitacoes/certidoes/{certidao_id}",
         json={"numero": "ABC-2"},
+        headers=auth_headers,
     )
     assert r.status_code == 200
     assert r.json()["numero"] == "ABC-2"
 
     # Delete
-    r = await api_client.delete(f"/api/v1/licitacoes/certidoes/{certidao_id}")
+    r = await api_client.delete(f"/api/v1/licitacoes/certidoes/{certidao_id}", headers=auth_headers)
     assert r.status_code == 204
     r = await api_client.get(f"/api/v1/licitacoes/certidoes/{certidao_id}")
     assert r.status_code == 404
@@ -463,6 +445,7 @@ async def test_crud_endpoints_full_lifecycle(api_client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_dispatch_alerts_endpoint_503_without_resend(
     api_client: AsyncClient,
+    auth_headers: dict[str, str],
 ) -> None:
     """Sem RESEND_API_KEY -> 503 (igual ao dispatch de boletins)."""
     from app.core.config import get_settings
@@ -471,6 +454,7 @@ async def test_dispatch_alerts_endpoint_503_without_resend(
     r = await api_client.post(
         "/api/v1/licitacoes/certidoes/dispatch-alerts",
         json={"recipients": ["x@y.com"]},
+        headers=auth_headers,
     )
     assert r.status_code == 503
     assert "RESEND_API_KEY" in r.json()["detail"]

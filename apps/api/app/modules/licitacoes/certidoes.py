@@ -19,15 +19,18 @@ Atestados CAT *podem* nao ter validade (sao perenes); nesse caso
 """
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date as _date
 from html import escape
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.models import AuditLog
 from app.core.config import get_settings
 from app.integrations.resend.client import ResendClient, ResendError
 from app.modules.licitacoes.models import CertidaoAlertaLog, CertidaoEmpresa
@@ -59,6 +62,34 @@ TIPOS_VALIDOS: frozenset[str] = frozenset(t for t, _ in TIPOS_CERTIDAO)
 JANELAS_ALERTA: tuple[int, ...] = (30, 15, 7, 0)
 
 VENCENDO_DIAS_LIMITE = 30  # status "vencendo" se faltarem <= 30 dias
+
+# Mutacoes em CNDs/atestados sao sensiveis -- documentos de habilitacao
+# em licitacao publica. Toda criacao/edicao/exclusao precisa virar uma
+# linha em audit_log (AGENTS.md). Default `system` cobre paths sem usuario
+# logado (worker de import futuro etc.); requests HTTP devem passar
+# `actor=current_user.email` -- ver certidoes_router.
+_AUDIT_RESOURCE = "licitacoes.certidao"
+_AUDIT_ACTOR_PLACEHOLDER = "system"
+
+
+async def _record_audit(
+    db: AsyncSession,
+    *,
+    action: str,
+    resource_id: int | None,
+    metadata: dict[str, Any] | None = None,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
+) -> None:
+    db.add(
+        AuditLog(
+            actor=actor,
+            action=action,
+            resource=_AUDIT_RESOURCE,
+            resource_id=str(resource_id) if resource_id is not None else None,
+            metadata_json=json.dumps(metadata, default=str) if metadata else None,
+        )
+    )
+    await db.commit()
 
 
 # ----------------------------- domain helpers ---------------------------------
@@ -185,6 +216,7 @@ async def create_certidao(
     arquivo_path: str | None = None,
     orgao_emissor: str | None = None,
     observacoes: str | None = None,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
 ) -> CertidaoEmpresa:
     if tipo not in TIPOS_VALIDOS:
         # Aceitamos string livre para "OUTRO/custom", mas avisamos.
@@ -202,12 +234,25 @@ async def create_certidao(
     db.add(row)
     await db.commit()
     await db.refresh(row)
+    await _record_audit(
+        db,
+        action="create",
+        resource_id=row.id,
+        actor=actor,
+        metadata={
+            "empresa_cnpj": row.empresa_cnpj,
+            "tipo": row.tipo,
+            "validade": row.validade,
+        },
+    )
     return row
 
 
 async def update_certidao(
     db: AsyncSession,
     certidao_id: int,
+    *,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
     **fields: object,
 ) -> CertidaoEmpresa | None:
     row = await db.get(CertidaoEmpresa, certidao_id)
@@ -216,20 +261,49 @@ async def update_certidao(
     # Permite limpar campos nullable explicitamente (ex: PUT validade=null para
     # converter uma certidao em "sem validade"). O router ja usa
     # exclude_unset=True, entao so chegam aqui campos que o cliente enviou.
+    changed: dict[str, Any] = {}
     for key, value in fields.items():
         if hasattr(row, key):
+            old = getattr(row, key)
+            if old != value:
+                changed[key] = {"from": old, "to": value}
             setattr(row, key, value)
     await db.commit()
     await db.refresh(row)
+    if changed:
+        await _record_audit(
+            db,
+            action="update",
+            resource_id=row.id,
+            actor=actor,
+            metadata={"changed": changed},
+        )
     return row
 
 
-async def delete_certidao(db: AsyncSession, certidao_id: int) -> bool:
+async def delete_certidao(
+    db: AsyncSession,
+    certidao_id: int,
+    *,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
+) -> bool:
     row = await db.get(CertidaoEmpresa, certidao_id)
     if row is None:
         return False
+    snapshot = {
+        "empresa_cnpj": row.empresa_cnpj,
+        "tipo": row.tipo,
+        "validade": row.validade,
+    }
     await db.delete(row)
     await db.commit()
+    await _record_audit(
+        db,
+        action="delete",
+        resource_id=certidao_id,
+        actor=actor,
+        metadata=snapshot,
+    )
     return True
 
 

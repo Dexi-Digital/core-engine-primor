@@ -1,4 +1,5 @@
 """Tests for the boletins por email dispatcher (D.3)."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -65,9 +66,7 @@ async def test_render_digest_html_contains_object_and_dashboard_link(
         search="pavimentacao",
     )
 
-    html = render_digest_html(
-        query, seeded, public_base_url="https://motorcentral.example"
-    )
+    html = render_digest_html(query, seeded, public_base_url="https://motorcentral.example")
 
     assert "Pavimentação asfáltica BR-040" in html
     assert "Pavimentacao MG" in html  # nome da query no header
@@ -93,9 +92,7 @@ async def test_render_digest_html_url_encodes_search_with_spaces_and_accents(
         search="pavimentação asfáltica",
     )
 
-    html = render_digest_html(
-        query, seeded, public_base_url="https://motorcentral.example"
-    )
+    html = render_digest_html(query, seeded, public_base_url="https://motorcentral.example")
 
     # Must contain URL-encoded search, not raw spaces/accents.
     # `quote()` encodes space as %20 and ã as %C3%A3, ç as %C3%A7.
@@ -133,9 +130,7 @@ async def test_dispatch_sends_email_and_advances_cursor(
                 "body": request.content.decode() if request.content else "",
             }
         )
-        return httpx.Response(
-            200, json={"id": "resend-msg-abc", "to": ["tester@primor.com"]}
-        )
+        return httpx.Response(200, json={"id": "resend-msg-abc", "to": ["tester@primor.com"]})
 
     transport = httpx.MockTransport(handler)
     http = httpx.AsyncClient(
@@ -168,9 +163,7 @@ async def test_dispatch_sends_email_and_advances_cursor(
     # BoletimLog row persisted with cursor = highest licitacao id.
     log = (
         await db_session.execute(
-            BoletimLog.__table__.select().where(
-                BoletimLog.saved_query_id == query.id
-            )
+            BoletimLog.__table__.select().where(BoletimLog.saved_query_id == query.id)
         )
     ).first()
     assert log is not None
@@ -206,9 +199,7 @@ async def test_dispatch_sends_email_and_advances_cursor(
 async def test_dispatch_isolates_failures_and_does_not_advance_cursor(
     db_session: AsyncSession,
 ) -> None:
-    await _seed_licitacoes(
-        db_session, [_row(external_id="ext-1", objeto="Obra teste")]
-    )
+    await _seed_licitacoes(db_session, [_row(external_id="ext-1", objeto="Obra teste")])
     await create_saved_query(
         db_session,
         nome="SP tudo",
@@ -240,9 +231,7 @@ async def test_dispatch_isolates_failures_and_does_not_advance_cursor(
 
     # After failure, cursor must remain None so next run retries the same rows.
     log = (
-        await db_session.execute(
-            BoletimLog.__table__.select().order_by(BoletimLog.sent_at.desc())
-        )
+        await db_session.execute(BoletimLog.__table__.select().order_by(BoletimLog.sent_at.desc()))
     ).first()
     assert log is not None
     assert log.status == "failed"
@@ -255,9 +244,7 @@ async def test_dispatch_isolates_failures_and_does_not_advance_cursor(
 async def test_resend_raises_on_empty_recipients() -> None:
     resend = ResendClient(api_key="re_test")
     with pytest.raises(ValueError):
-        await resend.send_email(
-            to=[], subject="x", html="<p>hi</p>", from_="x@y.com"
-        )
+        await resend.send_email(to=[], subject="x", html="<p>hi</p>", from_="x@y.com")
     await resend.aclose()
 
 
@@ -275,9 +262,7 @@ async def test_resend_reraises_non_recoverable_as_resend_error() -> None:
         ),
     )
     with pytest.raises(ResendError):
-        await resend.send_email(
-            to=["x@y.com"], subject="x", html="<p>h</p>", from_="x@y.com"
-        )
+        await resend.send_email(to=["x@y.com"], subject="x", html="<p>h</p>", from_="x@y.com")
     await resend.aclose()
 
 
@@ -285,7 +270,9 @@ async def test_resend_reraises_non_recoverable_as_resend_error() -> None:
 
 
 @pytest.mark.asyncio
-async def test_crud_saved_queries_roundtrip(api_client: AsyncClient) -> None:
+async def test_crud_saved_queries_roundtrip(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
     resp = await api_client.post(
         "/api/v1/licitacoes/boletins/saved-queries",
         json={
@@ -295,6 +282,7 @@ async def test_crud_saved_queries_roundtrip(api_client: AsyncClient) -> None:
             "uf": "SP",
             "search": "pavimenta",
         },
+        headers=auth_headers,
     )
     assert resp.status_code == 201, resp.text
     created = resp.json()
@@ -309,7 +297,7 @@ async def test_crud_saved_queries_roundtrip(api_client: AsyncClient) -> None:
     assert rows[0]["id"] == saved_id
 
     resp = await api_client.delete(
-        f"/api/v1/licitacoes/boletins/saved-queries/{saved_id}"
+        f"/api/v1/licitacoes/boletins/saved-queries/{saved_id}", headers=auth_headers
     )
     assert resp.status_code == 204
 
@@ -321,6 +309,7 @@ async def test_crud_saved_queries_roundtrip(api_client: AsyncClient) -> None:
 async def test_dispatch_endpoint_returns_503_without_api_key(
     api_client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
+    auth_headers: dict[str, str],
 ) -> None:
     # Simulate an unconfigured deploy: no RESEND_API_KEY in the environment.
     monkeypatch.delenv("RESEND_API_KEY", raising=False)
@@ -328,14 +317,16 @@ async def test_dispatch_endpoint_returns_503_without_api_key(
 
     get_settings.cache_clear()
 
-    resp = await api_client.post("/api/v1/licitacoes/boletins/dispatch")
+    resp = await api_client.post("/api/v1/licitacoes/boletins/dispatch", headers=auth_headers)
     assert resp.status_code == 503
     assert "RESEND_API_KEY" in resp.json()["detail"]
     get_settings.cache_clear()
 
 
 @pytest.mark.asyncio
-async def test_saved_query_rejects_empty_recipients(api_client: AsyncClient) -> None:
+async def test_saved_query_rejects_empty_recipients(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
     resp = await api_client.post(
         "/api/v1/licitacoes/boletins/saved-queries",
         json={
@@ -343,5 +334,6 @@ async def test_saved_query_rejects_empty_recipients(api_client: AsyncClient) -> 
             "user_email": "a@b.com",
             "recipients": [],
         },
+        headers=auth_headers,
     )
     assert resp.status_code == 422

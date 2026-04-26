@@ -53,6 +53,9 @@ _AUDIT_RESOURCE = "manutencao_frota.veiculo"
 _AUDIT_RESOURCE_DOC = "manutencao_frota.documento"
 _AUDIT_RESOURCE_CONSULTA = "manutencao_frota.consulta_detran"
 _AUDIT_RESOURCE_PARTE = "manutencao_frota.parte_diaria"
+# Default usado em paths sem usuario logado (worker OCR, worker Detran,
+# falhas de dispatch sincrono que viram erro depois). Mutacoes vindas
+# de requests HTTP devem passar `actor=current_user.email` -- ver router.
 _AUDIT_ACTOR_PLACEHOLDER = "system"
 
 
@@ -84,6 +87,7 @@ async def create_veiculo(
     db: AsyncSession,
     *,
     documentos: Sequence[Any] | None = None,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
     **fields: Any,
 ) -> Veiculo:
     # Normalizacao redundante com o schema -- tres motivos: (1) workers
@@ -111,6 +115,7 @@ async def create_veiculo(
         action="create",
         resource=_AUDIT_RESOURCE,
         resource_id=veiculo.id,
+        actor=actor,
         metadata={
             "placa": veiculo.placa,
             "renavam": veiculo.renavam,
@@ -202,7 +207,11 @@ async def list_veiculos(
 
 
 async def update_veiculo(
-    db: AsyncSession, veiculo_id: int, **fields: Any
+    db: AsyncSession,
+    veiculo_id: int,
+    *,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
+    **fields: Any,
 ) -> Veiculo | None:
     row = await db.get(Veiculo, veiculo_id)
     if row is None:
@@ -221,12 +230,18 @@ async def update_veiculo(
             action="update",
             resource=_AUDIT_RESOURCE,
             resource_id=veiculo_id,
+            actor=actor,
             metadata={"changed": changed},
         )
     return await get_veiculo(db, veiculo_id)
 
 
-async def delete_veiculo(db: AsyncSession, veiculo_id: int) -> bool:
+async def delete_veiculo(
+    db: AsyncSession,
+    veiculo_id: int,
+    *,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
+) -> bool:
     row = await db.get(Veiculo, veiculo_id)
     if row is None:
         return False
@@ -254,6 +269,7 @@ async def delete_veiculo(db: AsyncSession, veiculo_id: int) -> bool:
         action="delete",
         resource=_AUDIT_RESOURCE,
         resource_id=veiculo_id,
+        actor=actor,
         metadata=snapshot,
     )
     return True
@@ -263,7 +279,11 @@ async def delete_veiculo(db: AsyncSession, veiculo_id: int) -> bool:
 
 
 async def add_documento(
-    db: AsyncSession, veiculo_id: int, **fields: Any
+    db: AsyncSession,
+    veiculo_id: int,
+    *,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
+    **fields: Any,
 ) -> DocumentoVeiculo | None:
     """Adiciona um documento a um veiculo. Retorna None se o veiculo
     nao existir."""
@@ -279,6 +299,7 @@ async def add_documento(
         action="create",
         resource=_AUDIT_RESOURCE_DOC,
         resource_id=doc.id,
+        actor=actor,
         metadata={
             "veiculo_id": veiculo_id,
             "tipo": doc.tipo,
@@ -290,7 +311,11 @@ async def add_documento(
 
 
 async def update_documento(
-    db: AsyncSession, documento_id: int, **fields: Any
+    db: AsyncSession,
+    documento_id: int,
+    *,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
+    **fields: Any,
 ) -> DocumentoVeiculo | None:
     row = await db.get(DocumentoVeiculo, documento_id)
     if row is None:
@@ -309,6 +334,7 @@ async def update_documento(
             action="update",
             resource=_AUDIT_RESOURCE_DOC,
             resource_id=documento_id,
+            actor=actor,
             metadata={"changed": changed, "veiculo_id": row.veiculo_id},
         )
     await db.refresh(row)
@@ -316,7 +342,10 @@ async def update_documento(
 
 
 async def delete_documento(
-    db: AsyncSession, documento_id: int
+    db: AsyncSession,
+    documento_id: int,
+    *,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
 ) -> bool:
     row = await db.get(DocumentoVeiculo, documento_id)
     if row is None:
@@ -334,6 +363,7 @@ async def delete_documento(
         action="delete",
         resource=_AUDIT_RESOURCE_DOC,
         resource_id=documento_id,
+        actor=actor,
         metadata=snapshot,
     )
     return True
@@ -424,6 +454,7 @@ async def consultar_detran(
     uf: str,
     *,
     client: Any,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
 ) -> ConsultaDetran:
     """Consulta Detran via Infosimples e persiste resultado.
 
@@ -476,6 +507,7 @@ async def consultar_detran(
             action="error",
             resource=_AUDIT_RESOURCE_CONSULTA,
             resource_id=consulta.id,
+            actor=actor,
             metadata={
                 "veiculo_id": veiculo_id,
                 "placa": placa,
@@ -502,6 +534,7 @@ async def consultar_detran(
         action="create",
         resource=_AUDIT_RESOURCE_CONSULTA,
         resource_id=consulta.id,
+        actor=actor,
         metadata={
             "veiculo_id": veiculo_id,
             "placa": placa,
@@ -660,6 +693,7 @@ async def create_parte_diaria(
     mime_type: str,
     storage: Any,
     storage_subdir_bucket: int = 0,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
 ) -> ParteDiaria:
     """Cria parte diaria com anexo + status `pendente`.
 
@@ -691,6 +725,7 @@ async def create_parte_diaria(
         action="create",
         resource=_AUDIT_RESOURCE_PARTE,
         resource_id=parte.id,
+        actor=actor,
         metadata={
             "filename": filename,
             "mime_type": mime_type,
@@ -702,7 +737,11 @@ async def create_parte_diaria(
 
 
 async def mark_parte_diaria_erro(
-    db: AsyncSession, parte_id: int, error_msg: str
+    db: AsyncSession,
+    parte_id: int,
+    error_msg: str,
+    *,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
 ) -> ParteDiaria | None:
     """Marca uma parte_diaria como `erro` com mensagem truncada.
 
@@ -724,6 +763,7 @@ async def mark_parte_diaria_erro(
         action="error",
         resource=_AUDIT_RESOURCE_PARTE,
         resource_id=parte.id,
+        actor=actor,
         metadata={"error_msg": parte.ocr_error_msg},
     )
     return parte
@@ -855,6 +895,8 @@ async def update_parte_diaria(
     db: AsyncSession,
     parte_id: int,
     fields: dict[str, Any],
+    *,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
 ) -> ParteDiaria | None:
     """Revisao manual dos campos extraidos.
 
@@ -903,6 +945,7 @@ async def update_parte_diaria(
         action="update",
         resource=_AUDIT_RESOURCE_PARTE,
         resource_id=parte.id,
+        actor=actor,
         metadata={"changed": changed},
     )
     await db.refresh(parte)
@@ -910,7 +953,11 @@ async def update_parte_diaria(
 
 
 async def delete_parte_diaria(
-    db: AsyncSession, parte_id: int, *, storage: Any
+    db: AsyncSession,
+    parte_id: int,
+    *,
+    storage: Any,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
 ) -> bool:
     """Apaga parte diaria + anexo no storage. Audita antes do delete."""
     parte = await db.get(ParteDiaria, parte_id)
@@ -941,6 +988,7 @@ async def delete_parte_diaria(
         action="delete",
         resource=_AUDIT_RESOURCE_PARTE,
         resource_id=parte_id,
+        actor=actor,
         metadata=snapshot,
     )
     return True

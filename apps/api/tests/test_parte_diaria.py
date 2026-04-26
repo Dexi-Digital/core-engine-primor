@@ -1,4 +1,5 @@
 """Testes de parte diaria (Modulo B.2) -- service + router + storage."""
+
 from __future__ import annotations
 
 import io
@@ -40,9 +41,7 @@ class FakeOkOcrClient:
     async def processar_documento(
         self, *, content: bytes, mime_type: str, filename: str | None = None
     ) -> dict[str, Any]:
-        self.calls.append(
-            {"size": len(content), "mime": mime_type, "filename": filename}
-        )
+        self.calls.append({"size": len(content), "mime": mime_type, "filename": filename})
         if self._payload is not None:
             return self._payload
         return {
@@ -120,9 +119,7 @@ def in_memory_storage():
     app.dependency_overrides.pop(get_partes_diarias_storage, None)
 
 
-def _eager_factory(
-    client: Any, db_session: AsyncSession, storage: Any
-):
+def _eager_factory(client: Any, db_session: AsyncSession, storage: Any):
     """Substitui o dispatcher Celery por execucao sincrona in-process.
 
     Conforme AGENTS.md, OCR roda no worker em prod -- mas como testes de
@@ -132,6 +129,7 @@ def _eager_factory(
     sai com `ocr_status='processado'` (ou 'erro') antes do response
     voltar para o caller, e a UI nao precisa esperar polling no teste.
     """
+
     async def _dispatch(parte_id: int) -> None:
         await service.processar_ocr_parte_diaria(
             db_session, parte_id, client=client, storage=storage
@@ -172,9 +170,12 @@ async def test_upload_extrai_campos_e_persiste(
     db_session: AsyncSession,
     in_memory_storage: InMemoryStorage,
     fake_ok_ocr: FakeOkOcrClient,
+    auth_headers: dict[str, str],
 ) -> None:
     files = {"arquivo": ("parte-001.pdf", b"%PDF-fake-bytes", "application/pdf")}
-    r = await api_client.post("/api/v1/manutencao-frota/partes-diarias", files=files)
+    r = await api_client.post(
+        "/api/v1/manutencao-frota/partes-diarias", files=files, headers=auth_headers
+    )
     assert r.status_code == 202, r.text
     body = r.json()
     assert body["ocr_status"] == PARTE_PROCESSADO
@@ -198,9 +199,12 @@ async def test_upload_arquivo_vazio_devolve_422(
     api_client: AsyncClient,
     in_memory_storage: InMemoryStorage,
     fake_ok_ocr: FakeOkOcrClient,
+    auth_headers: dict[str, str],
 ) -> None:
     files = {"arquivo": ("vazio.pdf", b"", "application/pdf")}
-    r = await api_client.post("/api/v1/manutencao-frota/partes-diarias", files=files)
+    r = await api_client.post(
+        "/api/v1/manutencao-frota/partes-diarias", files=files, headers=auth_headers
+    )
     assert r.status_code == 422
 
 
@@ -210,6 +214,7 @@ async def test_upload_amarra_veiculo_via_placa_extraida(
     db_session: AsyncSession,
     in_memory_storage: InMemoryStorage,
     fake_ok_ocr: FakeOkOcrClient,
+    auth_headers: dict[str, str],
 ) -> None:
     """Quando OCR extrai placa que existe no cadastro, parte_diaria.veiculo_id
     e setado automaticamente."""
@@ -217,11 +222,14 @@ async def test_upload_amarra_veiculo_via_placa_extraida(
     rv = await api_client.post(
         "/api/v1/manutencao-frota/veiculos",
         json={"placa": "ABC1234", "renavam": "12345678900"},
+        headers=auth_headers,
     )
     veiculo_id = rv.json()["id"]
 
     files = {"arquivo": ("parte.pdf", b"%PDF-x", "application/pdf")}
-    r = await api_client.post("/api/v1/manutencao-frota/partes-diarias", files=files)
+    r = await api_client.post(
+        "/api/v1/manutencao-frota/partes-diarias", files=files, headers=auth_headers
+    )
     assert r.status_code == 202
     assert r.json()["veiculo_id"] == veiculo_id
 
@@ -232,13 +240,16 @@ async def test_ocr_falha_devolve_201_com_status_erro(
     db_session: AsyncSession,
     in_memory_storage: InMemoryStorage,
     fake_failing_ocr: FakeFailingOcrClient,
+    auth_headers: dict[str, str],
 ) -> None:
     """Document AI fora do ar -> parte registrada com status='erro'.
 
     Endpoint NAO devolve 5xx -- UI renderiza erro inline e operador
     pode reprocessar."""
     files = {"arquivo": ("parte.pdf", b"%PDF-x", "application/pdf")}
-    r = await api_client.post("/api/v1/manutencao-frota/partes-diarias", files=files)
+    r = await api_client.post(
+        "/api/v1/manutencao-frota/partes-diarias", files=files, headers=auth_headers
+    )
     assert r.status_code == 202
     body = r.json()
     assert body["ocr_status"] == PARTE_ERRO
@@ -253,19 +264,26 @@ async def test_audit_log_registra_create_e_update(
     db_session: AsyncSession,
     in_memory_storage: InMemoryStorage,
     fake_ok_ocr: FakeOkOcrClient,
+    auth_headers: dict[str, str],
 ) -> None:
     files = {"arquivo": ("parte.pdf", b"%PDF-x", "application/pdf")}
-    r = await api_client.post("/api/v1/manutencao-frota/partes-diarias", files=files)
+    r = await api_client.post(
+        "/api/v1/manutencao-frota/partes-diarias", files=files, headers=auth_headers
+    )
     assert r.status_code == 202
     parte_id = r.json()["id"]
     rows = (
-        await db_session.execute(
-            select(AuditLog).where(
-                AuditLog.resource == "manutencao_frota.parte_diaria",
-                AuditLog.resource_id == parte_id,
+        (
+            await db_session.execute(
+                select(AuditLog).where(
+                    AuditLog.resource == "manutencao_frota.parte_diaria",
+                    AuditLog.resource_id == parte_id,
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     actions = [a.action for a in rows]
     assert "create" in actions  # upload
     assert "update" in actions  # OCR processado
@@ -280,11 +298,12 @@ async def test_patch_promove_status_para_revisado(
     db_session: AsyncSession,
     in_memory_storage: InMemoryStorage,
     fake_ok_ocr: FakeOkOcrClient,
+    auth_headers: dict[str, str],
 ) -> None:
     """Operador ajusta um campo -> status auto vira `revisado`."""
     files = {"arquivo": ("parte.pdf", b"%PDF-x", "application/pdf")}
     r = await api_client.post(
-        "/api/v1/manutencao-frota/partes-diarias", files=files
+        "/api/v1/manutencao-frota/partes-diarias", files=files, headers=auth_headers
     )
     parte_id = r.json()["id"]
     assert r.json()["ocr_status"] == PARTE_PROCESSADO
@@ -292,6 +311,7 @@ async def test_patch_promove_status_para_revisado(
     r2 = await api_client.patch(
         f"/api/v1/manutencao-frota/partes-diarias/{parte_id}",
         json={"operador": "Pedro Corrigido"},
+        headers=auth_headers,
     )
     assert r2.status_code == 200
     assert r2.json()["operador"] == "Pedro Corrigido"
@@ -304,16 +324,18 @@ async def test_patch_status_explicito_e_validado(
     db_session: AsyncSession,
     in_memory_storage: InMemoryStorage,
     fake_ok_ocr: FakeOkOcrClient,
+    auth_headers: dict[str, str],
 ) -> None:
     files = {"arquivo": ("parte.pdf", b"%PDF-x", "application/pdf")}
     r = await api_client.post(
-        "/api/v1/manutencao-frota/partes-diarias", files=files
+        "/api/v1/manutencao-frota/partes-diarias", files=files, headers=auth_headers
     )
     parte_id = r.json()["id"]
 
     r_bad = await api_client.patch(
         f"/api/v1/manutencao-frota/partes-diarias/{parte_id}",
         json={"ocr_status": "fantasma"},
+        headers=auth_headers,
     )
     assert r_bad.status_code == 422
 
@@ -323,10 +345,12 @@ async def test_patch_404_em_id_inexistente(
     api_client: AsyncClient,
     in_memory_storage: InMemoryStorage,
     fake_ok_ocr: FakeOkOcrClient,
+    auth_headers: dict[str, str],
 ) -> None:
     r = await api_client.patch(
         "/api/v1/manutencao-frota/partes-diarias/999",
         json={"operador": "x"},
+        headers=auth_headers,
     )
     assert r.status_code == 404
 
@@ -340,12 +364,14 @@ async def test_list_filtra_por_status_e_obra(
     db_session: AsyncSession,
     in_memory_storage: InMemoryStorage,
     fake_ok_ocr: FakeOkOcrClient,
+    auth_headers: dict[str, str],
 ) -> None:
     # 2 uploads -> ambos com status=processado, obra=Obra Norte (mock).
     for fn in ("p1.pdf", "p2.pdf"):
         await api_client.post(
             "/api/v1/manutencao-frota/partes-diarias",
             files={"arquivo": (fn, b"%PDF-x", "application/pdf")},
+            headers=auth_headers,
         )
 
     r = await api_client.get(
@@ -378,6 +404,7 @@ async def test_reprocessar_recupera_de_erro(
     api_client: AsyncClient,
     db_session: AsyncSession,
     in_memory_storage: InMemoryStorage,
+    auth_headers: dict[str, str],
 ) -> None:
     """Upload com OCR falhando -> swap do dispatcher pelo OK ->
     reprocessar deve atualizar para `processado`."""
@@ -387,19 +414,17 @@ async def test_reprocessar_recupera_de_erro(
     )
     files = {"arquivo": ("parte.pdf", b"%PDF-x", "application/pdf")}
     r = await api_client.post(
-        "/api/v1/manutencao-frota/partes-diarias", files=files
+        "/api/v1/manutencao-frota/partes-diarias", files=files, headers=auth_headers
     )
     parte_id = r.json()["id"]
     assert r.json()["ocr_status"] == PARTE_ERRO
 
     # Substitui pelo OK e reprocessa.
     ok = FakeOkOcrClient()
-    app.dependency_overrides[get_ocr_dispatcher] = _eager_factory(
-        ok, db_session, in_memory_storage
-    )
+    app.dependency_overrides[get_ocr_dispatcher] = _eager_factory(ok, db_session, in_memory_storage)
     try:
         r2 = await api_client.post(
-            f"/api/v1/manutencao-frota/partes-diarias/{parte_id}/reprocessar"
+            f"/api/v1/manutencao-frota/partes-diarias/{parte_id}/reprocessar", headers=auth_headers
         )
         assert r2.status_code == 202
         body = r2.json()
@@ -414,6 +439,7 @@ async def test_dispatcher_broker_down_marca_erro(
     api_client: AsyncClient,
     db_session: AsyncSession,
     in_memory_storage: InMemoryStorage,
+    auth_headers: dict[str, str],
 ) -> None:
     """Broker do Celery indisponivel -> upload nao falha; row fica `erro`.
 
@@ -421,6 +447,7 @@ async def test_dispatcher_broker_down_marca_erro(
     mas se o broker estiver fora a UX nao pode quebrar -- o operador
     precisa ver o anexo persistido com mensagem de erro clara.
     """
+
     async def _broken(_parte_id: int) -> None:
         raise ConnectionError("broker offline")
 
@@ -428,7 +455,7 @@ async def test_dispatcher_broker_down_marca_erro(
     try:
         files = {"arquivo": ("parte.pdf", b"%PDF-x", "application/pdf")}
         r = await api_client.post(
-            "/api/v1/manutencao-frota/partes-diarias", files=files
+            "/api/v1/manutencao-frota/partes-diarias", files=files, headers=auth_headers
         )
         assert r.status_code == 202, r.text
         body = r.json()
@@ -448,30 +475,35 @@ async def test_delete_remove_anexo_do_storage(
     db_session: AsyncSession,
     in_memory_storage: InMemoryStorage,
     fake_ok_ocr: FakeOkOcrClient,
+    auth_headers: dict[str, str],
 ) -> None:
     files = {"arquivo": ("parte.pdf", b"%PDF-x", "application/pdf")}
     r = await api_client.post(
-        "/api/v1/manutencao-frota/partes-diarias", files=files
+        "/api/v1/manutencao-frota/partes-diarias", files=files, headers=auth_headers
     )
     parte_id = r.json()["id"]
     assert any(in_memory_storage._data)
 
     rd = await api_client.delete(
-        f"/api/v1/manutencao-frota/partes-diarias/{parte_id}"
+        f"/api/v1/manutencao-frota/partes-diarias/{parte_id}", headers=auth_headers
     )
     assert rd.status_code == 204
     assert not in_memory_storage._data
 
     # Audit_log delete registrado.
     rows = (
-        await db_session.execute(
-            select(AuditLog).where(
-                AuditLog.resource == "manutencao_frota.parte_diaria",
-                AuditLog.resource_id == parte_id,
-                AuditLog.action == "delete",
+        (
+            await db_session.execute(
+                select(AuditLog).where(
+                    AuditLog.resource == "manutencao_frota.parte_diaria",
+                    AuditLog.resource_id == parte_id,
+                    AuditLog.action == "delete",
+                )
             )
         )
-    ).scalars().all()
+        .scalars()
+        .all()
+    )
     assert len(rows) == 1
 
 
@@ -481,23 +513,25 @@ async def test_veiculo_delete_nao_deleta_parte_diaria(
     db_session: AsyncSession,
     in_memory_storage: InMemoryStorage,
     fake_ok_ocr: FakeOkOcrClient,
+    auth_headers: dict[str, str],
 ) -> None:
     """Auditoria: parte diaria sobrevive ao delete do veiculo (FK
     SET NULL). Cascata seria perda de evidencia operacional."""
     rv = await api_client.post(
         "/api/v1/manutencao-frota/veiculos",
         json={"placa": "ABC1234", "renavam": "12345678900"},
+        headers=auth_headers,
     )
     veiculo_id = rv.json()["id"]
     files = {"arquivo": ("parte.pdf", b"%PDF-x", "application/pdf")}
     rp = await api_client.post(
-        "/api/v1/manutencao-frota/partes-diarias", files=files
+        "/api/v1/manutencao-frota/partes-diarias", files=files, headers=auth_headers
     )
     parte_id = rp.json()["id"]
     assert rp.json()["veiculo_id"] == veiculo_id
 
     rd = await api_client.delete(
-        f"/api/v1/manutencao-frota/veiculos/{veiculo_id}"
+        f"/api/v1/manutencao-frota/veiculos/{veiculo_id}", headers=auth_headers
     )
     assert rd.status_code == 204
 

@@ -1,4 +1,5 @@
 """Tests for D.4 -- download de editais PNCP + armazenamento local."""
+
 from __future__ import annotations
 
 import tempfile
@@ -99,9 +100,7 @@ def _portal_transport(
 def _make_pncp_client(transport: httpx.MockTransport) -> PncpClient:
     # Inject a httpx.AsyncClient backed by MockTransport for the portal
     # endpoints. Consulta client is not used by D.4 so left default.
-    portal_client = httpx.AsyncClient(
-        transport=transport, base_url="https://pncp.gov.br/api/pncp"
-    )
+    portal_client = httpx.AsyncClient(transport=transport, base_url="https://pncp.gov.br/api/pncp")
     return PncpClient(portal_client=portal_client)
 
 
@@ -132,9 +131,7 @@ async def test_local_storage_writes_file_with_size():
 
     with tempfile.TemporaryDirectory() as tmp:
         storage = LocalStorage(tmp)
-        path, size = await storage.save(
-            licitacao_id=42, filename="edital.pdf", content=_stream()
-        )
+        path, size = await storage.save(licitacao_id=42, filename="edital.pdf", content=_stream())
     # 'abc' + 'def' = 6 bytes; empty chunk skipped
     assert size == 6
     target = Path(path)
@@ -169,9 +166,7 @@ def test_extract_filename_handles_quoted_and_unquoted():
 async def test_pncp_list_arquivos_happy_path():
     client = _make_pncp_client(_portal_transport())
     try:
-        arquivos = await client.list_arquivos(
-            cnpj="12345678000100", ano=2026, sequencial=7
-        )
+        arquivos = await client.list_arquivos(cnpj="12345678000100", ano=2026, sequencial=7)
     finally:
         await client.aclose()
     assert len(arquivos) == 2
@@ -185,9 +180,7 @@ async def test_pncp_list_arquivos_returns_empty_on_204_and_404():
     for code in (204, 404):
         client = _make_pncp_client(_portal_transport(list_status=code))
         try:
-            arquivos = await client.list_arquivos(
-                cnpj="12345678000100", ano=2026, sequencial=7
-            )
+            arquivos = await client.list_arquivos(cnpj="12345678000100", ano=2026, sequencial=7)
         finally:
             await client.aclose()
         assert arquivos == []
@@ -218,10 +211,10 @@ async def test_download_edital_creates_rows_and_files(db_session, tmp_path):
     assert edital.anexos_count == 2
 
     anexos = (
-        await db_session.execute(
-            select(AnexoEdital).where(AnexoEdital.edital_id == edital.id)
-        )
-    ).scalars().all()
+        (await db_session.execute(select(AnexoEdital).where(AnexoEdital.edital_id == edital.id)))
+        .scalars()
+        .all()
+    )
     assert {a.sequencial_documento for a in anexos} == {1, 2}
 
     # Files must exist on disk with the server-returned bytes.
@@ -255,9 +248,7 @@ async def test_download_edital_is_idempotent(db_session, tmp_path):
     assert second.anexos_count == 2
 
     # No duplicate anexos -- idempotent re-run must leave the table at 2 rows.
-    anexos = (
-        await db_session.execute(select(AnexoEdital))
-    ).scalars().all()
+    anexos = (await db_session.execute(select(AnexoEdital))).scalars().all()
     assert len(anexos) == 2
 
 
@@ -274,9 +265,7 @@ async def test_download_edital_empty_when_pncp_has_no_files(db_session, tmp_path
 
     assert result.status == "empty"
     assert result.anexos_count == 0
-    edital = (
-        await db_session.execute(select(Edital))
-    ).scalar_one()
+    edital = (await db_session.execute(select(Edital))).scalar_one()
     assert edital.status == "empty"
 
 
@@ -314,7 +303,7 @@ async def test_get_edital_404_before_download(api_client, db_session):
 
 @pytest.mark.anyio
 async def test_post_download_and_get_edital_roundtrip(
-    api_client, db_session, tmp_path, monkeypatch
+    api_client, db_session, tmp_path, monkeypatch, auth_headers: dict[str, str]
 ):
     from app.main import app
     from app.modules.licitacoes.router import (
@@ -329,7 +318,7 @@ async def test_post_download_and_get_edital_roundtrip(
     app.dependency_overrides[get_editais_storage] = lambda: LocalStorage(tmp_path)
     try:
         post = await api_client.post(
-            f"/api/v1/licitacoes/{licitacao.id}/edital/download"
+            f"/api/v1/licitacoes/{licitacao.id}/edital/download", headers=auth_headers
         )
         assert post.status_code == 200, post.text
         body = post.json()
@@ -352,7 +341,7 @@ async def test_post_download_and_get_edital_roundtrip(
 
 def test_comprasnet_extract_edital_links_parses_relative_hrefs():
     html = (
-        '<html><body>'
+        "<html><body>"
         '<a href="download_editais_detalhe.asp?coduasg=1&modprp=5&numprp=900001">x</a>'
         '<a href="https://example.com/other">y</a>'
         '<a HREF="download_editais_detalhe.asp?pagina=2">z</a>'
@@ -411,9 +400,7 @@ async def test_stream_arquivo_closes_response_on_http_error():
             resp.aclose = _track  # type: ignore[method-assign]
             return resp
 
-    portal = httpx.AsyncClient(
-        transport=_Recorder(), base_url="https://pncp.gov.br/api/pncp"
-    )
+    portal = httpx.AsyncClient(transport=_Recorder(), base_url="https://pncp.gov.br/api/pncp")
     client = PncpClient(portal_client=portal)
     try:
         with pytest.raises(httpx.HTTPStatusError):
@@ -430,7 +417,7 @@ async def test_download_edital_skips_arquivo_with_empty_url(db_session, tmp_path
     the batch and losing progress on previously successful files."""
     arquivos_with_empty = [
         {**SAMPLE_ARQUIVOS[0], "url": "", "uri": ""},  # empty url -> ValueError
-        SAMPLE_ARQUIVOS[1],                             # valid -> must still be saved
+        SAMPLE_ARQUIVOS[1],  # valid -> must still be saved
     ]
 
     licitacao = await _seed_licitacao(db_session)
