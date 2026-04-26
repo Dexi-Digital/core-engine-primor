@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import date as _date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -284,16 +285,22 @@ async def dossie_cpf(
 # --- Afastamentos INSS (D4) -------------------------------------------------
 
 
-def _to_afastamento_read(row) -> AfastamentoRead:
+def _to_afastamento_read(
+    row, *, today: _date | None = None
+) -> AfastamentoRead:
     """Materializa um Afastamento ORM em AfastamentoRead com campos
     computados (`dcb_status`, `pericia_status`, dias restantes).
-    """
-    base = AfastamentoRead.model_validate(row).model_dump()
-    base["dcb_status"] = compute_dcb_status(row.dcb)
-    base["pericia_status"] = compute_pericia_status(row.data_pericia)
-    from datetime import date as _date
 
-    today = _date.today()
+    Aceita `today` para garantir consistencia entre status e
+    `dias_para_*` quando o request cruza meia-noite -- mesmo padrao
+    de `_certidao_to_read` em `certidoes_router`.
+    """
+    today = today or _date.today()
+    base = AfastamentoRead.model_validate(row).model_dump()
+    base["dcb_status"] = compute_dcb_status(row.dcb, today=today)
+    base["pericia_status"] = compute_pericia_status(
+        row.data_pericia, today=today
+    )
     base["dias_para_dcb"] = (
         (row.dcb - today).days if row.dcb is not None else None
     )
@@ -314,7 +321,8 @@ async def list_afastamentos_endpoint(
     rows = await afastamentos_svc.list_afastamentos(
         db, employee_id=employee_id, status=status
     )
-    return [_to_afastamento_read(r) for r in rows]
+    today = _date.today()
+    return [_to_afastamento_read(r, today=today) for r in rows]
 
 
 @router.post(

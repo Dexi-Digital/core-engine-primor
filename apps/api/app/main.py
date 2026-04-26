@@ -11,13 +11,21 @@ from app.core.logging import configure_logging
 from app.core.middleware import CorrelationIdMiddleware
 from app.modules.auth.router import router as auth_router
 from app.modules.auth.startup import ensure_admin_seed, warn_dev_secret
+from app.modules.diagnostico.router import router as diagnostico_router
+from app.modules.dp_sesmt.employee_documents import (
+    router as dp_employee_docs_router,
+)
 from app.modules.dp_sesmt.router import router as dp_sesmt_router
 from app.modules.financeiro_contratos.router import router as financeiro_router
 from app.modules.fiscal.router import router as fiscal_router
 from app.modules.ia_tools.router import router as ia_tools_router
 from app.modules.licitacoes.certidoes_router import router as certidoes_router
+from app.modules.licitacoes.empresa_documentos import (
+    router as empresa_documentos_router,
+)
 from app.modules.licitacoes.router import router as licitacoes_router
 from app.modules.manutencao_frota.router import router as manutencao_router
+from app.modules.obras.router import router as obras_router
 from app.modules.observability.router import router as observability_router
 
 
@@ -106,6 +114,13 @@ def create_app() -> FastAPI:
         prefix="/api/v1/observability",
         tags=["observability"],
     )
+    # D1 -- diagnostico documental e modulos auxiliares (obras + docs
+    # genericos por funcionario/empresa). Cada router ja define seu
+    # proprio prefix.
+    app.include_router(diagnostico_router)
+    app.include_router(obras_router)
+    app.include_router(dp_employee_docs_router)
+    app.include_router(empresa_documentos_router)
 
     return app
 

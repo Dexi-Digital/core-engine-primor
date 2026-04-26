@@ -5,6 +5,8 @@ import type { ReactNode } from "react";
 import { ApiError, apiFetch } from "@/lib/api";
 
 const nav = [
+  { href: "/diagnostico", label: "Diagnóstico" },
+  { href: "/obras", label: "Obras" },
   { href: "/rh", label: "RH / DP" },
   { href: "/manutencao", label: "Manutenção" },
   { href: "/financeiro", label: "Financeiro" },

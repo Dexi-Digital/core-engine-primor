@@ -48,6 +48,56 @@ async def test_create_employee_persiste_e_normaliza_cpf(
 
 
 @pytest.mark.asyncio
+async def test_create_employee_aceita_e_retorna_flags_sst(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """Regressao: flags SST (D1) precisam estar nos schemas Pydantic.
+
+    Sem isso, as regras condicionais do diagnostico documental
+    (NR-12 se is_operador_maquina, NR-35 se is_alturas, toxicologico
+    se is_motorista, NR-10 se is_eletricista, NR-18 default exceto
+    is_admin_office) nunca disparam porque os campos sao silenciosamente
+    descartados pelo Pydantic em POST/PUT/GET.
+    """
+    create = await api_client.post(
+        "/api/v1/dp-sesmt/employees",
+        json={
+            "cpf": VALID_CPF_1,
+            "nome_completo": "Motorista Operador",
+            "cargo": "Motorista",
+            "is_motorista": True,
+            "is_operador_maquina": True,
+        },
+        headers=auth_headers,
+    )
+    assert create.status_code == 201, create.text
+    body = create.json()
+    assert body["is_motorista"] is True
+    assert body["is_operador_maquina"] is True
+    assert body["is_admin_office"] is False
+    assert body["is_alturas"] is False
+    assert body["is_eletricista"] is False
+
+    # GET tem que devolver os mesmos valores.
+    fetched = await api_client.get(f"/api/v1/dp-sesmt/employees/{body['id']}")
+    assert fetched.status_code == 200
+    assert fetched.json()["is_motorista"] is True
+    assert fetched.json()["is_operador_maquina"] is True
+
+    # PATCH tem que conseguir atualizar.
+    patched = await api_client.put(
+        f"/api/v1/dp-sesmt/employees/{body['id']}",
+        json={"is_motorista": False, "is_alturas": True},
+        headers=auth_headers,
+    )
+    assert patched.status_code == 200
+    assert patched.json()["is_motorista"] is False
+    assert patched.json()["is_alturas"] is True
+    # Flags nao mexidas precisam continuar como estavam.
+    assert patched.json()["is_operador_maquina"] is True
+
+
+@pytest.mark.asyncio
 async def test_create_employee_rejeita_cpf_invalido(
     api_client: AsyncClient, auth_headers: dict[str, str]
 ) -> None:
