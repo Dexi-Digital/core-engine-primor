@@ -14,7 +14,12 @@ dependencies = [
     "psycopg2-binary>=2.9.9",
     "httpx>=0.27.2",
     "python-jose[cryptography]>=3.3.0",
+    # passlib continua na lista (compat caso outros services importem)
+    # mas o auth real usa `bcrypt` diretamente -- passlib 1.7.4 quebra
+    # com bcrypt 4+/5+ na deteccao de "wrap bug" (hashea um secret > 72
+    # bytes que bcrypt rejeita). Ver app/core/security.py.
     "passlib[bcrypt]>=1.7.4",
+    "bcrypt>=4.0.0",
     "python-multipart>=0.0.12",
     "celery>=5.4.0",
     "redis>=5.1.1",

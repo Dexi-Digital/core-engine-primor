@@ -10,6 +10,7 @@ from alembic import context
 # Importar os models garante que estejam registrados no metadata:
 from app.audit import models as _audit  # noqa: F401
 from app.core.db import Base
+from app.modules.auth import models as _auth  # noqa: F401
 from app.modules.dp_sesmt import models as _dp  # noqa: F401
 from app.modules.fiscal import models as _fiscal  # noqa: F401
 from app.modules.licitacoes import models as _lic  # noqa: F401

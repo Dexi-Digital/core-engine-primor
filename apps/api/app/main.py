@@ -9,6 +9,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.middleware import CorrelationIdMiddleware
+from app.modules.auth.router import router as auth_router
+from app.modules.auth.startup import ensure_admin_seed, warn_dev_secret
 from app.modules.dp_sesmt.router import router as dp_sesmt_router
 from app.modules.financeiro_contratos.router import router as financeiro_router
 from app.modules.fiscal.router import router as fiscal_router
@@ -22,6 +24,11 @@ from app.modules.observability.router import router as observability_router
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     configure_logging()
+    settings = get_settings()
+    # Auth startup: warning de secret default + seed do admin inicial
+    # se ADMIN_EMAIL/ADMIN_PASSWORD vierem no env (idempotente).
+    warn_dev_secret(settings)
+    await ensure_admin_seed(settings)
     yield
     # Shutdown: fechar singletons que abriram pools TCP. Cada
     # `reset_*_singleton()` retorna a instancia anterior (ou None se
@@ -80,6 +87,7 @@ def create_app() -> FastAPI:
     async def health() -> dict[str, str]:
         return {"status": "ok", "version": settings.app_version}
 
+    app.include_router(auth_router, prefix="/api/v1/auth", tags=["auth"])
     app.include_router(dp_sesmt_router, prefix="/api/v1/dp-sesmt", tags=["dp-sesmt"])
     app.include_router(manutencao_router, prefix="/api/v1/manutencao-frota", tags=["manutencao-frota"])
     app.include_router(financeiro_router, prefix="/api/v1/financeiro", tags=["financeiro-contratos"])

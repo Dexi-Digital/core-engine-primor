@@ -19,8 +19,20 @@ class Settings(BaseSettings):
     )
     redis_url: str = Field(default="redis://localhost:6379/0")
 
+    # JWT (auth real -- ver app.modules.auth). O default `change-me-in-production`
+    # e DEV-only e dispara warning no startup. Troque o `secret_key` no
+    # .env de prod antes de subir; do contrario qualquer atacante com
+    # acesso ao codigo pode forjar tokens.
     secret_key: str = Field(default="change-me-in-production")
-    access_token_expire_minutes: int = 60 * 8
+    access_token_expire_minutes: int = 30
+    refresh_token_expire_days: int = 7
+
+    # Seed do primeiro admin (idempotente -- ver
+    # app.modules.auth.startup.ensure_admin_seed). Cadastros subsequentes
+    # sao feitos pelo proprio admin pela UI / API.
+    admin_email: str | None = Field(default=None)
+    admin_password: str | None = Field(default=None)
+    admin_nome: str = Field(default="Administrador")
 
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
 
