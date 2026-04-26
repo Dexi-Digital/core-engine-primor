@@ -26,6 +26,7 @@ from fastapi import (
     Form,
     HTTPException,
     Query,
+    Response,
     UploadFile,
 )
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -44,7 +45,9 @@ from app.modules.manutencao_frota.schemas import (
     DocumentoVeiculoRead,
     DocumentoVeiculoUpdate,
     ModuleStatus,
+    ParteDiariaConsumo,
     ParteDiariaListResponse,
+    ParteDiariaManualCreate,
     ParteDiariaRead,
     ParteDiariaUpdate,
     VeiculoCreate,
@@ -393,6 +396,45 @@ async def upload_parte_diaria_endpoint(
     return ParteDiariaRead.model_validate(parte)
 
 
+@router.post(
+    "/partes-diarias/manual",
+    response_model=ParteDiariaRead,
+)
+async def create_parte_diaria_manual_endpoint(
+    payload: ParteDiariaManualCreate,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> ParteDiariaRead:
+    """Apontamento manual via PWA mobile (D5 fase 2).
+
+    Sem upload de PDF/foto, sem OCR -- o apontador em campo informa
+    os campos estruturados direto pelo formulario do PWA. Row criada
+    com `ocr_status='revisado'` (entrada manual ja conferida) e
+    `ocr_source='manual_pwa'`.
+
+    Idempotencia via `client_uuid`: se o PWA reenviar a mesma parte
+    (retry pos-reconexao depois de cair conexao), o backend devolve a
+    row existente em vez de duplicar. Status code:
+      - 201 Created  -> nova row
+      - 200 OK       -> duplicata (ja existia, devolve a primeira)
+    """
+    try:
+        parte, criada_agora = await service.create_parte_diaria_manual(
+            db,
+            payload=payload.model_dump(),
+            actor=current_user.email,
+        )
+    except ValueError as exc:
+        # Validacao de dominio (horimetro/km invalido, FK de
+        # veiculo_id inexistente). Service segue convencao do
+        # resto do modulo (consultar_detran etc) levantando
+        # ValueError; router converte em 422.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    response.status_code = 201 if criada_agora else 200
+    return ParteDiariaRead.model_validate(parte)
+
+
 @router.get(
     "/partes-diarias",
     response_model=ParteDiariaListResponse,
@@ -436,6 +478,30 @@ async def get_parte_diaria_endpoint(
     if row is None:
         raise HTTPException(status_code=404, detail="parte_diaria nao encontrada")
     return ParteDiariaRead.model_validate(row)
+
+
+@router.get(
+    "/partes-diarias/{parte_id}/consumo",
+    response_model=ParteDiariaConsumo,
+)
+async def get_consumo_parte_diaria_endpoint(
+    parte_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> ParteDiariaConsumo:
+    """Calculo derivado de consumo (D5).
+
+    horas_trabalhadas = horimetro_fim - horimetro_inicio
+    consumo_l/h = combustivel_litros / horas_trabalhadas
+    consumo_km/l = km_rodados / combustivel_litros
+    alerta_manutencao_preventiva = atravessou multiplo de 250h?
+
+    Calculado on-the-fly -- nao gravado no banco para nao
+    inconsistir se operador editar campos depois.
+    """
+    consumo = await service.get_consumo_parte_diaria(db, parte_id)
+    if consumo is None:
+        raise HTTPException(status_code=404, detail="parte_diaria nao encontrada")
+    return ParteDiariaConsumo(**consumo)
 
 
 @router.patch(

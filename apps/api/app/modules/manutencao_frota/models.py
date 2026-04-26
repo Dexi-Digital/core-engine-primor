@@ -259,6 +259,20 @@ class ParteDiaria(Base):
     )
     km_inicio: Mapped[int | None] = mapped_column(Integer, nullable=True)
     km_fim: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Abastecimento informado pelo apontador em campo (PWA mobile, D5).
+    # Nullable porque nem todo apontamento envolve abastecimento.
+    combustivel_litros: Mapped[Decimal | None] = mapped_column(
+        Numeric(10, 2), nullable=True
+    )
+    combustivel_custo: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    # UUID do PWA para idempotencia (D5 fase 2). Unique parcial em
+    # PG via migration; SQLite (testes) tolera duplicatas pois a
+    # logica de dedup roda no service antes do insert.
+    client_uuid: Mapped[str | None] = mapped_column(
+        String(64), nullable=True, index=True
+    )
     observacoes: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     # Status + payload do OCR.

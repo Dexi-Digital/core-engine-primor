@@ -272,6 +272,8 @@ class ParteDiariaUpdate(BaseModel):
     horimetro_fim: Decimal | None = None
     km_inicio: int | None = None
     km_fim: int | None = None
+    combustivel_litros: Decimal | None = Field(default=None, ge=0)
+    combustivel_custo: Decimal | None = Field(default=None, ge=0)
     observacoes: str | None = None
     ocr_status: str | None = None
 
@@ -279,6 +281,44 @@ class ParteDiariaUpdate(BaseModel):
     @classmethod
     def _validate_status(cls, v: str | None) -> str | None:
         return _ensure_parte_status(v) if v is not None else None
+
+
+class ParteDiariaManualCreate(BaseModel):
+    """Apontamento manual via PWA mobile (D5).
+
+    Diferente do upload OCR (`POST /partes-diarias`), aqui o apontador
+    em campo informa os campos estruturados direto. Sem foto/PDF, sem
+    OCR -- a row e criada com `ocr_status='revisado'` e
+    `ocr_source='manual_pwa'`.
+
+    `data`, `veiculo_id` e `horimetro_*` ou `km_*` sao recomendados mas
+    nao obrigatorios -- o apontador pode salvar parcialmente em area
+    sem sinal e completar depois (offline-first). Validacao de
+    consistencia (`fim >= inicio`, `data <= hoje`) acontece no service.
+
+    `client_uuid` e o ID gerado pelo cliente para idempotencia: se o
+    PWA enviar a mesma parte duas vezes (retry pos-reconexao), o
+    backend devolve a row existente em vez de duplicar.
+    """
+
+    client_uuid: str | None = Field(
+        default=None,
+        max_length=64,
+        description="UUID gerado pelo cliente para idempotencia (offline queue)",
+    )
+    data: date | None = None
+    veiculo_id: int | None = None
+    operador: str | None = Field(default=None, max_length=200)
+    obra: str | None = Field(default=None, max_length=200)
+    equipamento: str | None = Field(default=None, max_length=200)
+    placa: str | None = Field(default=None, max_length=8)
+    horimetro_inicio: Decimal | None = Field(default=None, ge=0)
+    horimetro_fim: Decimal | None = Field(default=None, ge=0)
+    km_inicio: int | None = Field(default=None, ge=0)
+    km_fim: int | None = Field(default=None, ge=0)
+    combustivel_litros: Decimal | None = Field(default=None, ge=0)
+    combustivel_custo: Decimal | None = Field(default=None, ge=0)
+    observacoes: str | None = None
 
 
 class ParteDiariaRead(BaseModel):
@@ -297,6 +337,9 @@ class ParteDiariaRead(BaseModel):
     horimetro_fim: Decimal | None = None
     km_inicio: int | None = None
     km_fim: int | None = None
+    combustivel_litros: Decimal | None = None
+    combustivel_custo: Decimal | None = None
+    client_uuid: str | None = None
     observacoes: str | None = None
     ocr_status: str
     ocr_source: str
@@ -312,3 +355,40 @@ class ParteDiariaListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class ParteDiariaConsumo(BaseModel):
+    """Consumo derivado de uma parte diaria (D5).
+
+    Calculado on-demand a partir dos campos brutos -- nao gravado no
+    banco para evitar inconsistencia se o operador editar campos
+    revisaveis depois. `null` em qualquer field significa "dados
+    insuficientes" para aquela metrica especifica.
+    """
+
+    parte_diaria_id: int
+    horas_trabalhadas: Decimal | None = Field(
+        default=None,
+        description="horimetro_fim - horimetro_inicio",
+    )
+    km_rodados: int | None = Field(
+        default=None, description="km_fim - km_inicio"
+    )
+    consumo_litros_por_hora: Decimal | None = Field(
+        default=None,
+        description="combustivel_litros / horas_trabalhadas",
+    )
+    consumo_km_por_litro: Decimal | None = Field(
+        default=None,
+        description="km_rodados / combustivel_litros",
+    )
+    custo_por_hora: Decimal | None = Field(
+        default=None, description="combustivel_custo / horas_trabalhadas"
+    )
+    alerta_manutencao_preventiva: bool = Field(
+        default=False,
+        description=(
+            "True se horimetro_fim atravessa multiplo de 250h "
+            "desde o ultimo apontamento -- gatilho de manutencao."
+        ),
+    )
