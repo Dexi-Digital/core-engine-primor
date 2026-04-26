@@ -305,3 +305,89 @@ nenhum tráfego de rede sai da máquina).
   retentamos, precisa rotar credenciais).
 - Token cached em memória com TTL (renova 5 min antes do expiry) para
   não sobrecarregar o `/token` que é rate-limitado.
+
+---
+
+## Infosimples — Consultas Detran (Módulo B.3)
+
+**Adapter:** `apps/api/app/integrations/infosimples/client.py`
+**Service:** `apps/api/app/modules/manutencao_frota/service.py::consultar_detran`
+**Worker:** `apps/workers/worker/tasks/manutencao.py::consulta_detran`
+
+API agregadora que cobre os Detrans estaduais sem precisar de credencial
+de despachante. Cada consulta retorna multas, IPVA, licenciamento, dados
+do veículo e restrições — normalizados pelo adapter num único schema
+para SP, MG e GO.
+
+| UF  | Endpoint Infosimples                                |
+|-----|-----------------------------------------------------|
+| SP  | `POST /api/v2/consultas/detran/sp/veiculo`          |
+| MG  | `POST /api/v2/consultas/detran/mg/veiculo`          |
+| GO  | `POST /api/v2/consultas/detran/go/veiculo`          |
+
+**Schema normalizado (mesmo para SP/MG/GO):**
+
+```json
+{
+  "uf": "SP",
+  "placa": "ABC1234",
+  "renavam": "12345678900",
+  "chassi": "9BW...",
+  "marca_modelo": "VW/CONSTELLATION",
+  "ano_modelo": 2021,
+  "cor": "BRANCA",
+  "combustivel": "DIESEL",
+  "situacao": "REGULAR",
+  "licenciamento": { "exercicio": 2025, "vencimento": "2025-09-30",
+                      "pago": true, "valor": "163.42" },
+  "ipva":          { "exercicio": 2025, "vencimento": "2025-04-30",
+                      "pago": false, "valor": "1234.56" },
+  "multas":        [{ "auto": "AIT-X1", "data": "...", "valor": "...",
+                      "descricao": "..." }],
+  "restricoes":    ["ALIENACAO FIDUCIARIA"],
+  "raw":           { ... },
+  "source":        "infosimples"
+}
+```
+
+**Como ligar credenciais reais:**
+
+1. Cadastro em <https://infosimples.com> e ativação do produto Detran.
+2. Setar no `.env`:
+
+```
+INFOSIMPLES_TOKEN=seu-token-aqui
+INFOSIMPLES_BASE_URL=https://api.infosimples.com   # default
+```
+
+Sem `INFOSIMPLES_TOKEN`, o adapter cai no `InfosimplesMockClient`
+determinístico (resposta varia por `placa+UF` mas é estável entre
+chamadas — útil para dev/CI/screenshots).
+
+**Persistência (B.3):**
+
+- Cada consulta gera 1 row em `frota_consultas_detran` (`id`,
+  `veiculo_id`, `placa`, `uf`, `status`, `source`, `payload` JSON,
+  `error_msg`, `executed_at`). Tabela é append-only — re-consulta da
+  mesma placa em datas distintas vira histórico, não overwrite.
+- Quando `payload.ipva.vencimento` ou `payload.licenciamento.vencimento`
+  vêm preenchidos, o serviço materializa rows em `frota_documentos`
+  com `source="detran_rpa"`. Documentos manuais (`source="manual"`)
+  ficam intactos — auditor distingue origem na coluna.
+- Multas não viram documentos individuais (são N por veículo e não têm
+  noção de "validade") — ficam dentro do `payload` para a UI renderizar
+  como tabela embutida.
+- Audit log em todas as mutações: `manutencao_frota.consulta_detran`
+  com `action="create"` (sucesso) ou `action="error"` (falha de
+  upstream).
+
+**Tratamento de erros:**
+
+- O service `consultar_detran` **nunca** propaga exceções para o
+  router — qualquer falha (timeout, 5xx, formato inesperado) vira
+  uma row `status="erro"` com `error_msg` truncado em 500 chars. A UI
+  renderiza o erro inline na lista de consultas, e a placa fica
+  disponível para retry sem bloquear o usuário.
+- O endpoint `POST /veiculos/{id}/consultar-detran` devolve 201
+  mesmo em caso de erro de upstream (com payload da row `status=erro`),
+  e 422 só para UF não suportada / 404 para veículo inexistente.

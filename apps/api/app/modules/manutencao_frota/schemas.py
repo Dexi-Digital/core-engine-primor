@@ -1,14 +1,16 @@
-"""Pydantic schemas do modulo Frota (Modulo B.1)."""
+"""Pydantic schemas do modulo Frota (B.1 + B.3)."""
 from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.manutencao_frota.models import (
     STATUSES_VALIDOS,
     TIPOS_DOC_VALIDOS,
+    UFS_DETRAN_SUPORTADAS,
 )
 from app.modules.manutencao_frota.validators import (
     is_valid_chassi,
@@ -202,3 +204,39 @@ class VeiculoListResponse(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+# --- B.3 -- Consulta Detran (Infosimples) -----------------------------------
+
+
+class ConsultaDetranRequest(BaseModel):
+    uf: str = Field(..., min_length=2, max_length=2)
+
+    @field_validator("uf")
+    @classmethod
+    def _validate_uf(cls, v: str) -> str:
+        v_norm = v.strip().upper()
+        if v_norm not in UFS_DETRAN_SUPORTADAS:
+            raise ValueError(
+                "uf nao suportada -- "
+                + ", ".join(sorted(UFS_DETRAN_SUPORTADAS))
+            )
+        return v_norm
+
+
+class ConsultaDetranRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    veiculo_id: int
+    placa: str
+    uf: str
+    status: str
+    source: str
+    payload: dict[str, Any] | None = None
+    error_msg: str | None = None
+    executed_at: datetime
+
+
+class ConsultaDetranListResponse(BaseModel):
+    items: list[ConsultaDetranRead]
+    total: int

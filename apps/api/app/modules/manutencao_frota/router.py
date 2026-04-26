@@ -1,4 +1,4 @@
-"""Router HTTP do Modulo B.1 -- cadastro de veiculos.
+"""Router HTTP do Modulo B (Frota) -- B.1 cadastro + B.3 consulta Detran.
 
 Endpoints:
   - GET    /veiculos                lista com filtros
@@ -9,10 +9,14 @@ Endpoints:
   - POST   /veiculos/{id}/documentos        adiciona documento
   - PATCH  /veiculos/documentos/{doc_id}    atualiza documento
   - DELETE /veiculos/documentos/{doc_id}    remove documento
+  - POST   /veiculos/{id}/consultar-detran  dispara consulta Infosimples (B.3)
+  - GET    /veiculos/{id}/consultas         historico de consultas Detran
+  - GET    /consultas-detran                lista global (filtros uf/page)
 """
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -20,6 +24,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db
 from app.modules.manutencao_frota import service
 from app.modules.manutencao_frota.schemas import (
+    ConsultaDetranListResponse,
+    ConsultaDetranRead,
+    ConsultaDetranRequest,
     DocumentoVeiculoCreate,
     DocumentoVeiculoRead,
     DocumentoVeiculoUpdate,
@@ -168,3 +175,83 @@ async def delete_documento_endpoint(
     ok = await service.delete_documento(db, documento_id)
     if not ok:
         raise HTTPException(status_code=404, detail="documento nao encontrado")
+
+
+# --- B.3 -- Consulta Detran (Infosimples) -----------------------------------
+
+
+def get_infosimples_dep() -> Any:
+    """Dependency override-friendly accessor para o singleton.
+
+    Em testes, basta `app.dependency_overrides[get_infosimples_dep] =
+    lambda: FakeClient()` -- sem precisar mexer no `_infosimples_singleton`
+    global. Em prod retorna a instancia compartilhada.
+    """
+    return service.get_infosimples_singleton()
+
+
+@router.post(
+    "/veiculos/{veiculo_id}/consultar-detran",
+    response_model=ConsultaDetranRead,
+    status_code=201,
+)
+async def consultar_detran_endpoint(
+    veiculo_id: int,
+    payload: ConsultaDetranRequest,
+    db: AsyncSession = Depends(get_db),
+    client: Any = Depends(get_infosimples_dep),
+) -> ConsultaDetranRead:
+    try:
+        consulta = await service.consultar_detran(
+            db, veiculo_id, payload.uf, client=client
+        )
+    except ValueError as exc:
+        # `veiculo nao encontrado` ou `uf nao suportada`. UF invalida
+        # ja seria pega pelo schema; mantemos defesa-em-profundidade.
+        msg = str(exc)
+        status = 404 if "veiculo" in msg else 422
+        raise HTTPException(status_code=status, detail=msg) from exc
+    return ConsultaDetranRead.model_validate(consulta)
+
+
+@router.get(
+    "/veiculos/{veiculo_id}/consultas",
+    response_model=ConsultaDetranListResponse,
+)
+async def list_consultas_veiculo_endpoint(
+    veiculo_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+) -> ConsultaDetranListResponse:
+    veiculo = await service.get_veiculo(db, veiculo_id)
+    if veiculo is None:
+        raise HTTPException(status_code=404, detail="veiculo nao encontrado")
+    offset = (page - 1) * page_size
+    rows, total = await service.list_consultas_detran(
+        db, veiculo_id=veiculo_id, limit=page_size, offset=offset
+    )
+    return ConsultaDetranListResponse(
+        items=[ConsultaDetranRead.model_validate(r) for r in rows],
+        total=total,
+    )
+
+
+@router.get(
+    "/consultas-detran",
+    response_model=ConsultaDetranListResponse,
+)
+async def list_consultas_global_endpoint(
+    uf: str | None = Query(None, max_length=2),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> ConsultaDetranListResponse:
+    offset = (page - 1) * page_size
+    rows, total = await service.list_consultas_detran(
+        db, uf=uf, limit=page_size, offset=offset
+    )
+    return ConsultaDetranListResponse(
+        items=[ConsultaDetranRead.model_validate(r) for r in rows],
+        total=total,
+    )

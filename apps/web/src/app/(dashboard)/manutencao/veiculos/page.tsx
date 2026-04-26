@@ -131,6 +131,34 @@ async function deleteVeiculo(formData: FormData): Promise<void> {
   revalidatePath("/manutencao/veiculos");
 }
 
+async function consultarDetran(formData: FormData): Promise<void> {
+  "use server";
+  const id = formData.get("id");
+  const uf = String(formData.get("uf") ?? "SP")
+    .trim()
+    .toUpperCase();
+  if (!id) return;
+  // Sempre 201 mesmo em erro de upstream -- a row de consulta vai
+  // ter status='erro' + error_msg pra UI renderizar inline. Engolimos
+  // qualquer 4xx/5xx aqui pra Server Action nao crashar (Next mostra
+  // overlay) -- a UI da pagina de detalhe faz o tratamento.
+  try {
+    await apiFetch(
+      `/api/v1/manutencao-frota/veiculos/${id}/consultar-detran`,
+      {
+        method: "POST",
+        body: JSON.stringify({ uf }),
+      },
+    );
+  } catch {
+    // ignore -- ja persistido como row 'erro' do lado do backend
+    // se for erro de transporte, ou erro 422/404 ja sera obvio pra
+    // usuario quando ele clicar pra ver historico (ainda nao ha row).
+  }
+  revalidatePath(`/manutencao/veiculos/${id}`);
+  revalidatePath("/manutencao/veiculos");
+}
+
 export default async function VeiculosPage({
   searchParams,
 }: {
@@ -309,15 +337,45 @@ export default async function VeiculosPage({
                       : "—"}
                   </td>
                   <td className="px-4 py-2 text-right">
-                    <form action={deleteVeiculo} className="inline">
-                      <input type="hidden" name="id" value={v.id} />
-                      <button
-                        type="submit"
-                        className="text-xs text-red-600 hover:text-red-800"
+                    <div className="flex items-center justify-end gap-3">
+                      <Link
+                        href={`/manutencao/veiculos/${v.id}`}
+                        className="text-xs text-slate-600 hover:text-slate-900"
                       >
-                        excluir
-                      </button>
-                    </form>
+                        detalhes
+                      </Link>
+                      <form
+                        action={consultarDetran}
+                        className="inline-flex items-center gap-1"
+                      >
+                        <input type="hidden" name="id" value={v.id} />
+                        <select
+                          name="uf"
+                          defaultValue="SP"
+                          className="rounded border border-slate-300 px-1 py-0.5 text-xs"
+                          aria-label="UF para consulta Detran"
+                        >
+                          <option value="SP">SP</option>
+                          <option value="MG">MG</option>
+                          <option value="GO">GO</option>
+                        </select>
+                        <button
+                          type="submit"
+                          className="text-xs text-blue-600 hover:text-blue-800"
+                        >
+                          consultar Detran
+                        </button>
+                      </form>
+                      <form action={deleteVeiculo} className="inline">
+                        <input type="hidden" name="id" value={v.id} />
+                        <button
+                          type="submit"
+                          className="text-xs text-red-600 hover:text-red-800"
+                        >
+                          excluir
+                        </button>
+                      </form>
+                    </div>
                   </td>
                 </tr>
               ))}
