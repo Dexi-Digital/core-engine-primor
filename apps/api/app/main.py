@@ -61,9 +61,12 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # Ordem importa: CORS por fora, correlation por dentro -- assim
-    # o `correlation_id` ja esta bound quando o handler logga, e o
-    # OPTIONS preflight do CORS nao consome o ID atoa.
+    # Ordem importa: CORS por fora, correlation por dentro -- assim o
+    # `correlation_id` ja esta bound quando o handler logga, e o
+    # OPTIONS preflight do CORS nao consome o ID atoa. Starlette
+    # processa middlewares em ordem inversa de registro (insert(0)),
+    # entao a ULTIMA chamada a add_middleware vira a OUTERMOST.
+    app.add_middleware(CorrelationIdMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
@@ -72,7 +75,6 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
         expose_headers=["X-Correlation-ID"],
     )
-    app.add_middleware(CorrelationIdMiddleware)
 
     @app.get("/health", tags=["meta"])
     async def health() -> dict[str, str]:
