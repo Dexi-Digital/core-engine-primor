@@ -16,7 +16,6 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from fastapi import HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -785,18 +784,25 @@ async def create_parte_diaria_manual(
     # sao Numeric/Integer; o caller ja validou com Pydantic, aqui
     # so cruzamos os pares). Aceitamos null em qualquer um -- o
     # apontador pode salvar parcialmente sem sinal e completar dps.
+    # Levantamos ValueError seguindo a convencao do resto do service
+    # (consultar_detran, processar_ocr); router converte em 422.
     h_ini, h_fim = payload.get("horimetro_inicio"), payload.get("horimetro_fim")
     if h_ini is not None and h_fim is not None and h_fim < h_ini:
-        raise HTTPException(
-            status_code=422,
-            detail="horimetro_fim deve ser >= horimetro_inicio",
-        )
+        raise ValueError("horimetro_fim deve ser >= horimetro_inicio")
     k_ini, k_fim = payload.get("km_inicio"), payload.get("km_fim")
     if k_ini is not None and k_fim is not None and k_fim < k_ini:
-        raise HTTPException(
-            status_code=422,
-            detail="km_fim deve ser >= km_inicio",
-        )
+        raise ValueError("km_fim deve ser >= km_inicio")
+
+    # Valida FK do veiculo ANTES do INSERT. Se um PWA com cache
+    # stale enviar veiculo_id que ja foi removido, queremos um
+    # ValueError -> 422 explicando o problema, em vez de cair no
+    # try/except IntegrityError abaixo (que e exclusivo do race do
+    # client_uuid) e voltar 500. Mesmo padrao de `add_documento`.
+    veiculo_id = payload.get("veiculo_id")
+    if veiculo_id is not None:
+        veiculo = await db.get(Veiculo, veiculo_id)
+        if veiculo is None:
+            raise ValueError(f"veiculo_id {veiculo_id} nao existe")
 
     parte = ParteDiaria(
         data=payload.get("data"),
@@ -961,7 +967,11 @@ async def get_consumo_parte_diaria(
             # geraria alerta espurio (ou perderia um real). So
             # contam revisado/processado.
             .where(ParteDiaria.ocr_status.in_([PARTE_REVISADO, PARTE_PROCESSADO]))
-            .order_by(ParteDiaria.data.desc())
+            # Tiebreaker por id quando ha varias partes na mesma
+            # data (ex.: turno manha + tarde). Sem isso, o DB
+            # poderia escolher qualquer uma e o gatilho de 250h
+            # ficaria nao-deterministico.
+            .order_by(ParteDiaria.data.desc(), ParteDiaria.id.desc())
             .limit(1)
         )
         row = res.scalar_one_or_none()

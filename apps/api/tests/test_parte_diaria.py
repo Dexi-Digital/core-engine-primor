@@ -1101,3 +1101,110 @@ async def test_manual_post_idempotente_em_race_toctou(
     assert parte.operador == "concorrente"
     assert call_count["n"] == 2  # fast-path miss + post-rollback re-find
     assert commit_calls["n"] == 1  # so a tentativa que falhou
+
+
+@pytest.mark.asyncio
+async def test_manual_post_veiculo_inexistente_devolve_422(
+    api_client: AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    """Regressao do finding Devin Review #24: PWA com cache stale
+    enviando veiculo_id que ja foi removido nao pode cair no
+    try/except IntegrityError do client_uuid e voltar 500. Tem que
+    validar a FK antes do INSERT e devolver 422 explicando."""
+    res = await api_client.post(
+        "/api/v1/manutencao-frota/partes-diarias/manual",
+        json={
+            "data": "2025-09-15",
+            "veiculo_id": 999_999,  # nao existe
+            "operador": "joao",
+        },
+        headers=auth_headers,
+    )
+    assert res.status_code == 422, res.text
+    assert "999999" in res.json()["detail"] or "nao existe" in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_manual_post_validacao_horimetro_devolve_422(
+    api_client: AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    """Regressao: service agora levanta ValueError (nao
+    HTTPException) seguindo convencao do modulo. Router precisa
+    converter em 422 corretamente."""
+    res = await api_client.post(
+        "/api/v1/manutencao-frota/partes-diarias/manual",
+        json={
+            "data": "2025-09-15",
+            "horimetro_inicio": "100.00",
+            "horimetro_fim": "50.00",  # menor -- invalido
+        },
+        headers=auth_headers,
+    )
+    assert res.status_code == 422, res.text
+    assert "horimetro" in res.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_consumo_tiebreaker_por_id_quando_mesma_data(
+    db_session: AsyncSession,
+) -> None:
+    """Regressao do finding Devin Review #24: quando ha varias
+    partes na mesma data (ex.: turno manha + tarde), o ORDER BY
+    sem tiebreaker pode escolher qualquer uma -- afeta o gatilho
+    de 250h. Garantimos que escolhe a de id maior (mais recente
+    no insert order, proxy razoavel para 'mais recente no tempo')."""
+    from datetime import date as date_cls
+    from decimal import Decimal as D
+
+    veiculo_id = 8888
+
+    # Dois apontamentos na MESMA data, horimetros diferentes (turno
+    # da manha e tarde, ambos revisados). Sem tiebreaker o DB pode
+    # devolver qualquer um.
+    manha = ParteDiaria(
+        veiculo_id=veiculo_id,
+        data=date_cls(2025, 8, 14),
+        horimetro_inicio=D("220.00"),
+        horimetro_fim=D("240.00"),
+        ocr_status=PARTE_REVISADO,
+        ocr_source="manual_pwa",
+    )
+    db_session.add(manha)
+    await db_session.commit()
+    await db_session.refresh(manha)
+
+    tarde = ParteDiaria(
+        veiculo_id=veiculo_id,
+        data=date_cls(2025, 8, 14),
+        horimetro_inicio=D("240.00"),
+        horimetro_fim=D("260.00"),
+        ocr_status=PARTE_REVISADO,
+        ocr_source="manual_pwa",
+    )
+    db_session.add(tarde)
+    await db_session.commit()
+    await db_session.refresh(tarde)
+
+    # Parte ATUAL no dia seguinte, horimetro=270. Se o tiebreaker
+    # escolhesse `manha` (240), o gatilho de 250h dispararia
+    # (240//250=0, 270//250=1). Com `tarde` (260) NAO dispara
+    # (260//250=1, 270//250=1). Garantimos que escolhe a tarde
+    # (id maior).
+    atual = ParteDiaria(
+        veiculo_id=veiculo_id,
+        data=date_cls(2025, 8, 15),
+        horimetro_inicio=D("260.00"),
+        horimetro_fim=D("270.00"),
+        ocr_status=PARTE_REVISADO,
+        ocr_source="manual_pwa",
+    )
+    db_session.add(atual)
+    await db_session.commit()
+    await db_session.refresh(atual)
+
+    consumo = await service.get_consumo_parte_diaria(db_session, atual.id)
+    assert consumo is not None
+    # Tarde (id maior) escolhida -- nao cruza marco de 250h.
+    assert consumo["alerta_manutencao_preventiva"] is False

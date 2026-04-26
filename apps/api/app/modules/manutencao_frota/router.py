@@ -419,11 +419,18 @@ async def create_parte_diaria_manual_endpoint(
       - 201 Created  -> nova row
       - 200 OK       -> duplicata (ja existia, devolve a primeira)
     """
-    parte, criada_agora = await service.create_parte_diaria_manual(
-        db,
-        payload=payload.model_dump(),
-        actor=current_user.email,
-    )
+    try:
+        parte, criada_agora = await service.create_parte_diaria_manual(
+            db,
+            payload=payload.model_dump(),
+            actor=current_user.email,
+        )
+    except ValueError as exc:
+        # Validacao de dominio (horimetro/km invalido, FK de
+        # veiculo_id inexistente). Service segue convencao do
+        # resto do modulo (consultar_detran etc) levantando
+        # ValueError; router converte em 422.
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     response.status_code = 201 if criada_agora else 200
     return ParteDiariaRead.model_validate(parte)
 
