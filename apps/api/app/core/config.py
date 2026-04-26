@@ -87,6 +87,14 @@ class Settings(BaseSettings):
     # dedicada para isolar por modulo.
     fiscal_storage_subdir: str = Field(default="MotorCentral/fiscal")
 
+    # Infosimples (Modulo B.3 -- consulta Detran SP/MG/GO por placa).
+    # Cobre multas, IPVA, licenciamento, restricoes. Sem token o
+    # adapter cai no `InfosimplesMockClient` deterministico para nao
+    # bloquear dev/CI -- mesmo padrao DirectData/LLM/OneDrive/Dominio.
+    # Pricing: ~R$0.50-2.00 por consulta no plano da Infosimples.
+    infosimples_token: str | None = Field(default=None)
+    infosimples_base_url: str = Field(default="https://api.infosimples.com")
+
 
 @lru_cache
 def get_settings() -> Settings:

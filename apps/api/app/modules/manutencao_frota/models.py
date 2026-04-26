@@ -2,16 +2,18 @@
 
 B.1 cobre cadastro de veiculos + documentos (CRLV, seguro, IPVA,
 licenciamento). B.2 vai adicionar `partes_diarias` (OCR de log de
-operacao). B.3 vai popular `frota_documentos` automaticamente via RPA
-Detran -- por isso `source` distingue 'manual' de 'detran_rpa' no
-schema.
+operacao). B.3 (esta versao) consulta Detran via Infosimples e
+materializa multas/IPVA/CRLV em `frota_documentos` com `source`
+distinguindo manual/automatico.
 """
 from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import (
+    JSON,
     Date,
     DateTime,
     ForeignKey,
@@ -46,8 +48,19 @@ TIPOS_DOC_VALIDOS = frozenset(
 )
 
 SOURCE_MANUAL = "manual"
-SOURCE_DETRAN_RPA = "detran_rpa"  # reservado para B.3
+SOURCE_DETRAN_RPA = "detran_rpa"  # B.3: consulta Infosimples
 SOURCE_OCR = "ocr"  # reservado para B.2
+
+# Status de uma consulta Detran (Infosimples).
+CONSULTA_PENDENTE = "pendente"
+CONSULTA_OK = "ok"
+CONSULTA_ERRO = "erro"
+CONSULTA_MOCK = "mock"
+CONSULTA_STATUSES = frozenset(
+    {CONSULTA_PENDENTE, CONSULTA_OK, CONSULTA_ERRO, CONSULTA_MOCK}
+)
+
+UFS_DETRAN_SUPORTADAS = frozenset({"SP", "MG", "GO"})
 
 
 class Veiculo(Base):
@@ -106,6 +119,10 @@ class Veiculo(Base):
         back_populates="veiculo",
         cascade="all, delete-orphan",
     )
+    consultas_detran: Mapped[list[ConsultaDetran]] = relationship(
+        back_populates="veiculo",
+        cascade="all, delete-orphan",
+    )
 
 
 class DocumentoVeiculo(Base):
@@ -141,3 +158,43 @@ class DocumentoVeiculo(Base):
     )
 
     veiculo: Mapped[Veiculo] = relationship(back_populates="documentos")
+
+
+class ConsultaDetran(Base):
+    """Log de uma consulta Detran (via Infosimples) de um veiculo.
+
+    Cada chamada gera uma row -- mesmo placa, mesma UF, mesmo dia.
+    Isso permite (a) auditar quanto gastamos em consultas pagas, (b)
+    reconstruir progressao de multas/debitos no tempo, (c) reprocessar
+    payloads sem precisar bater novamente na API. `payload` armazena
+    a resposta normalizada do client; `error_msg` e populado quando
+    `status='erro'`.
+    """
+
+    __tablename__ = "frota_consultas_detran"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    veiculo_id: Mapped[int] = mapped_column(
+        ForeignKey("frota_veiculos.id", ondelete="CASCADE"), index=True
+    )
+    placa: Mapped[str] = mapped_column(String(8), index=True)
+    uf: Mapped[str] = mapped_column(String(2), index=True)
+    status: Mapped[str] = mapped_column(
+        String(16),
+        default=CONSULTA_PENDENTE,
+        server_default=CONSULTA_PENDENTE,
+        index=True,
+    )
+    source: Mapped[str] = mapped_column(
+        String(32),
+        default="infosimples_mock",
+        server_default="infosimples_mock",
+    )
+    # JSON normalizado (mesma forma para SP/MG/GO). UI consome direto.
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    error_msg: Mapped[str | None] = mapped_column(Text, nullable=True)
+    executed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    veiculo: Mapped[Veiculo] = relationship(back_populates="consultas_detran")
