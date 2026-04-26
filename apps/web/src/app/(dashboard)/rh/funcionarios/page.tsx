@@ -35,6 +35,11 @@ type Employee = {
   aso_data: string | null;
   aso_validade: string | null;
   aso_status: string | null;
+  is_motorista: boolean;
+  is_operador_maquina: boolean;
+  is_admin_office: boolean;
+  is_alturas: boolean;
+  is_eletricista: boolean;
   empregos_anteriores: EmpregoAnterior[];
 };
 
@@ -148,6 +153,11 @@ async function createEmployee(formData: FormData): Promise<void> {
     aso_validade: String(formData.get("aso_validade") ?? "").trim() || null,
     aso_resultado:
       String(formData.get("aso_resultado") ?? "").trim() || null,
+    is_motorista: formData.get("is_motorista") === "on",
+    is_operador_maquina: formData.get("is_operador_maquina") === "on",
+    is_admin_office: formData.get("is_admin_office") === "on",
+    is_alturas: formData.get("is_alturas") === "on",
+    is_eletricista: formData.get("is_eletricista") === "on",
     observacoes: String(formData.get("observacoes") ?? "").trim() || null,
   };
   await apiFetch("/api/v1/dp-sesmt/employees", {
@@ -412,6 +422,34 @@ export default async function FuncionariosPage({
             label="ASO - resultado"
             placeholder="apto / inapto / apto_restricoes"
           />
+
+          <fieldset className="md:col-span-3 rounded border border-slate-200 p-3">
+            <legend className="px-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+              Flags SST (disparam regras condicionais no diagnóstico)
+            </legend>
+            <div className="flex flex-wrap gap-x-6 gap-y-2 text-xs">
+              <label className="flex items-center gap-2">
+                <input type="checkbox" name="is_motorista" />
+                <span>Motorista (exige toxicológico)</span>
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" name="is_operador_maquina" />
+                <span>Operador de máquina (exige NR-12)</span>
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" name="is_alturas" />
+                <span>Trabalho em altura (exige NR-35)</span>
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" name="is_eletricista" />
+                <span>Eletricista (exige NR-10)</span>
+              </label>
+              <label className="flex items-center gap-2">
+                <input type="checkbox" name="is_admin_office" />
+                <span>Administrativo (dispensa NR-18)</span>
+              </label>
+            </div>
+          </fieldset>
 
           <label className="md:col-span-3 flex flex-col gap-1 text-xs">
             <span className="font-medium uppercase tracking-wide text-slate-500">

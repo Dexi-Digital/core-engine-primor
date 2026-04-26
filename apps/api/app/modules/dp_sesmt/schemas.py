@@ -105,6 +105,17 @@ class EmployeeBase(BaseModel):
     aso_validade: date | None = None
     aso_resultado: str | None = None
 
+    # --- flags SST (D1) ---------------------------------------------------
+    # Disparam regras condicionais no checklist do diagnostico documental
+    # (ex.: is_motorista -> exige exame toxicologico; is_eletricista ->
+    # exige NR-10). Default false em todos para manter compat com cadastros
+    # ja existentes pre-D1.
+    is_motorista: bool = False
+    is_operador_maquina: bool = False
+    is_admin_office: bool = False
+    is_alturas: bool = False
+    is_eletricista: bool = False
+
     observacoes: str | None = None
 
     @field_validator("cpf")
@@ -176,6 +187,14 @@ class EmployeeUpdate(BaseModel):
     aso_data: date | None = None
     aso_validade: date | None = None
     aso_resultado: str | None = None
+
+    # Flags SST (D1) -- todas opcionais no PATCH, default None para
+    # diferenciar "nao mexer" (None) de "definir false" (False).
+    is_motorista: bool | None = None
+    is_operador_maquina: bool | None = None
+    is_admin_office: bool | None = None
+    is_alturas: bool | None = None
+    is_eletricista: bool | None = None
 
     observacoes: str | None = None
 
