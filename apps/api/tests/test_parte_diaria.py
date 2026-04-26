@@ -1238,3 +1238,76 @@ async def test_manual_post_client_uuid_string_vazia_tratada_como_ausente(
     )
     assert res2.status_code == 201, res2.text
     assert res2.json()["id"] != res1.json()["id"]
+
+
+@pytest.mark.asyncio
+async def test_consumo_inclui_predecessora_no_mesmo_dia(
+    db_session: AsyncSession,
+) -> None:
+    """Regressao do finding Devin Review #24: turno manha + tarde
+    no MESMO dia. Tarde precisa achar a manha como predecessora;
+    senao volta pro dia anterior e gatilho de 250h dispara duas
+    vezes (uma na manha, outra de novo na tarde porque ela compara
+    com horimetro de 2 dias atras).
+
+    Cenario: Aug 13 = 220, Aug 14 manha = 250 (cruza marco), Aug 14
+    tarde = 260. Tarde precisa achar manha (250) como predecessora,
+    nao Aug 13 (220). Com manha (250) como base: 250//250=1,
+    260//250=1 -> nao dispara. Com Aug 13 (220): 220//250=0,
+    260//250=1 -> dispara espurio."""
+    from datetime import date as date_cls
+    from decimal import Decimal as D
+
+    veiculo_id = 7777
+
+    # Aug 13: dia anterior, horimetro=220.
+    aug13 = ParteDiaria(
+        veiculo_id=veiculo_id,
+        data=date_cls(2025, 8, 13),
+        horimetro_inicio=D("200.00"),
+        horimetro_fim=D("220.00"),
+        ocr_status=PARTE_REVISADO,
+        ocr_source="manual_pwa",
+    )
+    db_session.add(aug13)
+    await db_session.commit()
+    await db_session.refresh(aug13)
+
+    # Aug 14 manha: cruza marco de 250h (220 -> 250).
+    manha = ParteDiaria(
+        veiculo_id=veiculo_id,
+        data=date_cls(2025, 8, 14),
+        horimetro_inicio=D("220.00"),
+        horimetro_fim=D("250.00"),
+        ocr_status=PARTE_REVISADO,
+        ocr_source="manual_pwa",
+    )
+    db_session.add(manha)
+    await db_session.commit()
+    await db_session.refresh(manha)
+
+    # Aug 14 tarde: 250 -> 260. Mesmo dia. Predecessora deve ser
+    # a manha (id != tarde.id), nao Aug 13.
+    tarde = ParteDiaria(
+        veiculo_id=veiculo_id,
+        data=date_cls(2025, 8, 14),
+        horimetro_inicio=D("250.00"),
+        horimetro_fim=D("260.00"),
+        ocr_status=PARTE_REVISADO,
+        ocr_source="manual_pwa",
+    )
+    db_session.add(tarde)
+    await db_session.commit()
+    await db_session.refresh(tarde)
+
+    # Manha: cruza marco de 250 -- alerta correto.
+    consumo_manha = await service.get_consumo_parte_diaria(db_session, manha.id)
+    assert consumo_manha is not None
+    assert consumo_manha["alerta_manutencao_preventiva"] is True
+
+    # Tarde: predecessora deve ser manha (250). 250//250=1,
+    # 260//250=1 -> NAO cruza marco de novo. Sem o fix, predecessora
+    # seria Aug 13 (220). 220//250=0, 260//250=1 -> alerta espurio.
+    consumo_tarde = await service.get_consumo_parte_diaria(db_session, tarde.id)
+    assert consumo_tarde is not None
+    assert consumo_tarde["alerta_manutencao_preventiva"] is False

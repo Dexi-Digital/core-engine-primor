@@ -16,7 +16,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -968,7 +968,24 @@ async def get_consumo_parte_diaria(
             .where(ParteDiaria.id != parte.id)
             .where(ParteDiaria.horimetro_fim.is_not(None))
             .where(ParteDiaria.data.is_not(None))
-            .where(ParteDiaria.data < parte.data)
+            # Predecessora = quem veio ANTES no tempo, ordem
+            # lexicografica (data, id). Aceitamos same-day se
+            # tiver id menor (manha precede tarde) -- sem isso,
+            # tarde acha predecessora 2 dias antes e gatilho de
+            # 250h dispara duas vezes. Mas NAO aceitamos same-day
+            # com id maior -- senao manha pegaria tarde como
+            # predecessora (que existe so porque inserimos
+            # primeiro a manha) e horimetro_anterior ficaria
+            # invertido.
+            .where(
+                or_(
+                    ParteDiaria.data < parte.data,
+                    and_(
+                        ParteDiaria.data == parte.data,
+                        ParteDiaria.id < parte.id,
+                    ),
+                )
+            )
             # Pendente/erro tem horimetro_fim cru de OCR ainda nao
             # validado -- usar isso como base do gatilho de 250h
             # geraria alerta espurio (ou perderia um real). So
