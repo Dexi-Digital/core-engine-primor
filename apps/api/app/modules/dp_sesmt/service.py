@@ -136,6 +136,7 @@ async def list_employees(
     status: str | None = None,
     obra: str | None = None,
     search: str | None = None,
+    aso_status: str | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> tuple[list[Employee], int]:
@@ -143,12 +144,35 @@ async def list_employees(
 
     Retorna (rows, total_count) -- count nao filtrado por limit/offset
     para alimentar paginacao na UI.
+
+    `aso_status`: filtra por estado do ASO. Valores aceitos:
+    `vigente` (>30d), `vencendo` (0..30d), `vencido` (<0), `sem_validade`
+    (NULL). Filtragem no SQL para nao quebrar paginacao.
     """
+    from datetime import date as _date
+
     base_filters = []
     if status:
         base_filters.append(Employee.status == status)
     if obra:
         base_filters.append(Employee.obra == obra)
+    if aso_status:
+        today = _date.today()
+        if aso_status == "sem_validade":
+            base_filters.append(Employee.aso_validade.is_(None))
+        elif aso_status == "vencido":
+            base_filters.append(Employee.aso_validade.is_not(None))
+            base_filters.append(Employee.aso_validade < today)
+        elif aso_status == "vencendo":
+            from datetime import timedelta as _td
+            base_filters.append(Employee.aso_validade.is_not(None))
+            base_filters.append(Employee.aso_validade >= today)
+            base_filters.append(Employee.aso_validade <= today + _td(days=30))
+        elif aso_status == "vigente":
+            from datetime import timedelta as _td
+            base_filters.append(Employee.aso_validade.is_not(None))
+            base_filters.append(Employee.aso_validade > today + _td(days=30))
+        # qualquer outro valor: ignorado silenciosamente (string livre da UI)
     if search:
         like = f"%{search.strip()}%"
         # CPF stored sem mascara -- normalizamos a busca tambem.

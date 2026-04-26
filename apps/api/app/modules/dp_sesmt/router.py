@@ -7,6 +7,7 @@ Escopo (ver docs/roadmap.md):
 from __future__ import annotations
 
 import logging
+import os
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,6 +26,7 @@ from app.integrations.viacep.client import (
     ViaCEPNotFoundError,
 )
 from app.modules.dp_sesmt import service
+from app.modules.dp_sesmt.aso_alerts import compute_aso_status
 from app.modules.dp_sesmt.schemas import (
     CepLookupOut,
     CnpjLookupOut,
@@ -63,6 +65,11 @@ async def list_employees_endpoint(
     status: str | None = Query(None, max_length=16),
     obra: str | None = Query(None, max_length=128),
     search: str | None = Query(None, max_length=128),
+    aso_status: str | None = Query(
+        None,
+        max_length=16,
+        description="Filtra por estado do ASO: vigente|vencendo|vencido|sem_validade",
+    ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -72,14 +79,62 @@ async def list_employees_endpoint(
         status=status,
         obra=obra,
         search=search,
+        aso_status=aso_status,
         limit=limit,
         offset=offset,
     )
+    # Computa aso_status por linha. Mais barato fazer aqui que repetir
+    # a logica em SQL/computed_field -- a UI usa este campo direto pra
+    # renderizar a badge sem refazer arithmetic em JS.
+    items = []
+    for r in rows:
+        item = EmployeeRead.model_validate(r).model_dump()
+        item["aso_status"] = compute_aso_status(r.aso_validade)
+        items.append(item)
     return {
-        "items": [EmployeeRead.model_validate(r) for r in rows],
+        "items": items,
         "total": total,
         "limit": limit,
         "offset": offset,
+    }
+
+
+@router.post("/aso/alerts/dispatch", response_model=dict)
+async def dispatch_aso_alerts_endpoint(
+    recipients: list[str] | None = None,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Dispara manualmente o cron de alertas de ASO.
+
+    Endpoint sincrono (nao usa Celery) -- util pra teste manual e pra
+    UI que quer "Mandar lembrete agora" sem esperar 08h05 do dia
+    seguinte. Em prod o cron roda 1x/dia automaticamente.
+
+    Se `recipients` nao for informado, usa `ASO_ALERT_EMAILS` da env.
+    """
+    settings = get_settings()
+    if not settings.resend_api_key:
+        raise HTTPException(503, "RESEND_API_KEY nao configurada")
+    if recipients is None or len(recipients) == 0:
+        env_val = os.getenv("ASO_ALERT_EMAILS", "").strip()
+        recipients = [e.strip() for e in env_val.split(",") if e.strip()]
+    if not recipients:
+        raise HTTPException(
+            422, "Nenhum destinatario informado e ASO_ALERT_EMAILS vazia"
+        )
+    from app.integrations.resend.client import ResendClient
+    from app.modules.dp_sesmt.aso_alerts import dispatch_aso_alerts
+
+    resend = ResendClient(api_key=settings.resend_api_key)
+    try:
+        summary = await dispatch_aso_alerts(db, resend, recipients=recipients)
+    finally:
+        await resend.aclose()
+    return {
+        "total_employees": summary.total_employees,
+        "sent": summary.sent,
+        "skipped": summary.skipped,
+        "failed": summary.failed,
     }
 
 
