@@ -51,7 +51,6 @@ from app.modules.diagnostico.models import (
     DiagnosticoRun,
 )
 from app.modules.dp_sesmt.models import (
-    STATUS_ATIVO,
     STATUS_DESLIGADO,
     Employee,
     EmployeeDocument,
@@ -59,6 +58,9 @@ from app.modules.dp_sesmt.models import (
 from app.modules.licitacoes.models import (
     CertidaoEmpresa,
     EmpresaDocumento,
+)
+from app.modules.manutencao_frota.models import (
+    STATUS_ATIVO as STATUS_VEICULO_ATIVO,
 )
 from app.modules.manutencao_frota.models import (
     DocumentoVeiculo,
@@ -448,7 +450,7 @@ async def run_diagnostico(
         if scope in ("all", "frota"):
             veiculo_docs = await _veiculo_doc_index(db)
             res = await db.execute(
-                select(Veiculo).where(Veiculo.status == STATUS_ATIVO)
+                select(Veiculo).where(Veiculo.status == STATUS_VEICULO_ATIVO)
             )
             for v in res.scalars().all():
                 all_findings.extend(

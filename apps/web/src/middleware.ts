@@ -21,6 +21,13 @@ const PUBLIC_PATHS = [
   // logo apos o login o usuario era deslogado de novo.
   "/logout",
   "/favicon.ico",
+  // PWA mobile (D5 fase 2): manifest + service worker + icones do
+  // app instalavel precisam ser servidos sem cookie. A pagina do
+  // form (/m/parte-diaria) continua auth-gated -- so os arquivos
+  // do shell PWA sao publicos.
+  "/manifest.webmanifest",
+  "/sw.js",
+  "/m/icons",
 ];
 
 export function middleware(req: NextRequest) {

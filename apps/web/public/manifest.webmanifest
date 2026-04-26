@@ -1,0 +1,25 @@
+{
+  "name": "Motor Central — Parte Diaria",
+  "short_name": "Parte Diaria",
+  "description": "Apontamento de parte diaria em campo (offline-first).",
+  "start_url": "/m/parte-diaria",
+  "scope": "/m/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#0f172a",
+  "background_color": "#0f172a",
+  "icons": [
+    {
+      "src": "/m/icons/icon-192.svg",
+      "sizes": "192x192",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    },
+    {
+      "src": "/m/icons/icon-512.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

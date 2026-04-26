@@ -654,3 +654,297 @@ async def test_open_partes_diarias_storage_onedrive_aclose() -> None:
         async with service.open_partes_diarias_storage(settings) as storage:
             assert storage is not None
         fake_client.aclose.assert_awaited_once()
+
+
+# --- D5 fase 2: apontamento manual via PWA mobile -------------------------
+
+
+@pytest.mark.asyncio
+async def test_manual_post_cria_parte_revisada_sem_ocr(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    auth_headers: dict[str, str],
+) -> None:
+    """PWA envia JSON estruturado -- row sai como revisado/manual_pwa,
+    sem dispatcher OCR, sem anexo. Caracteristica do D5 fase 2."""
+    payload = {
+        "client_uuid": "11111111-1111-1111-1111-111111111111",
+        "data": "2025-08-15",
+        "operador": "Joao da Silva",
+        "obra": "Obra Norte",
+        "horimetro_inicio": "1234.50",
+        "horimetro_fim": "1278.90",
+        "km_inicio": 45000,
+        "km_fim": 45230,
+        "combustivel_litros": "78.50",
+        "combustivel_custo": "450.00",
+        "observacoes": "vibracao no motor",
+    }
+    r = await api_client.post(
+        "/api/v1/manutencao-frota/partes-diarias/manual",
+        json=payload,
+        headers=auth_headers,
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["ocr_status"] == PARTE_REVISADO
+    assert body["ocr_source"] == "manual_pwa"
+    assert body["anexo_path"] is None
+    assert body["filename_original"] is None
+    assert body["operador"] == "Joao da Silva"
+    assert float(body["combustivel_litros"]) == 78.5
+    assert body["client_uuid"] == "11111111-1111-1111-1111-111111111111"
+
+
+@pytest.mark.asyncio
+async def test_manual_post_idempotente_via_client_uuid(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    auth_headers: dict[str, str],
+) -> None:
+    """Reenvio com mesmo client_uuid devolve a row original (200 OK)
+    -- garantia de idempotencia para a fila offline do PWA."""
+    payload = {
+        "client_uuid": "22222222-2222-2222-2222-222222222222",
+        "obra": "Obra Sul",
+        "horimetro_inicio": "100.00",
+        "horimetro_fim": "108.00",
+    }
+    r1 = await api_client.post(
+        "/api/v1/manutencao-frota/partes-diarias/manual",
+        json=payload,
+        headers=auth_headers,
+    )
+    assert r1.status_code == 201, r1.text
+    parte_id_1 = r1.json()["id"]
+
+    # Reenvio (PWA achou que falhou e retentou)
+    r2 = await api_client.post(
+        "/api/v1/manutencao-frota/partes-diarias/manual",
+        json=payload,
+        headers=auth_headers,
+    )
+    assert r2.status_code == 200, r2.text  # nao 201, nao duplicou
+    assert r2.json()["id"] == parte_id_1
+
+
+@pytest.mark.asyncio
+async def test_manual_post_rejeita_horimetro_fim_menor_que_inicio(
+    api_client: AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    """Inversao de horimetro indica erro de digitacao -- backend deve
+    422 antes de gravar lixo no banco."""
+    payload = {
+        "horimetro_inicio": "1000.00",
+        "horimetro_fim": "999.00",
+    }
+    r = await api_client.post(
+        "/api/v1/manutencao-frota/partes-diarias/manual",
+        json=payload,
+        headers=auth_headers,
+    )
+    assert r.status_code == 422, r.text
+    assert "horimetro" in r.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_manual_post_rejeita_km_fim_menor_que_inicio(
+    api_client: AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    payload = {
+        "km_inicio": 50000,
+        "km_fim": 49000,
+    }
+    r = await api_client.post(
+        "/api/v1/manutencao-frota/partes-diarias/manual",
+        json=payload,
+        headers=auth_headers,
+    )
+    assert r.status_code == 422, r.text
+    assert "km" in r.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_manual_post_aceita_payload_parcial(
+    api_client: AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    """Apontador em area sem sinal pode salvar parcialmente -- horimetro
+    so com inicio, sem fim, sem combustivel. Backend nao trava."""
+    payload = {
+        "obra": "Obra parcial",
+        "horimetro_inicio": "500.00",
+        # sem fim, sem km, sem combustivel
+    }
+    r = await api_client.post(
+        "/api/v1/manutencao-frota/partes-diarias/manual",
+        json=payload,
+        headers=auth_headers,
+    )
+    assert r.status_code == 201, r.text
+    body = r.json()
+    assert body["horimetro_fim"] is None
+    assert body["combustivel_litros"] is None
+
+
+@pytest.mark.asyncio
+async def test_manual_post_exige_auth(api_client: AsyncClient) -> None:
+    """Sem JWT nao deixa entrar (LGPD: actor real no audit_log)."""
+    r = await api_client.post(
+        "/api/v1/manutencao-frota/partes-diarias/manual",
+        json={"obra": "x"},
+    )
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_manual_post_grava_audit_log_com_actor(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    auth_headers: dict[str, str],
+) -> None:
+    """audit_log precisa ter actor=email do JWT -- nao 'system'."""
+    payload = {
+        "client_uuid": "33333333-3333-3333-3333-333333333333",
+        "obra": "Obra audit",
+    }
+    r = await api_client.post(
+        "/api/v1/manutencao-frota/partes-diarias/manual",
+        json=payload,
+        headers=auth_headers,
+    )
+    assert r.status_code == 201
+    parte_id = r.json()["id"]
+
+    res = await db_session.execute(
+        select(AuditLog)
+        .where(AuditLog.resource == "manutencao_frota.parte_diaria")
+        .where(AuditLog.resource_id == parte_id)
+        .where(AuditLog.action == "create_manual")
+    )
+    rows = res.scalars().all()
+    assert len(rows) == 1
+    assert rows[0].actor != "system"
+    assert "@" in rows[0].actor  # email real do JWT
+
+
+# --- D5 fase 2: calculo de consumo + alerta manutencao --------------------
+
+
+def test_calcular_consumo_dados_completos() -> None:
+    """Caso feliz: horimetro + km + combustivel completos."""
+    from decimal import Decimal as D
+
+    parte = ParteDiaria(
+        id=1,
+        horimetro_inicio=D("100.00"),
+        horimetro_fim=D("108.00"),  # 8h
+        km_inicio=10000,
+        km_fim=10240,  # 240km
+        combustivel_litros=D("64.00"),
+        combustivel_custo=D("400.00"),
+    )
+    consumo = service.calcular_consumo_parte_diaria(parte)
+    assert consumo["horas_trabalhadas"] == D("8.00")
+    assert consumo["km_rodados"] == 240
+    assert consumo["consumo_litros_por_hora"] == D("8.000")  # 64/8
+    assert consumo["consumo_km_por_litro"] == D("3.750")  # 240/64
+    assert consumo["custo_por_hora"] == D("50.00")
+    assert consumo["alerta_manutencao_preventiva"] is False
+
+
+def test_calcular_consumo_sem_combustivel_zera_so_consumo() -> None:
+    """Apontamento sem litros nao invalida horas_trabalhadas."""
+    from decimal import Decimal as D
+
+    parte = ParteDiaria(
+        id=1, horimetro_inicio=D("100.00"), horimetro_fim=D("108.00")
+    )
+    consumo = service.calcular_consumo_parte_diaria(parte)
+    assert consumo["horas_trabalhadas"] == D("8.00")
+    assert consumo["consumo_litros_por_hora"] is None
+    assert consumo["consumo_km_por_litro"] is None
+    assert consumo["custo_por_hora"] is None
+
+
+def test_calcular_consumo_zero_horas_nao_calcula_l_h() -> None:
+    """horimetro_fim == inicio -> evitar divisao por zero."""
+    from decimal import Decimal as D
+
+    parte = ParteDiaria(
+        id=1,
+        horimetro_inicio=D("500.00"),
+        horimetro_fim=D("500.00"),
+        combustivel_litros=D("10.00"),
+    )
+    consumo = service.calcular_consumo_parte_diaria(parte)
+    assert consumo["horas_trabalhadas"] is None
+    assert consumo["consumo_litros_por_hora"] is None
+
+
+def test_calcular_consumo_alerta_manutencao_atravessa_250h() -> None:
+    """horimetro_anterior=240h, fim=260h -> cruzou 250h -> alerta."""
+    from decimal import Decimal as D
+
+    parte = ParteDiaria(
+        id=1, horimetro_inicio=D("240.00"), horimetro_fim=D("260.00")
+    )
+    consumo = service.calcular_consumo_parte_diaria(
+        parte, horimetro_anterior=D("240.00")
+    )
+    assert consumo["alerta_manutencao_preventiva"] is True
+
+
+def test_calcular_consumo_sem_alerta_dentro_da_janela() -> None:
+    """horimetro 240->249 -- ainda nao chegou no marco de 250h."""
+    from decimal import Decimal as D
+
+    parte = ParteDiaria(
+        id=1, horimetro_inicio=D("240.00"), horimetro_fim=D("249.00")
+    )
+    consumo = service.calcular_consumo_parte_diaria(
+        parte, horimetro_anterior=D("240.00")
+    )
+    assert consumo["alerta_manutencao_preventiva"] is False
+
+
+@pytest.mark.asyncio
+async def test_endpoint_consumo_devolve_metricas(
+    api_client: AsyncClient,
+    auth_headers: dict[str, str],
+) -> None:
+    """E2E: cria parte manual, consulta /consumo, valida calculo."""
+    payload = {
+        "client_uuid": "44444444-4444-4444-4444-444444444444",
+        "horimetro_inicio": "1000.00",
+        "horimetro_fim": "1010.00",  # 10h
+        "combustivel_litros": "70.00",  # 7l/h
+    }
+    r1 = await api_client.post(
+        "/api/v1/manutencao-frota/partes-diarias/manual",
+        json=payload,
+        headers=auth_headers,
+    )
+    assert r1.status_code == 201
+    parte_id = r1.json()["id"]
+
+    r2 = await api_client.get(
+        f"/api/v1/manutencao-frota/partes-diarias/{parte_id}/consumo"
+    )
+    assert r2.status_code == 200, r2.text
+    body = r2.json()
+    assert float(body["horas_trabalhadas"]) == 10.0
+    assert float(body["consumo_litros_por_hora"]) == 7.0
+    assert body["alerta_manutencao_preventiva"] is False
+
+
+@pytest.mark.asyncio
+async def test_endpoint_consumo_404_se_inexistente(
+    api_client: AsyncClient,
+) -> None:
+    r = await api_client.get(
+        "/api/v1/manutencao-frota/partes-diarias/999999/consumo"
+    )
+    assert r.status_code == 404

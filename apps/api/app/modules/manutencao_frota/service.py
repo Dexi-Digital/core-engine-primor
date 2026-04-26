@@ -12,9 +12,11 @@ import json
 import logging
 from collections.abc import AsyncIterator, Sequence
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from fastapi import HTTPException
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -734,6 +736,219 @@ async def create_parte_diaria(
     )
     await db.refresh(parte)
     return parte
+
+
+async def find_parte_diaria_by_client_uuid(
+    db: AsyncSession, client_uuid: str
+) -> ParteDiaria | None:
+    """Lookup por client_uuid para idempotencia de envio offline (PWA).
+
+    Quando o PWA reenvia uma parte que estava na fila local (depois
+    de cair a conexao), o backend devolve a row ja criada em vez de
+    duplicar. Unique parcial em PG garante invariante a nivel de
+    banco; este lookup serve de fast-path para devolver a row sem
+    levantar IntegrityError.
+    """
+    res = await db.execute(
+        select(ParteDiaria).where(ParteDiaria.client_uuid == client_uuid)
+    )
+    return res.scalar_one_or_none()
+
+
+async def create_parte_diaria_manual(
+    db: AsyncSession,
+    *,
+    payload: dict[str, Any],
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
+) -> tuple[ParteDiaria, bool]:
+    """Cria parte diaria a partir de apontamento manual (PWA mobile, D5).
+
+    Sem anexo, sem OCR -- os campos vem direto do form do PWA. Row
+    nasce com `ocr_status='revisado'` (ja conferida pelo apontador
+    em campo) e `ocr_source='manual_pwa'`.
+
+    Idempotencia via `client_uuid`: se o cliente reenviar a mesma
+    parte (retry pos-reconexao), devolve `(row_existente, False)` em
+    vez de criar duplicata.
+
+    Retorna `(parte, criada_agora)` -- caller usa o flag pra decidir
+    o status code (201 vs 200).
+    """
+    client_uuid = payload.get("client_uuid")
+    if client_uuid:
+        existing = await find_parte_diaria_by_client_uuid(db, client_uuid)
+        if existing is not None:
+            return existing, False
+
+    # Sanitiza/valida horimetro/km: fim >= inicio (campos do model
+    # sao Numeric/Integer; o caller ja validou com Pydantic, aqui
+    # so cruzamos os pares). Aceitamos null em qualquer um -- o
+    # apontador pode salvar parcialmente sem sinal e completar dps.
+    h_ini, h_fim = payload.get("horimetro_inicio"), payload.get("horimetro_fim")
+    if h_ini is not None and h_fim is not None and h_fim < h_ini:
+        raise HTTPException(
+            status_code=422,
+            detail="horimetro_fim deve ser >= horimetro_inicio",
+        )
+    k_ini, k_fim = payload.get("km_inicio"), payload.get("km_fim")
+    if k_ini is not None and k_fim is not None and k_fim < k_ini:
+        raise HTTPException(
+            status_code=422,
+            detail="km_fim deve ser >= km_inicio",
+        )
+
+    parte = ParteDiaria(
+        data=payload.get("data"),
+        veiculo_id=payload.get("veiculo_id"),
+        operador=payload.get("operador"),
+        obra=payload.get("obra"),
+        equipamento=payload.get("equipamento"),
+        placa=payload.get("placa"),
+        horimetro_inicio=h_ini,
+        horimetro_fim=h_fim,
+        km_inicio=k_ini,
+        km_fim=k_fim,
+        combustivel_litros=payload.get("combustivel_litros"),
+        combustivel_custo=payload.get("combustivel_custo"),
+        observacoes=payload.get("observacoes"),
+        client_uuid=client_uuid,
+        ocr_status=PARTE_REVISADO,  # entrada manual ja e dada como conferida
+        ocr_source="manual_pwa",
+    )
+    db.add(parte)
+    await db.commit()
+    await db.refresh(parte)
+    await _record_audit(
+        db,
+        action="create_manual",
+        resource=_AUDIT_RESOURCE_PARTE,
+        resource_id=parte.id,
+        actor=actor,
+        metadata={
+            "veiculo_id": parte.veiculo_id,
+            "obra": parte.obra,
+            "data": parte.data.isoformat() if parte.data else None,
+            "client_uuid": client_uuid,
+            "source": "manual_pwa",
+        },
+    )
+    return parte, True
+
+
+# Janela do gatilho de manutencao preventiva. 250h e padrao de OEM
+# (CAT/Komatsu/Volvo) para troca de oleo motor de equipamento pesado.
+MANUTENCAO_PREVENTIVA_HORAS_INTERVALO = Decimal("250")
+
+
+def calcular_consumo_parte_diaria(
+    parte: ParteDiaria,
+    *,
+    horimetro_anterior: Decimal | None = None,
+) -> dict[str, Any]:
+    """Deriva metricas de consumo a partir dos campos brutos da parte.
+
+    Nao mexe no banco -- so calcula. Caller decide se exibe na UI,
+    grava em outro lugar ou dispara alerta. Cada metrica e
+    independente: ausencia de combustivel zera so o consumo, nao
+    invalida horas_trabalhadas.
+
+    `horimetro_anterior` e o `horimetro_fim` do ultimo apontamento
+    do mesmo veiculo -- usado para detectar travessia de multiplo de
+    250h (gatilho de manutencao preventiva). Se None, nao dispara
+    alerta (primeira parte ou veiculo sem historico).
+    """
+    horas: Decimal | None = None
+    km_rodados: int | None = None
+    cons_lh: Decimal | None = None
+    cons_kml: Decimal | None = None
+    custo_h: Decimal | None = None
+    alerta = False
+
+    if parte.horimetro_inicio is not None and parte.horimetro_fim is not None:
+        horas = parte.horimetro_fim - parte.horimetro_inicio
+        if horas <= 0:
+            horas = None  # nao calculamos consumo de jornada com 0h
+
+    if parte.km_inicio is not None and parte.km_fim is not None:
+        diff = parte.km_fim - parte.km_inicio
+        if diff > 0:
+            km_rodados = diff
+
+    if (
+        horas is not None
+        and parte.combustivel_litros is not None
+        and parte.combustivel_litros > 0
+    ):
+        cons_lh = (parte.combustivel_litros / horas).quantize(Decimal("0.001"))
+
+    if (
+        km_rodados is not None
+        and parte.combustivel_litros is not None
+        and parte.combustivel_litros > 0
+    ):
+        cons_kml = (
+            Decimal(km_rodados) / parte.combustivel_litros
+        ).quantize(Decimal("0.001"))
+
+    if (
+        horas is not None
+        and parte.combustivel_custo is not None
+        and parte.combustivel_custo >= 0
+    ):
+        custo_h = (parte.combustivel_custo / horas).quantize(Decimal("0.01"))
+
+    if (
+        horimetro_anterior is not None
+        and parte.horimetro_fim is not None
+        and parte.horimetro_fim > horimetro_anterior
+    ):
+        # Cruzou um multiplo de 250h desde o ultimo apontamento?
+        marco_anterior = (
+            horimetro_anterior // MANUTENCAO_PREVENTIVA_HORAS_INTERVALO
+        )
+        marco_atual = parte.horimetro_fim // MANUTENCAO_PREVENTIVA_HORAS_INTERVALO
+        if marco_atual > marco_anterior:
+            alerta = True
+
+    return {
+        "parte_diaria_id": parte.id,
+        "horas_trabalhadas": horas,
+        "km_rodados": km_rodados,
+        "consumo_litros_por_hora": cons_lh,
+        "consumo_km_por_litro": cons_kml,
+        "custo_por_hora": custo_h,
+        "alerta_manutencao_preventiva": alerta,
+    }
+
+
+async def get_consumo_parte_diaria(
+    db: AsyncSession, parte_id: int
+) -> dict[str, Any] | None:
+    """Carrega a parte e o ultimo horimetro do mesmo veiculo, devolve consumo."""
+    parte = await get_parte_diaria(db, parte_id)
+    if parte is None:
+        return None
+
+    horim_anterior: Decimal | None = None
+    if parte.veiculo_id is not None and parte.data is not None:
+        # Ultimo horimetro_fim antes desta data, para o mesmo veiculo.
+        # Trabalhamos so com partes ja revisadas (ocr_status='revisado'
+        # ou 'processado') -- pendentes/erro nao contam para gatilho.
+        res = await db.execute(
+            select(ParteDiaria.horimetro_fim)
+            .where(ParteDiaria.veiculo_id == parte.veiculo_id)
+            .where(ParteDiaria.id != parte.id)
+            .where(ParteDiaria.horimetro_fim.is_not(None))
+            .where(ParteDiaria.data.is_not(None))
+            .where(ParteDiaria.data < parte.data)
+            .order_by(ParteDiaria.data.desc())
+            .limit(1)
+        )
+        row = res.scalar_one_or_none()
+        if row is not None:
+            horim_anterior = row
+
+    return calcular_consumo_parte_diaria(parte, horimetro_anterior=horim_anterior)
 
 
 async def mark_parte_diaria_erro(
