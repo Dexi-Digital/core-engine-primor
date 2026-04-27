@@ -1,20 +1,23 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Inter, Space_Grotesk } from "next/font/google";
 import "./globals.css";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const inter = Inter({
+  variable: "--font-inter",
   subsets: ["latin"],
+  display: "swap",
 });
 
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
+const spaceGrotesk = Space_Grotesk({
+  variable: "--font-space-grotesk",
   subsets: ["latin"],
+  display: "swap",
 });
 
 export const metadata: Metadata = {
   title: "Motor Central — PRIMOR",
-  description: "Plataforma de governança e orquestração de dados — ZAG/PRIMOR.",
+  description:
+    "Governança documental e orquestração de integrações — ZAG / PRIMOR.",
 };
 
 export default function RootLayout({
@@ -25,7 +28,11 @@ export default function RootLayout({
   return (
     <html lang="pt-BR">
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased bg-slate-50 text-slate-900`}
+        className={`${inter.variable} ${spaceGrotesk.variable} antialiased`}
+        style={{
+          fontFamily:
+            "var(--font-inter), Inter, system-ui, -apple-system, sans-serif",
+        }}
       >
         {children}
       </body>
