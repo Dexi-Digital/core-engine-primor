@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
 from sqlalchemy import (
     JSON,
@@ -410,4 +411,68 @@ class EmpresaDocumento(Base):
 
     __table_args__ = (
         Index("ix_empresa_documentos_cnpj_tipo", "empresa_cnpj", "tipo"),
+    )
+
+
+# --- D.6 fase 2: log de consultas CREA via Infosimples (PR #28) -----------
+
+# Tipos de consulta suportados (espelha `CREA_TIPOS_SUPORTADOS` do client).
+CREA_TIPO_ART = "art"
+CREA_TIPO_PROFISSIONAL = "profissional"
+CREA_TIPO_EMPRESA = "empresa"
+
+CREA_CONSULTA_PENDENTE = "pendente"
+CREA_CONSULTA_OK = "ok"
+CREA_CONSULTA_ERRO = "erro"
+CREA_CONSULTA_MOCK = "mock"
+
+
+class ConsultaCrea(Base):
+    """Log de uma consulta CREA (via Infosimples).
+
+    Mesma estrategia da `ConsultaDetran` (PR #14):
+      - cada chamada gera uma row independente (audit + cache)
+      - `payload` guarda a resposta NORMALIZADA (UI consome direto)
+      - `status` = 'pendente' | 'ok' | 'erro' | 'mock'
+
+    Diferente do Detran: nao tem FK pra um veiculo especifico --
+    consulta CREA pode ser ad-hoc (operador valida ART nova antes de
+    cadastrar como certidao). Quando o operador clica "Importar como
+    certidao" via `POST /importar-art`, criamos uma `CertidaoEmpresa`
+    e gravamos `certidao_id` aqui pra rastreabilidade.
+    """
+
+    __tablename__ = "crea_consultas"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    uf: Mapped[str] = mapped_column(String(2), index=True)
+    # 'art' | 'profissional' | 'empresa'
+    tipo: Mapped[str] = mapped_column(String(16), index=True)
+    # numero ART, registro CREA do profissional, ou CNPJ
+    identificador: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(
+        String(16),
+        default=CREA_CONSULTA_PENDENTE,
+        server_default=CREA_CONSULTA_PENDENTE,
+        index=True,
+    )
+    source: Mapped[str] = mapped_column(
+        String(32),
+        default="infosimples_mock",
+        server_default="infosimples_mock",
+    )
+    payload: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    error_msg: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # FK opcional: setada quando consulta vira `CertidaoEmpresa`
+    # (via `POST /importar-art`). Permite UI mostrar "ja importada".
+    certidao_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("certidoes_empresa.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    executed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
     )

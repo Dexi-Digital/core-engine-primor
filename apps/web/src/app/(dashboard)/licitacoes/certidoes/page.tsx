@@ -19,6 +19,42 @@ type Certidao = {
   updated_at: string;
 };
 
+// D.6 fase 2 (PR #28) -- consulta CREA via Infosimples.
+type CreaConsulta = {
+  id: number;
+  uf: string;
+  tipo: string; // "art" | "profissional" | "empresa"
+  identificador: string;
+  status: string; // "pendente" | "ok" | "mock" | "erro"
+  source: string;
+  payload: {
+    art?: {
+      numero?: string | null;
+      tipo_servico?: string | null;
+      valor_contrato?: string | null;
+      data_registro?: string | null;
+      data_termino_previsto?: string | null;
+      situacao?: string | null;
+    } | null;
+    profissional?: {
+      registro_crea?: string | null;
+      nome?: string | null;
+      titulo?: string | null;
+      situacao?: string | null;
+    } | null;
+    empresa?: {
+      cnpj?: string | null;
+      razao_social?: string | null;
+      registro_crea?: string | null;
+      situacao?: string | null;
+      arts_count?: number | null;
+    } | null;
+  } | null;
+  error_msg: string | null;
+  certidao_id: number | null;
+  executed_at: string;
+};
+
 // Tipos canonicos espelham o enum do backend (`certidoes.TIPOS_CERTIDAO`).
 // Fica duplicado aqui de proposito -- o backend aceita strings livres,
 // e a UI nao precisa fazer fetch so para listar a opcao no select.
@@ -83,6 +119,54 @@ async function deleteCertidao(formData: FormData): Promise<void> {
   revalidatePath("/licitacoes/certidoes");
 }
 
+// D.6 fase 2 -- historico de consultas CREA (ordenado desc).
+async function fetchCreaConsultas(): Promise<CreaConsulta[] | null> {
+  try {
+    const data = await apiFetch<{ items: CreaConsulta[]; total: number }>(
+      "/api/v1/licitacoes/certidoes/crea-consultas?page_size=20",
+    );
+    return data.items;
+  } catch {
+    return null;
+  }
+}
+
+async function consultarCrea(formData: FormData): Promise<void> {
+  "use server";
+  const uf = String(formData.get("uf") ?? "").trim();
+  const tipo = String(formData.get("tipo") ?? "").trim();
+  const identificador = String(formData.get("identificador") ?? "").trim();
+  if (!uf || !tipo || !identificador) return;
+  try {
+    await apiFetch("/api/v1/licitacoes/certidoes/consultar-crea", {
+      method: "POST",
+      body: JSON.stringify({ uf, tipo, identificador }),
+    });
+  } catch {
+    // Erros de validacao (UF nao suportada, tipo invalido) viram 422.
+    // O service ja persiste erros de transporte como row 'erro'. Nao
+    // re-throw -- a UI mostra a tentativa no historico abaixo.
+  }
+  revalidatePath("/licitacoes/certidoes");
+}
+
+async function importarArt(formData: FormData): Promise<void> {
+  "use server";
+  const uf = String(formData.get("uf") ?? "").trim();
+  const numero_art = String(formData.get("numero_art") ?? "").trim();
+  const empresa_cnpj = String(formData.get("empresa_cnpj") ?? "").trim();
+  if (!uf || !numero_art || !empresa_cnpj) return;
+  try {
+    await apiFetch("/api/v1/licitacoes/certidoes/importar-art", {
+      method: "POST",
+      body: JSON.stringify({ uf, numero_art, empresa_cnpj }),
+    });
+  } catch {
+    // mesma logica de consultarCrea -- silenciar e revalidar
+  }
+  revalidatePath("/licitacoes/certidoes");
+}
+
 function statusBadge(status: string | null): {
   label: string;
   className: string;
@@ -115,7 +199,10 @@ export default async function CertidoesPage(props: {
   searchParams: Promise<SearchParams>;
 }) {
   const params = await props.searchParams;
-  const certidoes = await fetchCertidoes(params);
+  const [certidoes, creaConsultas] = await Promise.all([
+    fetchCertidoes(params),
+    fetchCreaConsultas(),
+  ]);
 
   // Computar contagens por status ANTES de devolver para o status filter mostrar.
   const counts = {
@@ -240,6 +327,8 @@ export default async function CertidoesPage(props: {
           </div>
         </form>
       </section>
+
+      <CreaSection consultas={creaConsultas} />
 
       <section className="space-y-3">
         <header className="flex flex-wrap items-center justify-between gap-2">
@@ -389,4 +478,270 @@ function StatCard({
       <div className="mt-1 text-2xl font-bold">{value}</div>
     </div>
   );
+}
+
+// --- D.6 fase 2: CREA via Infosimples (PR #28) -----------------------------
+
+function CreaSection({ consultas }: { consultas: CreaConsulta[] | null }) {
+  return (
+    <section className="rounded-xl border border-slate-200 bg-white p-5">
+      <h2 className="mb-1 text-sm font-semibold text-slate-800">
+        Importar do CREA <span className="text-xs font-normal text-slate-500">(via Infosimples)</span>
+      </h2>
+      <p className="mb-4 text-xs text-slate-500">
+        Consulte ART pelo número, situação de profissional ou histórico de ARTs
+        de uma empresa. Importar uma ART <strong>ATIVA</strong> cria
+        automaticamente uma certidão do tipo <strong>Acervo Técnico</strong>{" "}
+        com número, datas e órgão emissor preenchidos.
+      </p>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+        {/* Sub-form: importar ART como certidao */}
+        <form
+          action={importarArt}
+          className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-3"
+        >
+          <h3 className="mb-2 text-xs font-semibold uppercase text-emerald-900">
+            Importar ART → certidão
+          </h3>
+          <UfSelect />
+          <label className="mt-2 flex flex-col text-xs font-medium text-slate-600">
+            Número da ART
+            <input
+              name="numero_art"
+              required
+              maxLength={64}
+              placeholder="ex: MG2023ABC123"
+              className="mt-1 rounded-md border border-slate-300 px-2 py-1 text-sm"
+            />
+          </label>
+          <label className="mt-2 flex flex-col text-xs font-medium text-slate-600">
+            CNPJ da empresa
+            <input
+              name="empresa_cnpj"
+              required
+              maxLength={32}
+              placeholder="44.229.813/0001-00"
+              className="mt-1 rounded-md border border-slate-300 px-2 py-1 text-sm"
+            />
+          </label>
+          <button
+            type="submit"
+            className="mt-3 w-full rounded-md bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-800"
+          >
+            Consultar e importar
+          </button>
+        </form>
+
+        {/* Sub-form: validar profissional */}
+        <form
+          action={consultarCrea}
+          className="rounded-lg border border-slate-200 p-3"
+        >
+          <input type="hidden" name="tipo" value="profissional" />
+          <h3 className="mb-2 text-xs font-semibold uppercase text-slate-700">
+            Validar profissional
+          </h3>
+          <UfSelect />
+          <label className="mt-2 flex flex-col text-xs font-medium text-slate-600">
+            Registro CREA
+            <input
+              name="identificador"
+              required
+              maxLength={64}
+              placeholder="ex: MG-145678/D"
+              className="mt-1 rounded-md border border-slate-300 px-2 py-1 text-sm"
+            />
+          </label>
+          <button
+            type="submit"
+            className="mt-3 w-full rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
+          >
+            Consultar
+          </button>
+        </form>
+
+        {/* Sub-form: listar ARTs de uma empresa */}
+        <form
+          action={consultarCrea}
+          className="rounded-lg border border-slate-200 p-3"
+        >
+          <input type="hidden" name="tipo" value="empresa" />
+          <h3 className="mb-2 text-xs font-semibold uppercase text-slate-700">
+            ARTs por empresa
+          </h3>
+          <UfSelect />
+          <label className="mt-2 flex flex-col text-xs font-medium text-slate-600">
+            CNPJ da empresa
+            <input
+              name="identificador"
+              required
+              maxLength={32}
+              placeholder="44.229.813/0001-00"
+              className="mt-1 rounded-md border border-slate-300 px-2 py-1 text-sm"
+            />
+          </label>
+          <button
+            type="submit"
+            className="mt-3 w-full rounded-md bg-slate-900 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
+          >
+            Consultar
+          </button>
+        </form>
+      </div>
+
+      <CreaHistory consultas={consultas} />
+    </section>
+  );
+}
+
+function UfSelect() {
+  return (
+    <label className="flex flex-col text-xs font-medium text-slate-600">
+      UF
+      <select
+        name="uf"
+        required
+        defaultValue="MG"
+        className="mt-1 rounded-md border border-slate-300 px-2 py-1 text-sm"
+      >
+        <option value="SP">SP</option>
+        <option value="MG">MG</option>
+        <option value="GO">GO</option>
+      </select>
+    </label>
+  );
+}
+
+function CreaHistory({ consultas }: { consultas: CreaConsulta[] | null }) {
+  if (consultas === null) {
+    return (
+      <p className="mt-4 rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">
+        Histórico CREA indisponível (API offline).
+      </p>
+    );
+  }
+  if (consultas.length === 0) {
+    return (
+      <p className="mt-4 text-xs text-slate-500">
+        Sem consultas CREA ainda. Use um dos formulários acima.
+      </p>
+    );
+  }
+  return (
+    <div className="mt-4">
+      <h3 className="mb-2 text-xs font-semibold uppercase text-slate-700">
+        Últimas consultas CREA
+      </h3>
+      <div className="overflow-x-auto rounded-md border border-slate-200">
+        <table className="min-w-full divide-y divide-slate-200 text-xs">
+          <thead className="bg-slate-50 text-[10px] uppercase text-slate-500">
+            <tr>
+              <th className="px-3 py-1.5 text-left">Quando</th>
+              <th className="px-3 py-1.5 text-left">Tipo</th>
+              <th className="px-3 py-1.5 text-left">Identificador</th>
+              <th className="px-3 py-1.5 text-left">Status</th>
+              <th className="px-3 py-1.5 text-left">Detalhes</th>
+              <th className="px-3 py-1.5 text-left">Importada</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-slate-200">
+            {consultas.map((c) => (
+              <tr key={c.id}>
+                <td className="px-3 py-1.5 text-slate-600">
+                  {formatDateTime(c.executed_at)}
+                </td>
+                <td className="px-3 py-1.5 font-medium text-slate-800">
+                  {c.tipo} <span className="text-slate-400">({c.uf})</span>
+                </td>
+                <td className="px-3 py-1.5 font-mono text-[11px] text-slate-700">
+                  {c.identificador}
+                </td>
+                <td className="px-3 py-1.5">
+                  <CreaStatusBadge status={c.status} />
+                </td>
+                <td className="px-3 py-1.5 text-slate-600">
+                  {creaPayloadSummary(c)}
+                </td>
+                <td className="px-3 py-1.5 text-slate-600">
+                  {c.certidao_id ? (
+                    <Link
+                      href={`/licitacoes/certidoes`}
+                      className="text-emerald-700 hover:underline"
+                    >
+                      certidão #{c.certidao_id}
+                    </Link>
+                  ) : (
+                    "—"
+                  )}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function CreaStatusBadge({ status }: { status: string }) {
+  const map: Record<string, { label: string; className: string }> = {
+    ok: { label: "OK", className: "bg-emerald-100 text-emerald-800" },
+    mock: { label: "Mock", className: "bg-sky-100 text-sky-800" },
+    erro: { label: "Erro", className: "bg-rose-100 text-rose-800" },
+    pendente: { label: "Pendente", className: "bg-amber-100 text-amber-800" },
+  };
+  const b = map[status] ?? {
+    label: status,
+    className: "bg-slate-100 text-slate-700",
+  };
+  return (
+    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${b.className}`}>
+      {b.label}
+    </span>
+  );
+}
+
+function creaPayloadSummary(c: CreaConsulta): string {
+  if (c.status === "erro") return c.error_msg ?? "erro desconhecido";
+  const p = c.payload ?? {};
+  if (c.tipo === "art" && p.art) {
+    const parts = [
+      p.art.situacao && `sit: ${p.art.situacao}`,
+      p.art.tipo_servico,
+      p.art.data_termino_previsto && `até ${p.art.data_termino_previsto}`,
+    ].filter(Boolean);
+    return parts.join(" · ") || "—";
+  }
+  if (c.tipo === "profissional" && p.profissional) {
+    const parts = [
+      p.profissional.nome,
+      p.profissional.titulo,
+      p.profissional.situacao && `sit: ${p.profissional.situacao}`,
+    ].filter(Boolean);
+    return parts.join(" · ") || "—";
+  }
+  if (c.tipo === "empresa" && p.empresa) {
+    const parts = [
+      p.empresa.razao_social,
+      p.empresa.situacao && `sit: ${p.empresa.situacao}`,
+      p.empresa.arts_count !== null &&
+        p.empresa.arts_count !== undefined &&
+        `${p.empresa.arts_count} ARTs`,
+    ].filter(Boolean);
+    return parts.join(" · ") || "—";
+  }
+  return "—";
+}
+
+function formatDateTime(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }

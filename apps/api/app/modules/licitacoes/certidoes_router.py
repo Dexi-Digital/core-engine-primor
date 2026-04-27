@@ -8,15 +8,21 @@ the catch-all `GET /licitacoes/{licitacao_id}` route that would treat
 from __future__ import annotations
 
 from datetime import date as _date
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.db import get_db
+from app.integrations.infosimples.client import (
+    InfosimplesCreaTipoNaoSuportadoError,
+    InfosimplesUFNaoSuportadaError,
+)
 from app.integrations.resend.client import ResendClient
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
+from app.modules.licitacoes import crea_service
 from app.modules.licitacoes.certidoes import (
     TIPOS_VALIDOS,
     compute_status,
@@ -33,7 +39,13 @@ from app.modules.licitacoes.schemas import (
     CertidaoCreate,
     CertidaoRead,
     CertidaoUpdate,
+    CreaConsultaListResponse,
+    CreaConsultaRead,
+    CreaConsultaRequest,
+    CreaImportarArtRequest,
+    CreaImportarArtResponse,
 )
+from app.modules.manutencao_frota.service import get_infosimples_singleton
 
 router = APIRouter()
 
@@ -139,6 +151,120 @@ async def dispatch_certidao_alerts_endpoint(
             }
             for r in summary.results
         ],  # type: ignore[arg-type]
+    )
+
+
+# --- D.6 fase 2: CREA via Infosimples (PR #28) ---
+#
+# Routes "estaticas" (/consultar-crea, /importar-art, /crea-consultas)
+# precisam vir ANTES de `/{certidao_id}` -- senao FastAPI tenta casar
+# 'consultar-crea' contra `int` e devolve 422.
+
+
+def get_infosimples_dep() -> Any:
+    """DI wrapper p/ permitir override em testes via
+    `app.dependency_overrides`.
+    """
+    return get_infosimples_singleton()
+
+
+@router.post(
+    "/consultar-crea",
+    response_model=CreaConsultaRead,
+    status_code=201,
+)
+async def consultar_crea_endpoint(
+    payload: CreaConsultaRequest,
+    db: AsyncSession = Depends(get_db),
+    client: Any = Depends(get_infosimples_dep),
+    current_user: User = Depends(get_current_user),
+) -> CreaConsultaRead:
+    """Consulta CREA ad-hoc (ART / profissional / empresa).
+
+    Retorna 201 com a row do log -- mesmo em sucesso (status='ok'/'mock')
+    quanto em erro (status='erro' + `error_msg`). Erros de transporte
+    NAO levantam 5xx, viram historico inline na UI.
+    """
+    try:
+        consulta = await crea_service.consultar_crea(
+            db,
+            uf=payload.uf,
+            tipo=payload.tipo,
+            identificador=payload.identificador,
+            client=client,
+            actor=current_user.email,
+        )
+    except (
+        InfosimplesUFNaoSuportadaError,
+        InfosimplesCreaTipoNaoSuportadoError,
+        ValueError,
+    ) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return CreaConsultaRead.model_validate(consulta)
+
+
+@router.get(
+    "/crea-consultas",
+    response_model=CreaConsultaListResponse,
+)
+async def list_crea_consultas_endpoint(
+    tipo: str | None = Query(None, max_length=16),
+    identificador: str | None = Query(None, max_length=64),
+    uf: str | None = Query(None, max_length=2),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> CreaConsultaListResponse:
+    """Historico de consultas CREA (ordenado por executed_at desc)."""
+    rows, total = await crea_service.list_consultas_crea(
+        db,
+        tipo=tipo,
+        identificador=identificador,
+        uf=uf,
+        limit=page_size,
+        offset=(page - 1) * page_size,
+    )
+    return CreaConsultaListResponse(
+        items=[CreaConsultaRead.model_validate(r) for r in rows],
+        total=total,
+    )
+
+
+@router.post(
+    "/importar-art",
+    response_model=CreaImportarArtResponse,
+    status_code=201,
+)
+async def importar_art_endpoint(
+    payload: CreaImportarArtRequest,
+    db: AsyncSession = Depends(get_db),
+    client: Any = Depends(get_infosimples_dep),
+    current_user: User = Depends(get_current_user),
+) -> CreaImportarArtResponse:
+    """Consulta ART e cria `CertidaoEmpresa` (tipo=ACERVO_TECNICO).
+
+    Quando a ART nao for importavel (BAIXADA/CANCELADA/sem numero/
+    erro de transporte), `certidao` retornado e None e
+    `consulta.error_msg` explica. UI mostra a row do log mesmo assim.
+    """
+    try:
+        consulta, certidao = await crea_service.importar_art_como_certidao(
+            db,
+            uf=payload.uf,
+            numero_art=payload.numero_art,
+            empresa_cnpj=payload.empresa_cnpj,
+            client=client,
+            actor=current_user.email,
+        )
+    except (
+        InfosimplesUFNaoSuportadaError,
+        InfosimplesCreaTipoNaoSuportadoError,
+        ValueError,
+    ) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return CreaImportarArtResponse(
+        consulta=CreaConsultaRead.model_validate(consulta),
+        certidao=_certidao_to_read(certidao) if certidao is not None else None,
     )
 
 
