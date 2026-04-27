@@ -33,6 +33,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.actors import SYSTEM as _AUDIT_ACTOR_SYSTEM
 from app.audit.models import AuditLog
 from app.integrations.infosimples.client import (
     CREA_TIPOS_SUPORTADOS,
@@ -61,7 +62,7 @@ logger = logging.getLogger(__name__)
 _TIPO_CERTIDAO_AO_IMPORTAR_ART = "ACERVO_TECNICO"
 
 _AUDIT_RESOURCE = "licitacoes.crea_consulta"
-_AUDIT_ACTOR_PLACEHOLDER = "system"
+_AUDIT_ACTOR_PLACEHOLDER = _AUDIT_ACTOR_SYSTEM
 
 
 async def _record_audit(

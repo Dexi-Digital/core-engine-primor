@@ -21,6 +21,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.audit.actors import SYSTEM as _AUDIT_ACTOR_SYSTEM
+from app.audit.actors import SYSTEM_WORKER as _AUDIT_ACTOR_WORKER
 from app.audit.models import AuditLog
 from app.modules.manutencao_frota.models import (
     CONSULTA_ERRO,
@@ -55,10 +57,11 @@ _AUDIT_RESOURCE = "manutencao_frota.veiculo"
 _AUDIT_RESOURCE_DOC = "manutencao_frota.documento"
 _AUDIT_RESOURCE_CONSULTA = "manutencao_frota.consulta_detran"
 _AUDIT_RESOURCE_PARTE = "manutencao_frota.parte_diaria"
-# Default usado em paths sem usuario logado (worker OCR, worker Detran,
-# falhas de dispatch sincrono que viram erro depois). Mutacoes vindas
-# de requests HTTP devem passar `actor=current_user.email` -- ver router.
-_AUDIT_ACTOR_PLACEHOLDER = "system"
+# Default usado em paths sem usuario logado (fallback legado). Mutacoes
+# vindas de HTTP passam `actor=current_user.email`; workers passam
+# `actor` vindo dos args do send_task (router -> task -> service).
+# Ver `app.audit.actors` para a semantica de cada constante.
+_AUDIT_ACTOR_PLACEHOLDER = _AUDIT_ACTOR_SYSTEM
 
 
 async def _record_audit(
@@ -1044,6 +1047,7 @@ async def processar_ocr_parte_diaria(
     *,
     client: Any,
     storage: Any,
+    actor: str = _AUDIT_ACTOR_WORKER,
 ) -> ParteDiaria:
     """Roda OCR via Document AI e popula campos extraidos.
 
@@ -1077,6 +1081,7 @@ async def processar_ocr_parte_diaria(
             action="error",
             resource=_AUDIT_RESOURCE_PARTE,
             resource_id=parte_id,
+            actor=actor,
             metadata={"stage": "read_anexo", "error": str(exc)[:500]},
         )
         await db.refresh(parte)
@@ -1105,6 +1110,7 @@ async def processar_ocr_parte_diaria(
             action="error",
             resource=_AUDIT_RESOURCE_PARTE,
             resource_id=parte_id,
+            actor=actor,
             metadata={"stage": "documentai", "error": str(exc)[:500]},
         )
         await db.refresh(parte)
@@ -1149,6 +1155,7 @@ async def processar_ocr_parte_diaria(
         action="update",
         resource=_AUDIT_RESOURCE_PARTE,
         resource_id=parte.id,
+        actor=actor,
         metadata={
             "stage": "ocr_processado",
             "source": parte.ocr_source,
@@ -1428,7 +1435,9 @@ def reset_celery_dispatcher_singleton() -> Any | None:
     return prev
 
 
-def enqueue_ocr_parte_diaria(parte_id: int) -> None:
+def enqueue_ocr_parte_diaria(
+    parte_id: int, actor: str | None = None
+) -> None:
     """Despacha OCR para o worker Celery (fila `manutencao`).
 
     Usa `send_task` por nome para evitar dependencia de import entre
@@ -1439,11 +1448,23 @@ def enqueue_ocr_parte_diaria(parte_id: int) -> None:
 
     Reusa um app Celery singleton (`get_celery_dispatcher`) para nao
     alocar pool TCP novo a cada upload.
+
+    `actor` e propagado nos args para que o audit_log do OCR assincrono
+    registre o email do uploader humano (e nao bare `"system"`). Default
+    `None` preserva compatibilidade -- quando ausente, o worker cai em
+    `SYSTEM_WORKER` no audit.
     """
     dispatcher = get_celery_dispatcher()
+    # Positional args preservam retrocompatibilidade com tasks ja
+    # enfileiradas antes do deploy (workers antigos ignoram kwargs
+    # desconhecidos). Passamos `actor` so quando informado para manter
+    # o args stream curto em uploads pre-auth e testes.
+    args: list[Any] = [parte_id]
+    if actor is not None:
+        args.append(actor)
     dispatcher.send_task(
         "worker.tasks.manutencao.ocr_parte_diaria",
-        args=[parte_id],
+        args=args,
         queue="manutencao",
     )
 

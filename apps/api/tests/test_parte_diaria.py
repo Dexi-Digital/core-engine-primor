@@ -130,9 +130,13 @@ def _eager_factory(client: Any, db_session: AsyncSession, storage: Any):
     voltar para o caller, e a UI nao precisa esperar polling no teste.
     """
 
-    async def _dispatch(parte_id: int) -> None:
+    async def _dispatch(parte_id: int, actor: str) -> None:
         await service.processar_ocr_parte_diaria(
-            db_session, parte_id, client=client, storage=storage
+            db_session,
+            parte_id,
+            client=client,
+            storage=storage,
+            actor=actor,
         )
 
     def _factory():
@@ -448,7 +452,7 @@ async def test_dispatcher_broker_down_marca_erro(
     precisa ver o anexo persistido com mensagem de erro clara.
     """
 
-    async def _broken(_parte_id: int) -> None:
+    async def _broken(_parte_id: int, _actor: str) -> None:
         raise ConnectionError("broker offline")
 
     app.dependency_overrides[get_ocr_dispatcher] = lambda: _broken
@@ -599,11 +603,17 @@ async def test_celery_dispatcher_e_singleton() -> None:
     # Substitui o singleton em memoria pelo spy.
     service._celery_dispatcher_singleton = spy  # type: ignore[attr-defined]
     try:
+        # Sem actor -- preserva compat (args curtos, worker cai em SYSTEM_WORKER).
         service.enqueue_ocr_parte_diaria(42)
-        service.enqueue_ocr_parte_diaria(43)
+        # Com actor -- propaga email do uploader nos args.
+        service.enqueue_ocr_parte_diaria(43, actor="ana@primor.com")
         assert len(sent) == 2
         assert sent[0] == ("worker.tasks.manutencao.ocr_parte_diaria", [42], "manutencao")
-        assert sent[1] == ("worker.tasks.manutencao.ocr_parte_diaria", [43], "manutencao")
+        assert sent[1] == (
+            "worker.tasks.manutencao.ocr_parte_diaria",
+            [43, "ana@primor.com"],
+            "manutencao",
+        )
     finally:
         service.reset_celery_dispatcher_singleton()
 
@@ -1311,3 +1321,152 @@ async def test_consumo_inclui_predecessora_no_mesmo_dia(
     consumo_tarde = await service.get_consumo_parte_diaria(db_session, tarde.id)
     assert consumo_tarde is not None
     assert consumo_tarde["alerta_manutencao_preventiva"] is False
+
+
+# --- Wire current_user nos workers Celery ----------------------------------
+
+
+@pytest.mark.asyncio
+async def test_upload_ocr_audit_tem_email_do_uploader(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    in_memory_storage: InMemoryStorage,
+    fake_ok_ocr: FakeOkOcrClient,
+    auth_headers: dict[str, str],
+) -> None:
+    """Regressao: o audit_log do OCR async gravava `actor='system'`
+    sempre, mesmo quando um uploader humano disparava o upload via
+    HTTP. Agora o router propaga `current_user.email` pro dispatcher
+    -> Celery args -> service, e o audit traz o email real.
+    """
+    files = {"arquivo": ("parte-ocr-audit.pdf", b"%PDF-x", "application/pdf")}
+    r = await api_client.post(
+        "/api/v1/manutencao-frota/partes-diarias",
+        files=files,
+        headers=auth_headers,
+    )
+    assert r.status_code == 202, r.text
+    parte_id = r.json()["id"]
+
+    # A audit "update" (stage=ocr_processado) deve ter o email do JWT.
+    res = await db_session.execute(
+        select(AuditLog)
+        .where(AuditLog.resource == "manutencao_frota.parte_diaria")
+        .where(AuditLog.resource_id == str(parte_id))
+        .where(AuditLog.action == "update")
+    )
+    rows = res.scalars().all()
+    # Deve ter ao menos um update (ocr_processado); pode ter extras se
+    # o teste incluir pre-fill manual. Qualquer um que tenha stage
+    # ocr_processado deve carregar o email.
+    ocr_rows = [
+        row for row in rows
+        if row.metadata_json and "ocr_processado" in row.metadata_json
+    ]
+    assert ocr_rows, f"nenhum audit de ocr_processado encontrado: {rows}"
+    for row in ocr_rows:
+        assert row.actor != "system", (
+            f"OCR audit com actor='system' (deveria ser email do uploader): {row}"
+        )
+        assert "@" in row.actor
+
+
+@pytest.mark.asyncio
+async def test_reprocessar_ocr_audit_tem_email_do_solicitante(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    in_memory_storage: InMemoryStorage,
+    auth_headers: dict[str, str],
+) -> None:
+    """Regressao: endpoint `/reprocessar` tambem passa actor.
+
+    Faz upload com OCR falhando, reprocessa com OCR OK, checa que o
+    audit do reprocesso (action=update com stage ocr_processado) tem
+    email e nao bare 'system'.
+    """
+    # Upload inicial com OCR falhando.
+    failing = FakeFailingOcrClient()
+    app.dependency_overrides[get_ocr_dispatcher] = _eager_factory(
+        failing, db_session, in_memory_storage
+    )
+    files = {"arquivo": ("reproc.pdf", b"%PDF-x", "application/pdf")}
+    r = await api_client.post(
+        "/api/v1/manutencao-frota/partes-diarias",
+        files=files,
+        headers=auth_headers,
+    )
+    assert r.status_code == 202
+    parte_id = r.json()["id"]
+
+    # Swap pelo OK e reprocessa.
+    ok = FakeOkOcrClient()
+    app.dependency_overrides[get_ocr_dispatcher] = _eager_factory(
+        ok, db_session, in_memory_storage
+    )
+    try:
+        r2 = await api_client.post(
+            f"/api/v1/manutencao-frota/partes-diarias/{parte_id}/reprocessar",
+            headers=auth_headers,
+        )
+        assert r2.status_code == 202
+    finally:
+        app.dependency_overrides.pop(get_ocr_dispatcher, None)
+
+    res = await db_session.execute(
+        select(AuditLog)
+        .where(AuditLog.resource == "manutencao_frota.parte_diaria")
+        .where(AuditLog.resource_id == str(parte_id))
+    )
+    rows = res.scalars().all()
+    # Todas as rows de audit dessa parte ja nasceram com email (upload
+    # inicial + pre-fill + erro OCR + update pos reprocessamento).
+    # Se um unico caiu em 'system', o wiring esta incompleto.
+    assert rows, "sem audit rows"
+    systems = [r for r in rows if r.actor == "system"]
+    assert not systems, (
+        f"audit rows com actor='system' (deveriam ter email): {systems}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_enqueue_ocr_parte_diaria_propaga_actor() -> None:
+    """Regressao: `enqueue_ocr_parte_diaria(parte_id, actor=...)`
+    deve incluir `actor` nos args do send_task quando informado.
+    Sem actor, preserva args curtos (compat com fila pre-deploy).
+    """
+    service.reset_celery_dispatcher_singleton()
+    sent: list[tuple[str, list, str]] = []
+
+    class _Spy:
+        def send_task(self, name, args=None, queue=None):
+            sent.append((name, args or [], queue or ""))
+
+    service._celery_dispatcher_singleton = _Spy()  # type: ignore[attr-defined]
+    try:
+        service.enqueue_ocr_parte_diaria(100)
+        service.enqueue_ocr_parte_diaria(101, actor="bob@primor.com")
+        service.enqueue_ocr_parte_diaria(102, actor=None)  # None == sem actor
+        assert sent == [
+            ("worker.tasks.manutencao.ocr_parte_diaria", [100], "manutencao"),
+            (
+                "worker.tasks.manutencao.ocr_parte_diaria",
+                [101, "bob@primor.com"],
+                "manutencao",
+            ),
+            ("worker.tasks.manutencao.ocr_parte_diaria", [102], "manutencao"),
+        ]
+    finally:
+        service.reset_celery_dispatcher_singleton()
+
+
+def test_audit_actor_constants_valores_canonicos() -> None:
+    """Invariante: os 3 identificadores canonicos tem valores estaveis.
+
+    Dashboards e queries podem filtrar por valor literal; mudar exige
+    migration consciente.
+    """
+    from app.audit import actors
+
+    assert actors.SYSTEM == "system"
+    assert actors.SYSTEM_BEAT == "system:beat"
+    assert actors.SYSTEM_WORKER == "system:worker"

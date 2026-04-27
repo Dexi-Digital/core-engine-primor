@@ -27,6 +27,7 @@ from datetime import date as _date
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.actors import SYSTEM as _AUDIT_ACTOR_SYSTEM
 from app.audit.models import AuditLog
 from app.modules.diagnostico.checklists import (
     CHECKLIST_EMPRESA,
@@ -417,7 +418,7 @@ async def run_diagnostico(
     db: AsyncSession,
     *,
     scope: str = "all",
-    actor: str = "system",
+    actor: str = _AUDIT_ACTOR_SYSTEM,
     today: _date | None = None,
 ) -> DiagnosticoRun:
     """Executa o diagnostico e persiste run + findings.

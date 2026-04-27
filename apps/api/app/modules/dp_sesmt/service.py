@@ -15,6 +15,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.audit.actors import SYSTEM as _AUDIT_ACTOR_SYSTEM
 from app.audit.models import AuditLog
 from app.integrations.brasilapi.client import (
     BrasilAPIClient,
@@ -55,7 +56,7 @@ _AUDIT_RESOURCE = "dp_sesmt.employee"
 # Default usado em paths sem usuario logado (cron, seed, OCR worker etc.).
 # Mutacoes vindas de requests HTTP devem passar `actor=current_user.email`
 # explicitamente -- ver router.
-_AUDIT_ACTOR_PLACEHOLDER = "system"
+_AUDIT_ACTOR_PLACEHOLDER = _AUDIT_ACTOR_SYSTEM
 
 
 async def _record_audit(

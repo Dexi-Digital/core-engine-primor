@@ -38,6 +38,7 @@ import structlog
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.actors import SYSTEM as _AUDIT_ACTOR_SYSTEM
 from app.audit.models import AuditLog
 from app.core.config import get_settings
 from app.integrations.resend.client import ResendClient, ResendError
@@ -59,7 +60,7 @@ VENCENDO_DIAS_LIMITE = 30
 
 # Audit log scaffolding (mesmo padrao dos outros modulos).
 _AUDIT_RESOURCE = "dp_sesmt.afastamento"
-_AUDIT_ACTOR_PLACEHOLDER = "system"
+_AUDIT_ACTOR_PLACEHOLDER = _AUDIT_ACTOR_SYSTEM
 
 
 async def _record_audit(

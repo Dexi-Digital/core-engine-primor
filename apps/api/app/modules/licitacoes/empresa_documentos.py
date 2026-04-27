@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.actors import SYSTEM as _AUDIT_ACTOR_SYSTEM
 from app.audit.models import AuditLog
 from app.core.db import get_db
 from app.modules.auth.dependencies import get_current_user
@@ -28,7 +29,7 @@ from app.modules.licitacoes.models import (
 )
 
 _AUDIT_RESOURCE = "licitacoes.empresa_documento"
-_AUDIT_ACTOR_PLACEHOLDER = "system"
+_AUDIT_ACTOR_PLACEHOLDER = _AUDIT_ACTOR_SYSTEM
 
 
 async def _record_audit(
