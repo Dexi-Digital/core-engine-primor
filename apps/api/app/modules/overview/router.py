@@ -192,10 +192,13 @@ async def get_home(
         (await db.execute(select(func.count(CertidaoEmpresa.id)))).scalar() or 0
     )
 
-    # -------- Diagnostico: ultima run --------
+    # -------- Diagnostico: ultima run concluida --------
+    # Filtra status='done' para nao exibir 0% conformidade quando a ultima
+    # run ainda esta rodando (counts = 0 no momento da criacao) ou errou.
     last_run_row = (
         await db.execute(
             select(DiagnosticoRun)
+            .where(DiagnosticoRun.status == "done")
             .order_by(DiagnosticoRun.started_at.desc())
             .limit(1)
         )
@@ -260,7 +263,7 @@ async def get_home(
             "label": "PNCP",
             "descr": "Crawler de licitações",
             "status": "ok",
-            "last_event": f"{licit_7d} editais capturados (7d)",
+            "last_event": f"{licit_7d} licitações capturadas (7d)",
             "configured": True,
         },
         {
