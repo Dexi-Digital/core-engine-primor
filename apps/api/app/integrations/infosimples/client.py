@@ -568,5 +568,11 @@ def _normalize_crea_empresa(raw: dict[str, Any]) -> dict[str, Any]:
             or raw.get("registro")
         ),
         "situacao": raw.get("situacao") or raw.get("status"),
-        "arts_count": raw.get("arts_count") or raw.get("total_arts"),
+        # `or` descartaria `0` (empresa sem ART e legitimo). Usa is-not-None
+        # explicito pra preservar a contagem real -- regressao Devin Review #28.
+        "arts_count": (
+            raw.get("arts_count")
+            if raw.get("arts_count") is not None
+            else raw.get("total_arts")
+        ),
     }

@@ -282,6 +282,29 @@ def test_crea_tipos_suportados_constante():
     assert {"art", "profissional", "empresa"} == CREA_TIPOS_SUPORTADOS
 
 
+def test_normalize_crea_empresa_preserva_arts_count_zero():
+    """Regressao Devin Review #28: empresa sem ART devolvia `arts_count=None`.
+
+    `raw.get("arts_count") or raw.get("total_arts")` tratava 0 como falsy
+    e caia no fallback. Pra empresa nova / sem ART registrada, isso
+    perdia a info -- UI mostrava "—" em vez de "0 ARTs".
+    """
+    from app.integrations.infosimples.client import _normalize_crea_empresa  # noqa: PLC0415
+
+    out = _normalize_crea_empresa({
+        "cnpj": "00000000000100",
+        "razao_social": "EMPRESA NOVA",
+        "arts_count": 0,
+    })
+    assert out["arts_count"] == 0
+    # Fallback ainda funciona quando `arts_count` ausente.
+    out2 = _normalize_crea_empresa({"cnpj": "X", "total_arts": 5})
+    assert out2["arts_count"] == 5
+    # Quando ambos ausentes, devolve None.
+    out3 = _normalize_crea_empresa({"cnpj": "X"})
+    assert out3["arts_count"] is None
+
+
 @pytest.mark.asyncio
 async def test_crea_mock_art_dates_sao_sempre_validas():
     """Regressao Devin Review #28: mock devolvia day=31 em meses de 30 dias.
