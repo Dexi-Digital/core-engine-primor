@@ -269,9 +269,7 @@ async def get_home(
             "descr": "Consulta via Infosimples",
             "status": "ok" if consultas_detran_30d else "idle",
             "last_event": f"{consultas_detran_30d} consultas (30d)",
-            "configured": bool(
-                getattr(settings, "infosimples_api_token", "") or True
-            ),
+            "configured": bool(getattr(settings, "infosimples_token", None)),
         },
         {
             "key": "crea",
@@ -279,7 +277,7 @@ async def get_home(
             "descr": "ART / Acervo Técnico via Infosimples",
             "status": "ok",
             "last_event": "Pronto para importar",
-            "configured": True,
+            "configured": bool(getattr(settings, "infosimples_token", None)),
         },
         {
             "key": "onedrive",
