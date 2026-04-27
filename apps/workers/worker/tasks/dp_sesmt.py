@@ -1,4 +1,14 @@
-"""Tasks do Modulo A (DP / SESMT)."""
+"""Tasks do Modulo A (DP / SESMT).
+
+Tasks scheduladas pelo Celery beat (cron) rodam sem contexto HTTP. Quando
+precisarem de um `actor` para gravar em `audit_log`, use `SYSTEM_BEAT` de
+`app.audit.actors` (vale "system:beat") -- diferencia mutacoes cron de
+uma chamada manual via endpoint `/dispatch` (que ja propaga email do admin).
+
+Hoje `dispatch_aso_alerts` e `dispatch_afastamento_alerts` so enviam email
+(sem audit). Se um dia gravarem audit por cada alerta disparado, o valor
+canonico do actor nesse path e `SYSTEM_BEAT`.
+"""
 from __future__ import annotations
 
 import asyncio

@@ -323,14 +323,18 @@ def get_documentai_dep() -> Any:
 # injetado para que testes possam substituir por uma versao "eager"
 # (executa OCR sincrono in-process, no mesmo db session da request),
 # sem precisar de Redis/celery rodando.
-OcrDispatcher = Callable[[int], Awaitable[None]]
+#
+# `actor` e o email do usuario HTTP que disparou o dispatch -- propagado
+# pros args do send_task para que o `audit_log` do OCR async identifique
+# o uploader humano (senao todo OCR ficava como actor=`system`).
+OcrDispatcher = Callable[[int, str], Awaitable[None]]
 
 
 def get_ocr_dispatcher() -> OcrDispatcher:
-    async def _dispatch(parte_id: int) -> None:
+    async def _dispatch(parte_id: int, actor: str) -> None:
         # O `send_task` da Celery e sync e tipicamente retorna em <5ms
         # (so escreve no broker Redis) -- nao bloqueia request.
-        service.enqueue_ocr_parte_diaria(parte_id)
+        service.enqueue_ocr_parte_diaria(parte_id, actor=actor)
 
     return _dispatch
 
@@ -384,7 +388,7 @@ async def upload_parte_diaria_endpoint(
             actor=current_user.email,
         )
     try:
-        await dispatch_ocr(parte.id)
+        await dispatch_ocr(parte.id, current_user.email)
     except Exception as exc:
         # Broker indisponivel: marca como erro com mensagem clara para
         # o operador. Anexo ja esta persistido entao reprocessar funciona.
@@ -568,7 +572,7 @@ async def reprocessar_parte_diaria_endpoint(
         actor=current_user.email,
     )
     try:
-        await dispatch_ocr(parte_id)
+        await dispatch_ocr(parte_id, current_user.email)
     except Exception as exc:
         logger.warning("Falha ao re-enfileirar OCR parte_diaria=%s: %s", parte_id, exc)
         await service.mark_parte_diaria_erro(

@@ -11,6 +11,7 @@ from sqlalchemy import desc, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.actors import SYSTEM as _AUDIT_ACTOR_SYSTEM
 from app.audit.models import AuditLog
 from app.integrations.dominio.client import (
     DominioAuthError,
@@ -35,7 +36,7 @@ _AUDIT_RESOURCE = "fiscal.documento"
 # Default usado em paths sem usuario logado (worker de retry, importacao
 # automatica do escritorio contabil etc.). Mutacoes vindas de requests
 # HTTP devem passar `actor=current_user.email` -- ver router.
-_AUDIT_ACTOR_PLACEHOLDER = "system"
+_AUDIT_ACTOR_PLACEHOLDER = _AUDIT_ACTOR_SYSTEM
 
 
 class FiscalDuplicateError(ValueError):

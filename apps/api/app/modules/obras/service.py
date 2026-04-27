@@ -13,6 +13,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.actors import SYSTEM as _AUDIT_ACTOR_SYSTEM
 from app.audit.models import AuditLog
 from app.modules.obras.models import (
     Obra,
@@ -29,7 +30,7 @@ logger = logging.getLogger(__name__)
 
 _AUDIT_RESOURCE_OBRA = "obras.obra"
 _AUDIT_RESOURCE_DOC = "obras.documento"
-_AUDIT_ACTOR_PLACEHOLDER = "system"
+_AUDIT_ACTOR_PLACEHOLDER = _AUDIT_ACTOR_SYSTEM
 
 
 async def _record_audit(

@@ -26,6 +26,7 @@ from datetime import UTC, datetime
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.actors import SYSTEM as _AUDIT_ACTOR_SYSTEM
 from app.audit.models import AuditLog
 from app.integrations.onedrive.client import (
     OneDriveClient,
@@ -256,7 +257,7 @@ async def run_sync(
         run.finished_at = datetime.now(UTC)
         db.add(
             AuditLog(
-                actor=actor or "system",
+                actor=actor or _AUDIT_ACTOR_SYSTEM,
                 action="sync",
                 resource=_AUDIT_RESOURCE,
                 resource_id=str(run.id),

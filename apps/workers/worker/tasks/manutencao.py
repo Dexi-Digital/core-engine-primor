@@ -27,25 +27,31 @@ logger = logging.getLogger(__name__)
     retry_backoff_max=300,
     retry_jitter=True,
 )
-def consulta_detran(self, veiculo_id: int, uf: str) -> dict[str, object]:
+def consulta_detran(
+    self, veiculo_id: int, uf: str, actor: str | None = None
+) -> dict[str, object]:
     """Consulta Detran de um veiculo via Infosimples.
 
     Args:
         veiculo_id: PK em `frota_veiculos`.
         uf: SP, MG ou GO.
+        actor: email do usuario HTTP que disparou a consulta. Propagado
+            pro `audit_log` do service. `None` = dispatched sem contexto
+            (fallback: `SYSTEM_WORKER`).
 
     Retorna `{consulta_id, status, source, n_multas}` ou `{error: ...}`
     se algo falhou antes de chegar no service. O service em si nao
     propaga excecao -- guarda erro em row 'erro' -- entao retentar
     so faz sentido para falhas de carregamento da API/storage/db.
     """
-    return asyncio.run(_run_consulta_detran(veiculo_id, uf))
+    return asyncio.run(_run_consulta_detran(veiculo_id, uf, actor))
 
 
 async def _run_consulta_detran(
-    veiculo_id: int, uf: str
+    veiculo_id: int, uf: str, actor: str | None
 ) -> dict[str, object]:
     try:
+        from app.audit.actors import SYSTEM_WORKER
         from app.core.config import get_settings
         from app.core.db import SessionLocal
         from app.modules.manutencao_frota.service import (
@@ -60,7 +66,11 @@ async def _run_consulta_detran(
     try:
         async with SessionLocal() as session:
             consulta = await consultar_detran(
-                session, veiculo_id, uf, client=client
+                session,
+                veiculo_id,
+                uf,
+                client=client,
+                actor=actor or SYSTEM_WORKER,
             )
         payload = consulta.payload or {}
         return {
@@ -90,22 +100,31 @@ def rpa_despachante(placa: str) -> dict[str, object]:
     retry_backoff_max=600,
     retry_jitter=True,
 )
-def ocr_parte_diaria(self, parte_id: int) -> dict[str, object]:
+def ocr_parte_diaria(
+    self, parte_id: int, actor: str | None = None
+) -> dict[str, object]:
     """Roda OCR de uma parte diaria (Modulo B.2) via Document AI.
 
     Args:
         parte_id: PK em `partes_diarias`.
+        actor: email do uploader HTTP. Propagado pro `audit_log` do
+            service (`processar_ocr_parte_diaria`) para auditar QUEM
+            disparou o OCR. `None` = dispatched sem contexto (retry
+            agendado por dead-letter, por ex.) -> fallback `SYSTEM_WORKER`.
 
     Retorna `{parte_id, ocr_status, source, error_msg}` ou
     `{error: ...}` se carga do app falhou. O service nao propaga
     excecao do Document AI -- guarda como `ocr_status='erro'`.
     Retentamos so em falhas de transporte/timeout (autoretry_for).
     """
-    return asyncio.run(_run_ocr_parte_diaria(parte_id))
+    return asyncio.run(_run_ocr_parte_diaria(parte_id, actor))
 
 
-async def _run_ocr_parte_diaria(parte_id: int) -> dict[str, object]:
+async def _run_ocr_parte_diaria(
+    parte_id: int, actor: str | None
+) -> dict[str, object]:
     try:
+        from app.audit.actors import SYSTEM_WORKER
         from app.core.config import get_settings
         from app.core.db import SessionLocal
         from app.modules.manutencao_frota.service import (
@@ -127,7 +146,11 @@ async def _run_ocr_parte_diaria(parte_id: int) -> dict[str, object]:
         async with open_partes_diarias_storage(settings) as storage:
             async with SessionLocal() as session:
                 parte = await processar_ocr_parte_diaria(
-                    session, parte_id, client=client, storage=storage
+                    session,
+                    parte_id,
+                    client=client,
+                    storage=storage,
+                    actor=actor or SYSTEM_WORKER,
                 )
         return {
             "parte_id": parte.id,

@@ -30,6 +30,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.actors import SYSTEM as _AUDIT_ACTOR_SYSTEM
 from app.audit.models import AuditLog
 from app.core.config import get_settings
 from app.integrations.resend.client import ResendClient, ResendError
@@ -69,7 +70,7 @@ VENCENDO_DIAS_LIMITE = 30  # status "vencendo" se faltarem <= 30 dias
 # logado (worker de import futuro etc.); requests HTTP devem passar
 # `actor=current_user.email` -- ver certidoes_router.
 _AUDIT_RESOURCE = "licitacoes.certidao"
-_AUDIT_ACTOR_PLACEHOLDER = "system"
+_AUDIT_ACTOR_PLACEHOLDER = _AUDIT_ACTOR_SYSTEM
 
 
 async def _record_audit(
