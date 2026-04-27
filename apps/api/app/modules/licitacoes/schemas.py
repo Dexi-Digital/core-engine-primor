@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
@@ -226,3 +227,63 @@ class CertidaoAlertaDispatchPayload(BaseModel):
     """
 
     recipients: list[EmailStr] = Field(min_length=1, max_length=20)
+
+
+# --- D.6 fase 2: consultas CREA via Infosimples (PR #28) ---
+
+
+class CreaConsultaRequest(BaseModel):
+    """Payload do POST /certidoes/consultar-crea."""
+
+    uf: str = Field(min_length=2, max_length=2)
+    tipo: str = Field(min_length=1, max_length=16)  # art|profissional|empresa
+    identificador: str = Field(min_length=1, max_length=64)
+
+
+class CreaConsultaRead(BaseModel):
+    """Linha do log de consultas CREA + payload normalizado.
+
+    `payload` e um dict opaco com a estrutura documentada em
+    `InfosimplesClient.consultar_crea` (sub-objetos `art`,
+    `profissional`, `empresa` -- so um e populado dependendo do
+    `tipo`).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    uf: str
+    tipo: str
+    identificador: str
+    status: str
+    source: str
+    payload: dict[str, Any] | None
+    error_msg: str | None
+    certidao_id: int | None
+    executed_at: datetime
+
+
+class CreaConsultaListResponse(BaseModel):
+    items: list[CreaConsultaRead]
+    total: int
+
+
+class CreaImportarArtRequest(BaseModel):
+    """Payload do POST /certidoes/importar-art.
+
+    Cria uma `CertidaoEmpresa` (tipo=ACERVO_TECNICO) a partir da
+    consulta CREA da ART. Quando a ART nao for importavel (situacao
+    BAIXADA/CANCELADA, sem numero, etc.), `certidao` retornado e
+    None e a `CreaConsultaRead.error_msg` explica o motivo.
+    """
+
+    uf: str = Field(min_length=2, max_length=2)
+    numero_art: str = Field(min_length=1, max_length=64)
+    empresa_cnpj: str = Field(min_length=11, max_length=32)
+
+
+class CreaImportarArtResponse(BaseModel):
+    """Resposta do POST /certidoes/importar-art."""
+
+    consulta: CreaConsultaRead
+    certidao: CertidaoRead | None  # None quando ART nao e importavel

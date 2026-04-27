@@ -1,8 +1,13 @@
-"""Infosimples -- consultas Detran (multas, IPVA, licenciamento, debitos).
+"""Infosimples -- consultas Detran (multas, IPVA, licenciamento, debitos)
+e CREA (ART, profissional, empresa).
 
 A Infosimples (https://infosimples.com) agrega consultas em ~26 Detrans
-estaduais e expoe REST/JSON com auth por token. Usamos especificamente
-os endpoints `/api/v2/consultas/detran/<uf>/veiculo` para SP/MG/GO.
+estaduais e ~10 conselhos profissionais (CREA, CRM, OAB...). Expoe
+REST/JSON com auth por token. Usamos:
+
+- `/api/v2/consultas/detran/<uf>/veiculo` (B.3, PR #14) -- SP/MG/GO
+- `/api/v2/consultas/crea/<uf>/{art,profissional,empresa}` (D.6 fase 2,
+  PR #28) -- mesmas 3 UFs por compatibilidade
 
 Padrao do projeto: sem chave (`INFOSIMPLES_TOKEN` vazio), o adapter
 cai num mock deterministico para nao bloquear dev/CI -- mesmo padrao
@@ -58,6 +63,13 @@ INFOSIMPLES_BASE_URL = "https://api.infosimples.com"
 
 UFS_SUPORTADAS = frozenset({"SP", "MG", "GO"})
 
+# CREA: tipos de consulta suportados na fase 2.
+#   - "art"          -> valida numero de ART, devolve profissional/servico
+#   - "profissional" -> valida registro do engenheiro (CPF ou n. CREA)
+#   - "empresa"      -> lista ARTs registradas pelo CNPJ
+# Tipos sao normalizados em lower-case (Infosimples e case-sensitive).
+CREA_TIPOS_SUPORTADOS = frozenset({"art", "profissional", "empresa"})
+
 _NON_ALNUM = re.compile(r"[^A-Z0-9]")
 
 
@@ -79,6 +91,10 @@ class InfosimplesUFNaoSuportadaError(ValueError):
     A API tem cobertura nacional, mas mantemos o whitelist explicito
     para evitar consultar UF nova sem teste/fixture associada.
     """
+
+
+class InfosimplesCreaTipoNaoSuportadoError(ValueError):
+    """`tipo` fora de {art, profissional, empresa}."""
 
 
 class InfosimplesClient(IntegrationClient):
@@ -272,6 +288,227 @@ class InfosimplesClient(IntegrationClient):
             "source": "infosimples_mock",
         }
 
+    # ----------------------------- CREA (D.6 fase 2) --------------------
+
+    async def consultar_crea(
+        self,
+        uf: str,
+        tipo: str,
+        identificador: str,
+    ) -> dict[str, Any]:
+        """Consulta CREA via Infosimples para ART / profissional / empresa.
+
+        Resposta normalizada (mesma forma para os 3 tipos -- fields nao
+        aplicaveis vem como `None`):
+          {
+            "uf": "MG",
+            "tipo": "art",
+            "identificador": "MG2023ABC123",
+            "art": {
+                "numero": "MG2023ABC123",
+                "tipo_servico": "OBRA / SERVICO TECNICO",
+                "valor_contrato": "1500000.00",
+                "data_registro": "2023-05-12",
+                "data_inicio": "2023-06-01",
+                "data_termino_previsto": "2024-12-31",
+                "situacao": "ATIVA",  # ATIVA | BAIXADA | CANCELADA
+            } | None,
+            "profissional": {
+                "registro_crea": "MG-145678/D",
+                "nome": "JOSE DA SILVA",
+                "cpf": "***",
+                "titulo": "ENGENHEIRO CIVIL",
+                "situacao": "REGULAR",  # REGULAR | SUSPENSO | CANCELADO
+            } | None,
+            "empresa": {
+                "cnpj": "00.000.000/0001-00",
+                "razao_social": "PRIMOR CONSTRUTORA LTDA",
+                "registro_crea": "PJ-12345/MG",
+                "situacao": "REGULAR",
+                "arts_count": 23,  # so devolvido em tipo=empresa
+            } | None,
+            "raw": {...},
+            "source": "infosimples" | "infosimples_mock",
+          }
+
+        Levanta:
+            InfosimplesUFNaoSuportadaError -- UF fora de SP/MG/GO
+            InfosimplesCreaTipoNaoSuportadoError -- tipo invalido
+            ValueError -- identificador vazio
+            InfosimplesError -- erro de transporte ou response code != 200
+        """
+        uf_norm = uf.upper().strip()
+        if uf_norm not in UFS_SUPORTADAS:
+            raise InfosimplesUFNaoSuportadaError(
+                f"UF {uf_norm!r} nao suportada. Disponiveis: "
+                + ", ".join(sorted(UFS_SUPORTADAS))
+            )
+        tipo_norm = tipo.lower().strip()
+        if tipo_norm not in CREA_TIPOS_SUPORTADOS:
+            raise InfosimplesCreaTipoNaoSuportadoError(
+                f"tipo {tipo!r} nao suportado. Use: "
+                + ", ".join(sorted(CREA_TIPOS_SUPORTADOS))
+            )
+        ident_norm = (identificador or "").strip()
+        if not ident_norm:
+            raise ValueError("identificador vazio")
+        # Limites razoaveis para evitar abuso (numeros de ART tem ate
+        # ~24 chars; CNPJ formatado 18; n. CREA ate ~16).
+        if len(ident_norm) > 64:
+            raise ValueError(
+                f"identificador muito longo: {len(ident_norm)} chars (max 64)"
+            )
+
+        if self.is_mock:
+            return self._mock_response_crea(ident_norm, uf_norm, tipo_norm)
+
+        endpoint = f"/api/v2/consultas/crea/{uf_norm.lower()}/{tipo_norm}"
+        try:
+            r = await self._client.post(
+                endpoint,
+                json={
+                    "token": self._api_token,
+                    "identificador": ident_norm,
+                },
+            )
+        except httpx.HTTPError as exc:
+            raise InfosimplesError(
+                f"transporte Infosimples CREA ({uf_norm}/{tipo_norm}): {exc}"
+            ) from exc
+        if r.status_code != 200:
+            raise InfosimplesError(
+                f"Infosimples CREA {uf_norm}/{tipo_norm} status "
+                f"{r.status_code}: {r.text[:200]}"
+            )
+        try:
+            data = r.json()
+        except ValueError as exc:
+            raise InfosimplesError(
+                f"resposta nao-JSON CREA ({uf_norm}/{tipo_norm}): {exc}"
+            ) from exc
+        if not isinstance(data, dict):
+            raise InfosimplesError(
+                f"resposta CREA com formato inesperado: {type(data).__name__}"
+            )
+        code = data.get("code")
+        if code != 200:
+            raise InfosimplesError(
+                f"Infosimples CREA {uf_norm}/{tipo_norm} code={code}: "
+                f"{data.get('code_message') or data.get('message') or '?'}"
+            )
+        items = data.get("data") or []
+        if not items:
+            raise InfosimplesError(
+                f"Infosimples CREA {uf_norm}/{tipo_norm}: sem dados para "
+                f"{ident_norm!r}"
+            )
+        return self._normalize_crea(items[0], ident_norm, uf_norm, tipo_norm)
+
+    def _normalize_crea(
+        self,
+        raw: dict[str, Any],
+        identificador: str,
+        uf: str,
+        tipo: str,
+    ) -> dict[str, Any]:
+        # Como Detran, response real tem naming inconsistente entre
+        # consultas (CREA-MG x CREA-SP). Normalizamos para um schema
+        # unico que a UI/service consome sem branching por UF.
+        art_raw = raw.get("art") or (raw if tipo == "art" else None)
+        prof_raw = raw.get("profissional") or (
+            raw if tipo == "profissional" else None
+        )
+        emp_raw = raw.get("empresa") or (raw if tipo == "empresa" else None)
+        return {
+            "uf": uf,
+            "tipo": tipo,
+            "identificador": identificador,
+            "art": _normalize_crea_art(art_raw) if art_raw else None,
+            "profissional": _normalize_crea_profissional(prof_raw)
+            if prof_raw
+            else None,
+            "empresa": _normalize_crea_empresa(emp_raw) if emp_raw else None,
+            "raw": raw,
+            "source": "infosimples",
+        }
+
+    def _mock_response_crea(
+        self, identificador: str, uf: str, tipo: str
+    ) -> dict[str, Any]:
+        # Hash deterministico igual ao mock de Detran -- mesma combinacao
+        # (identificador, uf, tipo) gera mesma resposta. Permite os
+        # testes exercitarem o caminho real (`source=infosimples_mock`)
+        # sem token e sem network.
+        digest = hashlib.sha1(
+            f"{identificador}|{uf}|{tipo}".encode()
+        ).hexdigest()
+        idx = int(digest[:2], 16)
+        situacoes_art = ["ATIVA", "ATIVA", "ATIVA", "BAIXADA", "CANCELADA"]
+        situacoes_prof = ["REGULAR", "REGULAR", "REGULAR", "SUSPENSO"]
+        titulos = ["ENGENHEIRO CIVIL", "ENGENHEIRO ELETRICISTA", "ARQUITETO"]
+        nomes = [
+            "JOSE DA SILVA",
+            "MARIA SOUZA",
+            "JOAO PEREIRA",
+            "ANA OLIVEIRA",
+        ]
+
+        art = (
+            {
+                "numero": identificador
+                if tipo == "art"
+                else f"{uf}{2020 + (idx % 6)}{digest[:6].upper()}",
+                "tipo_servico": "OBRA / SERVICO TECNICO",
+                "valor_contrato": f"{(idx + 1) * 50000:.2f}",
+                "data_registro": f"{2020 + (idx % 6)}-{1 + (idx % 12):02d}-15",
+                "data_inicio": f"{2020 + (idx % 6)}-{1 + (idx % 12):02d}-20",
+                # Dia 28 e seguro pra qualquer mes (inclusive Fev nao-bissexto).
+                # Antes usavamos 31, mas isso gera datas invalidas em meses
+                # de 30 dias (~42% dos idx) -- _parse_iso_date devolveria
+                # None e a certidao seria criada com validade=None.
+                "data_termino_previsto": (
+                    f"{2021 + (idx % 6)}-{1 + ((idx + 5) % 12):02d}-28"
+                ),
+                "situacao": situacoes_art[idx % len(situacoes_art)],
+            }
+            if tipo == "art"
+            else None
+        )
+        profissional = (
+            {
+                "registro_crea": f"{uf}-{100000 + idx * 137}/D",
+                "nome": nomes[idx % len(nomes)],
+                "cpf": "***.***.***-**",  # mascarado por LGPD no mock
+                "titulo": titulos[idx % len(titulos)],
+                "situacao": situacoes_prof[idx % len(situacoes_prof)],
+            }
+            if tipo == "profissional"
+            else None
+        )
+        empresa = (
+            {
+                "cnpj": identificador,
+                "razao_social": "PRIMOR CONSTRUTORA LTDA"
+                if (idx % 2) == 0
+                else "ZAG ENGENHARIA LTDA",
+                "registro_crea": f"PJ-{1000 + idx * 13}/{uf}",
+                "situacao": situacoes_prof[idx % len(situacoes_prof)],
+                "arts_count": (idx % 30) + 1,
+            }
+            if tipo == "empresa"
+            else None
+        )
+        return {
+            "uf": uf,
+            "tipo": tipo,
+            "identificador": identificador,
+            "art": art,
+            "profissional": profissional,
+            "empresa": empresa,
+            "raw": None,
+            "source": "infosimples_mock",
+        }
+
     async def aclose(self) -> None:
         if self._own_client:
             await self._client.aclose()
@@ -281,3 +518,61 @@ def _join_or_none(a: Any, b: Any) -> str | None:
     if not a and not b:
         return None
     return f"{a or ''}/{b or ''}".strip("/")
+
+
+def _normalize_crea_art(raw: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "numero": raw.get("numero") or raw.get("art_numero"),
+        "tipo_servico": (
+            raw.get("tipo_servico")
+            or raw.get("tipo_obra")
+            or raw.get("descricao_servico")
+        ),
+        "valor_contrato": (
+            raw.get("valor_contrato")
+            or raw.get("valor")
+            or raw.get("valor_total")
+        ),
+        "data_registro": raw.get("data_registro") or raw.get("registrada_em"),
+        "data_inicio": raw.get("data_inicio") or raw.get("inicio"),
+        "data_termino_previsto": (
+            raw.get("data_termino_previsto")
+            or raw.get("termino_previsto")
+            or raw.get("data_fim")
+        ),
+        "situacao": raw.get("situacao") or raw.get("status"),
+    }
+
+
+def _normalize_crea_profissional(raw: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "registro_crea": (
+            raw.get("registro_crea")
+            or raw.get("numero_registro")
+            or raw.get("registro")
+        ),
+        "nome": raw.get("nome") or raw.get("nome_profissional"),
+        "cpf": raw.get("cpf"),
+        "titulo": raw.get("titulo") or raw.get("formacao"),
+        "situacao": raw.get("situacao") or raw.get("status"),
+    }
+
+
+def _normalize_crea_empresa(raw: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "cnpj": raw.get("cnpj"),
+        "razao_social": raw.get("razao_social") or raw.get("nome"),
+        "registro_crea": (
+            raw.get("registro_crea")
+            or raw.get("numero_registro")
+            or raw.get("registro")
+        ),
+        "situacao": raw.get("situacao") or raw.get("status"),
+        # `or` descartaria `0` (empresa sem ART e legitimo). Usa is-not-None
+        # explicito pra preservar a contagem real -- regressao Devin Review #28.
+        "arts_count": (
+            raw.get("arts_count")
+            if raw.get("arts_count") is not None
+            else raw.get("total_arts")
+        ),
+    }
