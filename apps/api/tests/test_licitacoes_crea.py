@@ -356,6 +356,8 @@ async def test_importar_art_recusa_cancelada(
     assert certidao is None
     assert consulta.error_msg is not None
     assert "CANCELADA" in consulta.error_msg
+    # status='erro' pra UI renderizar em vermelho (regressao Devin Review #28)
+    assert consulta.status == "erro"
     # nao cria CertidaoEmpresa nem FK
     rows = (
         (await db_session.execute(select(CertidaoEmpresa))).scalars().all()
@@ -379,6 +381,7 @@ async def test_importar_art_recusa_baixada(
     )
     assert certidao is None
     assert consulta.error_msg is not None and "BAIXADA" in consulta.error_msg
+    assert consulta.status == "erro"
 
 
 @pytest.mark.asyncio

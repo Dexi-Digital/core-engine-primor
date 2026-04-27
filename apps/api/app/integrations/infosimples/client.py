@@ -462,8 +462,12 @@ class InfosimplesClient(IntegrationClient):
                 "valor_contrato": f"{(idx + 1) * 50000:.2f}",
                 "data_registro": f"{2020 + (idx % 6)}-{1 + (idx % 12):02d}-15",
                 "data_inicio": f"{2020 + (idx % 6)}-{1 + (idx % 12):02d}-20",
+                # Dia 28 e seguro pra qualquer mes (inclusive Fev nao-bissexto).
+                # Antes usavamos 31, mas isso gera datas invalidas em meses
+                # de 30 dias (~42% dos idx) -- _parse_iso_date devolveria
+                # None e a certidao seria criada com validade=None.
                 "data_termino_previsto": (
-                    f"{2021 + (idx % 6)}-{1 + ((idx + 5) % 12):02d}-31"
+                    f"{2021 + (idx % 6)}-{1 + ((idx + 5) % 12):02d}-28"
                 ),
                 "situacao": situacoes_art[idx % len(situacoes_art)],
             }

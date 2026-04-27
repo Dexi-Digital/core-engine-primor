@@ -312,6 +312,9 @@ async def importar_art_como_certidao(
     if situacao in {"BAIXADA", "CANCELADA"}:
         # Politica: nao importa ART terminada. Operador pode forcar
         # criando manualmente se quiser registrar historico.
+        # Marca status='erro' pra UI renderizar a explicacao em vermelho
+        # (mesma convencao da branch "sem numero" acima).
+        consulta.status = CREA_CONSULTA_ERRO
         consulta.error_msg = (
             f"ART em situacao {situacao!r} -- nao importada (cadastre manual"
             " se quiser registrar como historico)"

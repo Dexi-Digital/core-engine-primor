@@ -283,6 +283,30 @@ def test_crea_tipos_suportados_constante():
 
 
 @pytest.mark.asyncio
+async def test_crea_mock_art_dates_sao_sempre_validas():
+    """Regressao Devin Review #28: mock devolvia day=31 em meses de 30 dias.
+
+    Antes do fix, ~42% dos `idx` (107/256) geravam strings tipo '2023-02-31'
+    que `_parse_iso_date` nao consegue parsear -> certidao importada com
+    `validade=None`, perdendo expiration tracking.
+    """
+    from datetime import date as _date  # noqa: PLC0415 -- escopo de teste
+
+    c = InfosimplesClient(api_token=None)
+    # Cobre ~30 idx distintos. Mais que suficiente pra atravessar todos os
+    # meses (idx % 12), incluindo os 5 com bug (Fev/Abr/Jun/Set/Nov).
+    for i in range(40):
+        ident = f"TEST{i:04d}"
+        r = await c.consultar_crea("MG", "art", ident)
+        for field in ("data_registro", "data_inicio", "data_termino_previsto"):
+            value = r["art"][field]
+            assert value, f"{field} vazio para {ident}"
+            # Levanta ValueError se inválida -- exatamente o que `_parse_iso_date`
+            # captura silenciosamente em prod.
+            _date.fromisoformat(value)
+
+
+@pytest.mark.asyncio
 async def test_crea_real_client_normaliza_payload():
     captured: dict = {}
 
