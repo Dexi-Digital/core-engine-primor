@@ -48,10 +48,12 @@ class Settings(BaseSettings):
     resend_from_email: str = Field(default="Motor Central <boletins@motorcentral.dev>")
     public_base_url: str = Field(default="http://localhost:3000")
 
-    # Edital storage root (D.4). Local filesystem in dev, mounted volume
-    # in docker, and replaced by a MinIO/S3 backend when we drop the
-    # LocalStorage impl for a remote one.
-    editais_storage_path: str = Field(default="/tmp/motor-central/editais")
+    # Edital storage root (D.4). Local filesystem em dev, volume montado
+    # em docker, e substituido pelo backend OneDrive/S3 quando
+    # `storage_backend != "local"`. Default fora de `/tmp` porque
+    # containers minimais limpam `/tmp` reiniciando -- usar `/data`
+    # exige montar volume nomeado, que e o que voce quer em prod.
+    editais_storage_path: str = Field(default="/data/motor-central/editais")
 
     # LLM providers for D.5 (analise de edital). The cost-routed wrapper
     # picks the cheapest configured provider first and falls back to the

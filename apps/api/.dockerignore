@@ -1,0 +1,37 @@
+# Reduzir build context: sem isso o COPY copia .venv + .git + caches
+# inteiros, e cada `docker build` puxa centenas de MB para o daemon.
+
+# Python venv / build
+.venv
+__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+.ruff_cache
+.mypy_cache
+.coverage
+htmlcov
+*.egg-info
+build
+dist
+
+# Source control / dev
+.git
+.gitignore
+.github
+
+# Editor
+.vscode
+.idea
+*.swp
+
+# Local-only
+.env
+.env.local
+.env.*.local
+
+# Docs e testes nao precisam estar na imagem runtime
+docs
+tests
+test_*.py
+*_test.py
