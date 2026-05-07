@@ -50,10 +50,12 @@ class Settings(BaseSettings):
 
     # Edital storage root (D.4). Local filesystem em dev, volume montado
     # em docker, e substituido pelo backend OneDrive/S3 quando
-    # `storage_backend != "local"`. Default fora de `/tmp` porque
-    # containers minimais limpam `/tmp` reiniciando -- usar `/data`
-    # exige montar volume nomeado, que e o que voce quer em prod.
-    editais_storage_path: str = Field(default="/data/motor-central/editais")
+    # `storage_backend != "local"`. O default em `/tmp` so funciona em
+    # dev: `/tmp` e wiped reiniciando containers; em prod com
+    # `STORAGE_BACKEND=local` voce TEM que setar `EDITAIS_STORAGE_PATH`
+    # para um volume persistente (ex: `/data/motor-central/editais`).
+    # Veja docs/deployment-option-a.md.
+    editais_storage_path: str = Field(default="/tmp/motor-central/editais")
 
     # LLM providers for D.5 (analise de edital). The cost-routed wrapper
     # picks the cheapest configured provider first and falls back to the
