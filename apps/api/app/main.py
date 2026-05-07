@@ -11,7 +11,11 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.middleware import CorrelationIdMiddleware
 from app.modules.auth.router import router as auth_router
-from app.modules.auth.startup import ensure_admin_seed, warn_dev_secret
+from app.modules.auth.startup import (
+    ensure_admin_seed,
+    guard_local_storage_in_prod,
+    warn_dev_secret,
+)
 from app.modules.diagnostico.router import router as diagnostico_router
 from app.modules.dp_sesmt.employee_documents import (
     router as dp_employee_docs_router,
@@ -42,6 +46,7 @@ async def lifespan(app: FastAPI):
     # Auth startup: warning de secret default + seed do admin inicial
     # se ADMIN_EMAIL/ADMIN_PASSWORD vierem no env (idempotente).
     warn_dev_secret(settings)
+    guard_local_storage_in_prod(settings)
     await ensure_admin_seed(settings)
     yield
     # Shutdown: fechar singletons que abriram pools TCP. Cada

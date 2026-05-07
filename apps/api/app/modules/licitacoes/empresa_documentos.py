@@ -10,6 +10,7 @@ Mutacoes sao sensiveis -- gravam `audit_log` com `actor=current_user.email`.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date, datetime
 from typing import Any
 
@@ -27,6 +28,10 @@ from app.modules.licitacoes.models import (
     DOC_EMPRESA_TIPOS_VALIDOS,
     EmpresaDocumento,
 )
+from app.modules.licitacoes.router import get_editais_storage
+from app.modules.licitacoes.storage import EditaisStorage
+
+logger = logging.getLogger(__name__)
 
 _AUDIT_RESOURCE = "licitacoes.empresa_documento"
 _AUDIT_ACTOR_PLACEHOLDER = _AUDIT_ACTOR_SYSTEM
@@ -189,15 +194,29 @@ async def delete_documento(
     db: AsyncSession,
     doc_id: int,
     *,
+    storage: EditaisStorage | None = None,
     actor: str = _AUDIT_ACTOR_PLACEHOLDER,
 ) -> bool:
+    """Remove um documento societario do DB + limpa o anexo do storage
+    (best-effort) se `storage` foi injetado. Sem storage (ou anexo
+    vazio), so apaga a linha -- mantem compat com callers antigos.
+    """
     doc = await get_documento(db, doc_id)
     if doc is None:
         return False
     cnpj = doc.empresa_cnpj
     tipo = doc.tipo
+    anexo_path = doc.anexo_path
     await db.delete(doc)
     await db.commit()
+    if storage is not None and anexo_path:
+        try:
+            await storage.delete(anexo_path)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "falha ao remover anexo do documento em %s (DB ja apagou)",
+                anexo_path,
+            )
     await _record_audit(
         db,
         action="delete",
@@ -268,8 +287,11 @@ async def update_endpoint(
 async def delete_endpoint(
     doc_id: int,
     db: AsyncSession = Depends(get_db),
+    storage: EditaisStorage = Depends(get_editais_storage),
     current_user: User = Depends(get_current_user),
 ) -> None:
-    ok = await delete_documento(db, doc_id, actor=current_user.email)
+    ok = await delete_documento(
+        db, doc_id, storage=storage, actor=current_user.email
+    )
     if not ok:
         raise HTTPException(status_code=404, detail="Documento nao encontrado")

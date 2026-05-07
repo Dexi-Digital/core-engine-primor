@@ -35,6 +35,7 @@ from app.audit.models import AuditLog
 from app.core.config import get_settings
 from app.integrations.resend.client import ResendClient, ResendError
 from app.modules.licitacoes.models import CertidaoAlertaLog, CertidaoEmpresa
+from app.modules.licitacoes.storage import EditaisStorage
 
 logger = logging.getLogger(__name__)
 
@@ -286,8 +287,13 @@ async def delete_certidao(
     db: AsyncSession,
     certidao_id: int,
     *,
+    storage: EditaisStorage | None = None,
     actor: str = _AUDIT_ACTOR_PLACEHOLDER,
 ) -> bool:
+    """Remove a certidao do DB e, se `storage` foi passado, limpa o
+    anexo no backend (OneDrive / local). Best-effort: falha do
+    storage apenas loga, nao aborta -- a linha do DB ja foi removida.
+    """
     row = await db.get(CertidaoEmpresa, certidao_id)
     if row is None:
         return False
@@ -296,8 +302,17 @@ async def delete_certidao(
         "tipo": row.tipo,
         "validade": row.validade,
     }
+    arquivo_path = row.arquivo_path
     await db.delete(row)
     await db.commit()
+    if storage is not None and arquivo_path:
+        try:
+            await storage.delete(arquivo_path)
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "falha ao remover anexo da certidao em %s (DB ja apagou)",
+                arquivo_path,
+            )
     await _record_audit(
         db,
         action="delete",

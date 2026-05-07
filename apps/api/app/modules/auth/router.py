@@ -1,7 +1,7 @@
 """Endpoints de auth: login, refresh, me, CRUD de usuarios."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from jose import JWTError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +16,7 @@ from app.core.security import (
 from app.modules.auth import service as auth_service
 from app.modules.auth.dependencies import get_current_user, require_admin
 from app.modules.auth.models import User
+from app.modules.auth.rate_limit import enforce_login_rate_limit
 from app.modules.auth.schemas import (
     LoginRequest,
     RefreshRequest,
@@ -45,8 +46,13 @@ def _build_token_pair(user: User) -> TokenPair:
 @router.post("/login", response_model=TokenPair)
 async def login(
     payload: LoginRequest,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ) -> TokenPair:
+    # Rate limit ANTES de bater no `authenticate` (o bcrypt da
+    # `verify_password` custa ~100ms e viraria timing oracle).
+    await enforce_login_rate_limit(request, payload.email)
+
     user = await auth_service.authenticate(
         db, email=payload.email, password=payload.password
     )

@@ -33,6 +33,7 @@ from app.modules.licitacoes.certidoes import (
     list_certidoes,
     update_certidao,
 )
+from app.modules.licitacoes.router import get_editais_storage
 from app.modules.licitacoes.schemas import (
     CertidaoAlertaDispatchPayload,
     CertidaoAlertaSummary,
@@ -45,6 +46,7 @@ from app.modules.licitacoes.schemas import (
     CreaImportarArtRequest,
     CreaImportarArtResponse,
 )
+from app.modules.licitacoes.storage import EditaisStorage
 from app.modules.manutencao_frota.service import get_infosimples_singleton
 
 router = APIRouter()
@@ -299,8 +301,11 @@ async def update_certidao_endpoint(
 async def delete_certidao_endpoint(
     certidao_id: int,
     db: AsyncSession = Depends(get_db),
+    storage: EditaisStorage = Depends(get_editais_storage),
     current_user: User = Depends(get_current_user),
 ) -> None:
-    ok = await delete_certidao(db, certidao_id, actor=current_user.email)
+    ok = await delete_certidao(
+        db, certidao_id, storage=storage, actor=current_user.email
+    )
     if not ok:
         raise HTTPException(status_code=404, detail="Certidao nao encontrada")
