@@ -403,8 +403,13 @@ async def test_dispatch_skips_with_empty_recipients(
 async def test_crud_endpoints_full_lifecycle(
     api_client: AsyncClient, auth_headers: dict[str, str]
 ) -> None:
-    # Create
-    today = date(2026, 4, 25)
+    # Create. Diferente das funcoes puras (`compute_status` etc) que
+    # aceitam `today=` injetado, este teste bate no router real, que
+    # consulta `date.today()` ao calcular `status_atual`. Usar data
+    # hardcoded aqui torna o teste sensivel a passagem do tempo --
+    # `today + 10d` vira "vencido" assim que a data hardcoded passa
+    # de 30d atras de hoje. Por isso ancoramos em `date.today()`.
+    today = date.today()
     payload = {
         "empresa_cnpj": "44229813000123",
         "tipo": "CND_FEDERAL",

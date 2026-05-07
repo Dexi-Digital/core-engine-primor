@@ -1,0 +1,115 @@
+# docker-compose para Option A em VPS unica (ex: DigitalOcean Droplet
+# 4vCPU/8GB). Diferenca chave do `docker-compose.yml` (dev):
+#   - sem MinIO/MailHog (storage = OneDrive; email = Resend SaaS)
+#   - portas internas (Postgres / Redis NAO expostas em 0.0.0.0)
+#   - vars vem do `.env.prod` que voce gera a partir do .env.example
+#   - healthchecks em todos os processos longos
+#   - service `release` que roda alembic upgrade head antes de a API
+#     subir aceitar trafego (depends_on com condition=service_completed)
+#
+# Uso:
+#   cp apps/api/.env.example .env.prod   # editar com secrets reais
+#   docker compose -f infra/docker-compose.prod.yml --env-file .env.prod up -d
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-primor}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD obrigatorio em prod}
+      POSTGRES_DB: ${POSTGRES_DB:-primor}
+    # SEM `ports:` -- Postgres so deve ser acessivel pela rede interna
+    # do compose (api/workers). Se precisar inspecionar localmente,
+    # use `docker compose exec postgres psql ...`.
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-primor} -d ${POSTGRES_DB:-primor}"]
+      interval: 10s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory", "256mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      retries: 5
+    restart: unless-stopped
+
+  release:
+    # Roda `alembic upgrade head` ANTES da API subir. Container morre
+    # depois (exit 0) e o `depends_on: condition: service_completed_successfully`
+    # da api so libera quando a migration termina sem erro.
+    build:
+      context: ../apps/api
+    env_file:
+      - ../.env.prod
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: ../apps/api
+    env_file:
+      - ../.env.prod
+    environment:
+      ENVIRONMENT: production
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      release:
+        condition: service_completed_successfully
+    # Healthcheck via python stdlib -- nao depende de curl estar na imagem,
+    # mesmo que o Dockerfile atual o inclua. 200 OK -> exit 0, qualquer outra
+    # coisa -> exit 1 (a urllib levanta `URLError` pra nao-200, o except handle).
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz', timeout=4).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+
+  workers:
+    build:
+      context: ../apps/workers
+    env_file:
+      - ../.env.prod
+    environment:
+      ENVIRONMENT: production
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      release:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ../apps/web
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://api:8000}
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  pgdata:

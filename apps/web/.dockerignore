@@ -1,0 +1,37 @@
+# Reduzir build context. Critico no Next: sem isso, .next/ e
+# node_modules/ locais sao copiados PRA DENTRO do `deps` stage,
+# anulando o cache da camada `npm ci`.
+
+# Node / Next
+node_modules
+.next
+.next/cache
+out
+dist
+.turbo
+coverage
+
+# Playwright artefatos (so dev/CI)
+playwright-report
+test-results
+playwright/.cache
+
+# Source control
+.git
+.gitignore
+.github
+
+# Editor
+.vscode
+.idea
+*.swp
+
+# Local-only
+.env
+.env.local
+.env.*.local
+
+# Tipos / testes
+e2e
+*.test.ts
+*.test.tsx
