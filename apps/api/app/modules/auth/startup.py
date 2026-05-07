@@ -34,7 +34,7 @@ def warn_dev_secret(settings: Settings) -> None:
     if settings.environment.lower() in _PROD_ENVIRONMENTS:
         raise InsecureProductionSecretError(
             "ENVIRONMENT=production exige SECRET_KEY customizado. "
-            "Gere um valor com `openssl rand -hex 32` e setse no .env "
+            "Gere um valor com `openssl rand -hex 32` e defina no .env "
             "antes de subir a API."
         )
     logger.warning(

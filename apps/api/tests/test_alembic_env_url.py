@@ -1,78 +1,42 @@
 """Tests para o resolver de DATABASE_URL do alembic env.py.
 
-A logica esta em `apps/api/alembic/env.py:_resolve_database_url`. Nao
-podemos importar diretamente porque o modulo so corre dentro de um
-contexto Alembic; copiamos a logica em um helper aqui (com paridade
-verificada manualmente) e testamos o helper.
+A logica vive em `app.core.db_url.resolve_sync_database_url` e e reusada
+por `alembic/env.py::_resolve_database_url`. Testamos o helper direto para
+nao duplicar a logica -- se a regra mudar num lado, ambos atualizam juntos.
 """
 from __future__ import annotations
 
-import os
-from contextlib import contextmanager
-
 import pytest
 
-
-@contextmanager
-def _env(key: str, value: str | None):
-    prev = os.environ.get(key)
-    if value is None:
-        os.environ.pop(key, None)
-    else:
-        os.environ[key] = value
-    try:
-        yield
-    finally:
-        if prev is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = prev
-
-
-def _resolve(env_value: str | None, fallback: str | None = None) -> str:
-    """Replica de `apps/api/alembic/env.py::_resolve_database_url`.
-
-    Mantenha em sync com o original. As 4 normalizacoes sao:
-      postgres://         -> postgresql+psycopg2://
-      postgresql://       -> postgresql+psycopg2://
-      postgresql+asyncpg  -> postgresql+psycopg2://
-      postgresql+psycopg2 -> idempotente (passa direto)
-    """
-    url = env_value or fallback
-    if not url:
-        raise RuntimeError("vazio")
-    if url.startswith("postgres://"):
-        url = "postgresql://" + url[len("postgres://") :]
-    if url.startswith("postgresql+asyncpg://"):
-        url = "postgresql+psycopg2://" + url[len("postgresql+asyncpg://") :]
-    elif url.startswith("postgresql://"):
-        url = "postgresql+psycopg2://" + url[len("postgresql://") :]
-    return url
+from app.core.db_url import (
+    DatabaseUrlNotConfiguredError,
+    resolve_sync_database_url,
+)
 
 
 def test_async_to_sync() -> None:
-    out = _resolve("postgresql+asyncpg://u:p@h:5432/db")
+    out = resolve_sync_database_url("postgresql+asyncpg://u:p@h:5432/db")
     assert out == "postgresql+psycopg2://u:p@h:5432/db"
 
 
 def test_plain_postgresql_gets_psycopg2() -> None:
-    out = _resolve("postgresql://u:p@h:5432/db")
+    out = resolve_sync_database_url("postgresql://u:p@h:5432/db")
     assert out == "postgresql+psycopg2://u:p@h:5432/db"
 
 
 def test_legacy_postgres_scheme_normalized() -> None:
     # Heroku/Render legado mandam `postgres://`; SQLAlchemy 2.x recusa.
-    out = _resolve("postgres://u:p@h:5432/db")
+    out = resolve_sync_database_url("postgres://u:p@h:5432/db")
     assert out == "postgresql+psycopg2://u:p@h:5432/db"
 
 
 def test_psycopg2_passthrough() -> None:
-    out = _resolve("postgresql+psycopg2://u:p@h:5432/db")
+    out = resolve_sync_database_url("postgresql+psycopg2://u:p@h:5432/db")
     assert out == "postgresql+psycopg2://u:p@h:5432/db"
 
 
 def test_env_overrides_fallback() -> None:
-    out = _resolve(
+    out = resolve_sync_database_url(
         env_value="postgresql+asyncpg://prod-user:prod-pwd@prod-host:5432/proddb",
         fallback="postgresql+psycopg2://primor:primor@localhost:5432/primor",
     )
@@ -80,7 +44,7 @@ def test_env_overrides_fallback() -> None:
 
 
 def test_fallback_when_env_missing() -> None:
-    out = _resolve(
+    out = resolve_sync_database_url(
         env_value=None,
         fallback="postgresql+psycopg2://primor:primor@localhost:5432/primor",
     )
@@ -88,5 +52,5 @@ def test_fallback_when_env_missing() -> None:
 
 
 def test_raises_when_both_missing() -> None:
-    with pytest.raises(RuntimeError):
-        _resolve(env_value=None, fallback=None)
+    with pytest.raises(DatabaseUrlNotConfiguredError):
+        resolve_sync_database_url(env_value=None, fallback=None)

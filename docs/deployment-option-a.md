@@ -181,10 +181,10 @@ Para a opcao mais barata e simples (R$ ~120/mes):
 
 1. Cria Droplet 4vCPU/8GB Ubuntu 24.04
 2. `apt install docker.io docker-compose-plugin`
-3. `git clone https://github.com/Dexi-Digital/core-engine-primor.git /opt/motor-central`
-4. `cp apps/api/.env.example /opt/motor-central/.env.prod` e edita
+3. `git clone https://github.com/Dexi-Digital/core-engine-primor.git /opt/motor-central && cd /opt/motor-central`
+4. `cp apps/api/.env.example .env.prod` e edita (paths relativos a `/opt/motor-central` daqui pra frente)
 5. `docker compose -f infra/docker-compose.prod.yml --env-file .env.prod up -d`
-6. Configura Caddy / Traefik na frente pro TLS automatico
+6. Configura Caddy / Traefik na frente pro TLS automatico (HTTPS) -- este PR nao bundla reverse proxy; sem ele, `:8000` e `:3000` ficam expostos em HTTP puro
 
 ## Observability
 

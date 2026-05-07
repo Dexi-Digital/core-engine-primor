@@ -67,8 +67,15 @@ services:
         condition: service_healthy
       release:
         condition: service_completed_successfully
+    # Healthcheck via python stdlib -- nao depende de curl estar na imagem,
+    # mesmo que o Dockerfile atual o inclua. 200 OK -> exit 0, qualquer outra
+    # coisa -> exit 1 (a urllib levanta `URLError` pra nao-200, o except handle).
     healthcheck:
-      test: ["CMD-SHELL", "curl -fsS http://localhost:8000/healthz || exit 1"]
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz', timeout=4).status == 200 else 1)"
       interval: 30s
       timeout: 5s
       retries: 3

@@ -20,6 +20,7 @@ from alembic import context
 # Importar os models garante que estejam registrados no metadata:
 from app.audit import models as _audit  # noqa: F401
 from app.core.db import Base
+from app.core.db_url import resolve_sync_database_url
 from app.modules.auth import models as _auth  # noqa: F401
 from app.modules.diagnostico import models as _diag  # noqa: F401
 from app.modules.dp_sesmt import afastamentos as _afast  # noqa: F401
@@ -36,28 +37,14 @@ if config.config_file_name is not None:
 
 
 def _resolve_database_url() -> str:
-    """Resolve DATABASE_URL: env > alembic.ini, normalizando driver async->sync.
+    """Wrapper in-Alembic em volta de `resolve_sync_database_url`.
 
-    Aceita os formatos comuns que aparecem nos providers:
-      postgres://...               (Heroku/Render legado)
-      postgresql://...             (padrao)
-      postgresql+asyncpg://...     (o que a app usa em runtime)
-      postgresql+psycopg2://...    (o que o alembic precisa)
-
-    Sempre devolve `postgresql+psycopg2://...`.
+    Precedencia: `DATABASE_URL` do env > `sqlalchemy.url` do alembic.ini.
     """
-    url = os.environ.get("DATABASE_URL") or config.get_main_option("sqlalchemy.url")
-    if not url:
-        raise RuntimeError(
-            "DATABASE_URL nao configurada (env e alembic.ini vazios)."
-        )
-    if url.startswith("postgres://"):
-        url = "postgresql://" + url[len("postgres://") :]
-    if url.startswith("postgresql+asyncpg://"):
-        url = "postgresql+psycopg2://" + url[len("postgresql+asyncpg://") :]
-    elif url.startswith("postgresql://"):
-        url = "postgresql+psycopg2://" + url[len("postgresql://") :]
-    return url
+    return resolve_sync_database_url(
+        env_value=os.environ.get("DATABASE_URL"),
+        fallback=config.get_main_option("sqlalchemy.url"),
+    )
 
 
 target_metadata = Base.metadata
