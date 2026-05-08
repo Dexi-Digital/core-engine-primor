@@ -31,6 +31,9 @@ from app.modules.observability.router import (
     health as _observability_health_handler,
 )
 from app.modules.observability.router import router as observability_router
+from app.modules.onedrive_diagnostico.router import (
+    router as onedrive_diagnostico_router,
+)
 from app.modules.onedrive_sync.router import router as onedrive_sync_router
 from app.modules.overview.router import router as overview_router
 
@@ -142,6 +145,7 @@ def create_app() -> FastAPI:
     app.include_router(dp_employee_docs_router)
     app.include_router(empresa_documentos_router)
     app.include_router(onedrive_sync_router)
+    app.include_router(onedrive_diagnostico_router)
     app.include_router(overview_router)
 
     return app

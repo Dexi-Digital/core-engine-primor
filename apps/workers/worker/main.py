@@ -34,6 +34,7 @@ celery_app = Celery(
         "worker.tasks.licitacoes",
         "worker.tasks.fiscal",
         "worker.tasks.ia",
+        "worker.tasks.onedrive_diagnostico",
     ],
 )
 
@@ -46,6 +47,7 @@ celery_app.conf.update(
         "worker.tasks.licitacoes.*": {"queue": "licitacoes"},
         "worker.tasks.fiscal.*": {"queue": "financeiro"},
         "worker.tasks.ia.*": {"queue": "ia"},
+        "worker.tasks.onedrive_diagnostico.*": {"queue": "licitacoes"},
     },
     task_acks_late=True,
     worker_prefetch_multiplier=1,
@@ -91,6 +93,13 @@ celery_app.conf.beat_schedule = {
     "afastamento-alerts-daily": {
         "task": "worker.tasks.dp_sesmt.dispatch_afastamento_alerts",
         "schedule": crontab(hour="8", minute="10"),
+    },
+    # onedrive_diagnostico (POC): roda segunda 05h America/Sao_Paulo.
+    # Compara conteudo do SharePoint com docs obrigatorios por entidade.
+    "onedrive-diagnostico-weekly": {
+        "task": "worker.tasks.onedrive_diagnostico.run_diagnostico",
+        "schedule": crontab(hour="5", minute="0", day_of_week="1"),
+        "kwargs": {"area": "all"},
     },
 }
 
