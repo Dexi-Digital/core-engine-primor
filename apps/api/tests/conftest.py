@@ -13,6 +13,24 @@ from app.core.db import Base, get_db
 from app.main import app
 
 
+@pytest.fixture(autouse=True)
+def _disable_login_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Desabilita o rate limit do login em todos os testes.
+
+    Os testes nao sobem Redis; com o limiter habilitado, toda chamada
+    de `auth_headers` tenta conectar no `redis://localhost:6379` e
+    trava ate timeout (mesmo no fail-open). Quem quiser EXERCITAR o
+    limiter usa `monkeypatch.setenv("LOGIN_RATE_LIMIT_ENABLED", "1")`
+    + `get_settings.cache_clear()`.
+    """
+    monkeypatch.setenv("LOGIN_RATE_LIMIT_ENABLED", "0")
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 @pytest_asyncio.fixture
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)

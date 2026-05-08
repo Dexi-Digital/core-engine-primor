@@ -34,6 +34,14 @@ class Settings(BaseSettings):
     admin_password: str | None = Field(default=None)
     admin_nome: str = Field(default="Administrador")
 
+    # Rate limit do POST /api/v1/auth/login (bucket Redis por
+    # (email, ip)). Desabilitado em testes por default para nao exigir
+    # Redis rodando -- em prod/staging manter habilitado. Ver
+    # app.modules.auth.rate_limit.
+    login_rate_limit_enabled: bool = Field(default=True)
+    login_rate_limit_max_attempts: int = Field(default=5)
+    login_rate_limit_window_s: int = Field(default=60)
+
     cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
 
     # Object storage (MinIO / S3).

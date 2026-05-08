@@ -448,6 +448,118 @@ async def test_crud_endpoints_full_lifecycle(
 
 
 @pytest.mark.asyncio
+async def test_delete_certidao_cleans_up_storage_anexo(
+    db_session: AsyncSession,
+) -> None:
+    """Regressao: DELETE de uma certidao com `arquivo_path` tem que
+    chamar `storage.delete(arquivo_path)` para nao vazar anexos no
+    OneDrive/disco. Leak real observado antes do fix: DB row sumia
+    mas o item ficava orfao no Graph.
+    """
+    from app.modules.licitacoes.certidoes import (
+        create_certidao,
+        delete_certidao,
+    )
+
+    class _RecordingStorage:
+        def __init__(self) -> None:
+            self.deleted: list[str] = []
+
+        async def save(self, **_kwargs):  # pragma: no cover - unused
+            raise NotImplementedError
+
+        async def read(self, path: str) -> bytes:  # pragma: no cover
+            raise NotImplementedError
+
+        async def delete(self, path: str) -> None:
+            self.deleted.append(path)
+
+    storage = _RecordingStorage()
+    row = await create_certidao(
+        db_session,
+        empresa_cnpj="44229813000123",
+        tipo="CND_FEDERAL",
+        validade=date.today() + timedelta(days=10),
+        arquivo_path="ONEDRIVE_ITEM_ID_123",
+        actor="test",
+    )
+    assert await delete_certidao(
+        db_session, row.id, storage=storage, actor="test"
+    )
+    assert storage.deleted == ["ONEDRIVE_ITEM_ID_123"]
+
+
+@pytest.mark.asyncio
+async def test_delete_certidao_without_anexo_does_not_call_storage(
+    db_session: AsyncSession,
+) -> None:
+    """Sem arquivo_path, nao chamamos storage.delete (evita noise
+    em logs e eventual 404 na Graph). Tambem tolera storage=None
+    para callers antigos que ainda nao foram migrados."""
+    from app.modules.licitacoes.certidoes import (
+        create_certidao,
+        delete_certidao,
+    )
+
+    class _ExplodingStorage:
+        async def save(self, **_kwargs):  # pragma: no cover
+            raise NotImplementedError
+
+        async def read(self, path: str) -> bytes:  # pragma: no cover
+            raise NotImplementedError
+
+        async def delete(self, path: str) -> None:
+            raise AssertionError(f"storage.delete nao deveria ter sido chamado (path={path})")
+
+    row = await create_certidao(
+        db_session,
+        empresa_cnpj="44229813000123",
+        tipo="CND_FEDERAL",
+        validade=date.today() + timedelta(days=10),
+        arquivo_path=None,
+        actor="test",
+    )
+    assert await delete_certidao(
+        db_session, row.id, storage=_ExplodingStorage(), actor="test"
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_certidao_storage_failure_is_best_effort(
+    db_session: AsyncSession,
+) -> None:
+    """Falha no storage (Graph 5xx, disco cheio, etc) nao pode travar
+    o DELETE -- a linha do DB ja foi removida. So loga warning."""
+    from app.modules.licitacoes.certidoes import (
+        create_certidao,
+        delete_certidao,
+    )
+
+    class _FailingStorage:
+        async def save(self, **_kwargs):  # pragma: no cover
+            raise NotImplementedError
+
+        async def read(self, path: str) -> bytes:  # pragma: no cover
+            raise NotImplementedError
+
+        async def delete(self, path: str) -> None:
+            raise OSError("graph 503")
+
+    row = await create_certidao(
+        db_session,
+        empresa_cnpj="44229813000123",
+        tipo="CND_FEDERAL",
+        validade=date.today() + timedelta(days=10),
+        arquivo_path="ONEDRIVE_ITEM_ID_999",
+        actor="test",
+    )
+    # NAO deve levantar -- o cleanup e best-effort.
+    assert await delete_certidao(
+        db_session, row.id, storage=_FailingStorage(), actor="test"
+    )
+
+
+@pytest.mark.asyncio
 async def test_dispatch_alerts_endpoint_503_without_resend(
     api_client: AsyncClient,
     auth_headers: dict[str, str],
