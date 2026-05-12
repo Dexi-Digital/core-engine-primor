@@ -256,7 +256,13 @@ export default async function DiagnosticoPage() {
               <code>frota/&#123;placa&#125;/TIPO.pdf</code>,{" "}
               <code>obras/&#123;codigo&#125;/TIPO.pdf</code>,{" "}
               <code>empresa/TIPO.pdf</code>. Cada run e idempotente —
-              rodar duas vezes nao duplica documentos.
+              rodar duas vezes nao duplica documentos.{" "}
+              <Link
+                href="/diagnostico/onedrive"
+                className="font-medium text-sky-700 underline hover:text-sky-900"
+              >
+                Ver diagnóstico de estrutura →
+              </Link>
             </p>
           </div>
           <form action={triggerOneDriveSync} className="flex items-end gap-2">

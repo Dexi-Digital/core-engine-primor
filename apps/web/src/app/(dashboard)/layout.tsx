@@ -14,6 +14,7 @@ import {
   IconDoc,
   IconGavel,
   IconShield,
+  IconCloud,
   IconLogout,
 } from "@/components/ui/icons";
 
@@ -23,6 +24,11 @@ const navGroups = [
     items: [
       { href: "/", label: "Comando Central", icon: <IconDashboard /> },
       { href: "/diagnostico", label: "Diagnóstico", icon: <IconStethoscope /> },
+      {
+        href: "/diagnostico/onedrive",
+        label: "OneDrive (Estrutura)",
+        icon: <IconCloud />,
+      },
       { href: "/obras", label: "Obras", icon: <IconBuilding /> },
     ],
   },
