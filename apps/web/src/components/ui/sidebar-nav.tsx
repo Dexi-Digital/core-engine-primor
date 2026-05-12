@@ -17,6 +17,21 @@ type Group = {
 
 export function SidebarNav({ groups }: { groups: Group[] }) {
   const path = usePathname() ?? "";
+  // Determine the single most specific (longest-prefix) active href, so that
+  // child routes like /diagnostico/onedrive don't also light up the parent
+  // /diagnostico item.
+  const allItems = groups.flatMap((g) => g.items);
+  const activeHref =
+    path === "/"
+      ? "/"
+      : allItems
+          .filter(
+            (it) =>
+              it.href !== "/" &&
+              (path === it.href || path.startsWith(it.href + "/")),
+          )
+          .map((it) => it.href)
+          .sort((a, b) => b.length - a.length)[0] ?? null;
   return (
     <nav className="mt-6 flex-1 overflow-y-auto pr-1">
       {groups.map((g) => (
@@ -29,10 +44,7 @@ export function SidebarNav({ groups }: { groups: Group[] }) {
           </div>
           <ul className="space-y-0.5">
             {g.items.map((item) => {
-              const active =
-                item.href === "/"
-                  ? path === "/"
-                  : path === item.href || path.startsWith(item.href + "/");
+              const active = item.href === activeHref;
               return (
                 <li key={item.href}>
                   <Link
