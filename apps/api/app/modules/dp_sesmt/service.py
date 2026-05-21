@@ -139,6 +139,8 @@ async def list_employees(
     *,
     status: str | None = None,
     obra: str | None = None,
+    setor: str | None = None,
+    is_admin_office: bool | None = None,
     search: str | None = None,
     aso_status: str | None = None,
     limit: int = 100,
@@ -152,6 +154,13 @@ async def list_employees(
     `aso_status`: filtra por estado do ASO. Valores aceitos:
     `vigente` (>30d), `vencendo` (0..30d), `vencido` (<0), `sem_validade`
     (NULL). Filtragem no SQL para nao quebrar paginacao.
+
+    `setor`: substring match (`ilike`) -- a UI usa o setor livre, entao
+    aceitamos "Licit" para casar "Licitacoes".
+
+    `is_admin_office`: filtro estrito (`= true`/`= false`) -- True retorna
+    a equipe administrativa (organograma do dossie), False retorna apenas
+    operacionais de obra.
     """
     from datetime import date as _date
 
@@ -160,6 +169,10 @@ async def list_employees(
         base_filters.append(Employee.status == status)
     if obra:
         base_filters.append(Employee.obra == obra)
+    if setor:
+        base_filters.append(Employee.setor.ilike(f"%{setor}%"))
+    if is_admin_office is not None:
+        base_filters.append(Employee.is_admin_office.is_(is_admin_office))
     if aso_status:
         today = _date.today()
         if aso_status == "sem_validade":

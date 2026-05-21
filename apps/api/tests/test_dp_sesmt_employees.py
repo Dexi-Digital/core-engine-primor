@@ -176,6 +176,76 @@ async def test_list_employees_filtros_e_busca(
 
 
 @pytest.mark.asyncio
+async def test_list_employees_filtra_por_setor_e_admin_office(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """Cobre os filtros novos usados pela tela `/rh/equipe-administrativa`."""
+    # Admin (Licitacoes) + admin (TI) + operacional sem setor.
+    await api_client.post(
+        "/api/v1/dp-sesmt/employees",
+        json={
+            "cpf": VALID_CPF_1,
+            "nome_completo": "Brenda Adm",
+            "cargo": "Analista de Licitacoes",
+            "setor": "Licitacoes",
+            "is_admin_office": True,
+        },
+        headers=auth_headers,
+    )
+    await api_client.post(
+        "/api/v1/dp-sesmt/employees",
+        json={
+            "cpf": VALID_CPF_2,
+            "nome_completo": "Wanderson Adm",
+            "cargo": "Coordenador de TI",
+            "setor": "TI",
+            "is_admin_office": True,
+        },
+        headers=auth_headers,
+    )
+    await api_client.post(
+        "/api/v1/dp-sesmt/employees",
+        json={
+            "cpf": "52998224725",  # CPF sintaticamente valido
+            "nome_completo": "Pedreiro Operacional",
+            "cargo": "Pedreiro",
+            "obra": "Obra A",
+        },
+        headers=auth_headers,
+    )
+
+    # is_admin_office=true devolve so os dois administrativos.
+    r = await api_client.get(
+        "/api/v1/dp-sesmt/employees", params={"is_admin_office": "true"}
+    )
+    assert r.json()["total"] == 2
+    nomes = {e["nome_completo"] for e in r.json()["items"]}
+    assert nomes == {"Brenda Adm", "Wanderson Adm"}
+
+    # is_admin_office=false devolve so o operacional.
+    r = await api_client.get(
+        "/api/v1/dp-sesmt/employees", params={"is_admin_office": "false"}
+    )
+    assert r.json()["total"] == 1
+    assert r.json()["items"][0]["nome_completo"] == "Pedreiro Operacional"
+
+    # Filtro por setor (substring ilike): "Licit" casa "Licitacoes".
+    r = await api_client.get(
+        "/api/v1/dp-sesmt/employees", params={"setor": "Licit"}
+    )
+    assert r.json()["total"] == 1
+    assert r.json()["items"][0]["setor"] == "Licitacoes"
+
+    # Combinacao de filtros: admin + setor=TI.
+    r = await api_client.get(
+        "/api/v1/dp-sesmt/employees",
+        params={"is_admin_office": "true", "setor": "TI"},
+    )
+    assert r.json()["total"] == 1
+    assert r.json()["items"][0]["nome_completo"] == "Wanderson Adm"
+
+
+@pytest.mark.asyncio
 async def test_update_employee_partial(
     api_client: AsyncClient, auth_headers: dict[str, str]
 ) -> None:

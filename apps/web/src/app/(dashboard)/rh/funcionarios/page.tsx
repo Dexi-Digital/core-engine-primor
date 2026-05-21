@@ -105,6 +105,8 @@ async function fetchEmployees(
   params: {
     status?: string;
     obra?: string;
+    setor?: string;
+    is_admin_office?: string;
     search?: string;
     aso_status?: string;
   } = {},
@@ -112,6 +114,8 @@ async function fetchEmployees(
   const qs = new URLSearchParams();
   if (params.status) qs.set("status", params.status);
   if (params.obra) qs.set("obra", params.obra);
+  if (params.setor) qs.set("setor", params.setor);
+  if (params.is_admin_office) qs.set("is_admin_office", params.is_admin_office);
   if (params.search) qs.set("search", params.search);
   if (params.aso_status) qs.set("aso_status", params.aso_status);
   const path = `/api/v1/dp-sesmt/employees${qs.toString() ? `?${qs}` : ""}`;
@@ -121,6 +125,25 @@ async function fetchEmployees(
     return null;
   }
 }
+
+// Setores conhecidos do organograma do dossie. UI cai em texto livre se
+// o setor existente nao casar (o filtro do backend usa `ilike`).
+const SETORES_CONHECIDOS = [
+  "Diretoria",
+  "Planejamento",
+  "Licitacoes",
+  "Contratos",
+  "Orcamento",
+  "Comercial",
+  "TI",
+  "Administrativo",
+  "Consultoria",
+];
+
+const TIPO_FILTROS: Array<[string, string]> = [
+  ["true", "Equipe administrativa"],
+  ["false", "Operacional de obra"],
+];
 
 async function createEmployee(formData: FormData): Promise<void> {
   "use server";
@@ -181,6 +204,8 @@ export default async function FuncionariosPage({
   searchParams: Promise<{
     status?: string;
     obra?: string;
+    setor?: string;
+    is_admin_office?: string;
     search?: string;
     aso_status?: string;
   }>;
@@ -212,7 +237,7 @@ export default async function FuncionariosPage({
       {/* Filtros */}
       <form
         method="get"
-        className="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 bg-white p-4 md:grid-cols-4"
+        className="grid grid-cols-1 gap-3 rounded-lg border border-slate-200 bg-white p-4 md:grid-cols-3 xl:grid-cols-4"
       >
         <label className="flex flex-col gap-1 text-xs">
           <span className="font-medium uppercase tracking-wide text-slate-500">
@@ -251,6 +276,40 @@ export default async function FuncionariosPage({
             defaultValue={params.obra ?? ""}
             className="rounded border border-slate-300 px-2 py-1 text-sm"
           />
+        </label>
+        <label className="flex flex-col gap-1 text-xs">
+          <span className="font-medium uppercase tracking-wide text-slate-500">
+            Setor
+          </span>
+          <select
+            name="setor"
+            defaultValue={params.setor ?? ""}
+            className="rounded border border-slate-300 px-2 py-1 text-sm"
+          >
+            <option value="">— todos —</option>
+            {SETORES_CONHECIDOS.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex flex-col gap-1 text-xs">
+          <span className="font-medium uppercase tracking-wide text-slate-500">
+            Tipo
+          </span>
+          <select
+            name="is_admin_office"
+            defaultValue={params.is_admin_office ?? ""}
+            className="rounded border border-slate-300 px-2 py-1 text-sm"
+          >
+            <option value="">— todos —</option>
+            {TIPO_FILTROS.map(([v, l]) => (
+              <option key={v} value={v}>
+                {l}
+              </option>
+            ))}
+          </select>
         </label>
         <label className="flex flex-col gap-1 text-xs">
           <span className="font-medium uppercase tracking-wide text-slate-500">
@@ -321,6 +380,14 @@ export default async function FuncionariosPage({
                     {emp.matricula ? (
                       <span className="ml-2 text-xs text-slate-400">
                         #{emp.matricula}
+                      </span>
+                    ) : null}
+                    {emp.is_admin_office ? (
+                      <span
+                        className="ml-2 inline-flex items-center rounded-full bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-indigo-700"
+                        title="Equipe administrativa (organograma do dossie)"
+                      >
+                        adm
                       </span>
                     ) : null}
                   </td>
