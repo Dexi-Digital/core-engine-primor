@@ -75,6 +75,18 @@ async def onboarding(payload: EmployeeOnboardingRequest) -> ModuleStatus:
 async def list_employees_endpoint(
     status: str | None = Query(None, max_length=16),
     obra: str | None = Query(None, max_length=128),
+    setor: str | None = Query(
+        None,
+        max_length=128,
+        description="Substring (ilike) do setor administrativo",
+    ),
+    is_admin_office: bool | None = Query(
+        None,
+        description=(
+            "true = somente equipe administrativa (org do dossie); "
+            "false = somente operacionais; omitir = todos"
+        ),
+    ),
     search: str | None = Query(None, max_length=128),
     aso_status: str | None = Query(
         None,
@@ -89,6 +101,8 @@ async def list_employees_endpoint(
         db,
         status=status,
         obra=obra,
+        setor=setor,
+        is_admin_office=is_admin_office,
         search=search,
         aso_status=aso_status,
         limit=limit,
