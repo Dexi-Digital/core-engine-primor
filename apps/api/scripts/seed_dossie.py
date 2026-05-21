@@ -8,6 +8,12 @@ societarios, 2 saved queries do PNCP que espelham as rotinas de
 licitacao da Brenda/Evandro, e 6 editais de exemplo dos orgaos onde a
 empresa atua (DER/MG, DNIT, Prefeitura BH, AGETOP, DER/ES).
 
+Overlay de alertas (para demo do card `Em alerta` em `/rh` e badges de
+ASO em `/rh/funcionarios`): 1 admin com `status=afastado` (INSS) e 2
+admins com ASO `vencendo` (<= 30 dias). Os demais ficam `ativo` com ASO
+`vigente` (validade longa). A aplicacao do overlay e idempotente -- os
+campos sao normalizados toda vez que o script roda.
+
 CNPJs das empresas do grupo sao placeholders (`33000001000101` ... 4).
 Quando o cliente informar os reais, basta substituir no script (ou rodar
 um UPDATE direto).
@@ -25,7 +31,7 @@ proprio CRUD da aplicacao.
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, date
+from datetime import UTC, date, timedelta
 from decimal import Decimal
 
 import structlog
@@ -44,7 +50,11 @@ import app.modules.manutencao_frota.models  # noqa: F401
 import app.modules.obras.models  # noqa: F401
 import app.modules.onedrive_sync.models  # noqa: F401
 from app.core.db import SessionLocal
-from app.modules.dp_sesmt.models import Employee
+from app.modules.dp_sesmt.models import (
+    STATUS_AFASTADO,
+    STATUS_ATIVO,
+    Employee,
+)
 from app.modules.licitacoes.models import (
     CertidaoEmpresa,
     EmpresaDocumento,
@@ -67,6 +77,22 @@ EMPRESA_CIRRUS = "33000004000104"
 # --- 14 administrativos (organograma do dossie) ---------------------------
 # CPFs sintaticamente validos (digitos verificadores corretos) -- nao sao
 # CPFs reais, sao placeholders para a demo. Reais entram via UI.
+#
+# Overlay de demo: alguns admins recebem ASO/status especifico para
+# exercitar o card `Em alerta` em /rh e os badges em /rh/funcionarios.
+# Mantido como `today` resolvido em runtime para nao envelhecer.
+_TODAY = date.today()
+# 1 admin afastado -> Em alerta = 1 (filtro `status != ativo`).
+# Marcelo (A-011) escolhido por ser nome generico (nao gerencial) e nao
+# colidir com cargos sensiveis do organograma.
+_AFASTADO_CPF = "00000011126"  # Marcelo
+# 2 admins com ASO vencendo (<= 30 dias). Brendon e Paulo cobrem 2 setores
+# distintos (Licitacoes + Planejamento), o que torna a listagem mais
+# realista quando alguem filtra por setor.
+_ASO_VENCENDO_CPFS = {
+    "00000010405": 10,  # Brendon -> vence em ~10 dias
+    "00000010740": 25,  # Paulo   -> vence em ~25 dias
+}
 _ADMINS: tuple[dict, ...] = (
     {
         "cpf": "00000010154",
@@ -623,22 +649,64 @@ _LICITACOES: tuple[dict, ...] = (
 )
 
 
+def _overlay_for(cpf: str) -> dict:
+    """Calcula os campos `status` + ASO de demo para um admin.
+
+    Default: ativo, ASO vigente (today + 180d). Excecoes:
+    - `_AFASTADO_CPF`           -> status=afastado, ASO vigente.
+    - `_ASO_VENCENDO_CPFS[cpf]` -> status=ativo, ASO vencendo (today + Nd).
+    """
+    if cpf == _AFASTADO_CPF:
+        return {
+            "status": STATUS_AFASTADO,
+            "aso_data": _TODAY - timedelta(days=180),
+            "aso_validade": _TODAY + timedelta(days=180),
+            "aso_resultado": "apto",
+        }
+    if cpf in _ASO_VENCENDO_CPFS:
+        dias = _ASO_VENCENDO_CPFS[cpf]
+        return {
+            "status": STATUS_ATIVO,
+            # ASO vale 1 ano -- exame ha ~(365-dias) atras.
+            "aso_data": _TODAY - timedelta(days=365 - dias),
+            "aso_validade": _TODAY + timedelta(days=dias),
+            "aso_resultado": "apto",
+        }
+    return {
+        "status": STATUS_ATIVO,
+        "aso_data": _TODAY - timedelta(days=180),
+        "aso_validade": _TODAY + timedelta(days=180),
+        "aso_resultado": "apto",
+    }
+
+
 async def _upsert_admins() -> int:
     """Insere os 14 administrativos. Idempotente via CPF unico.
 
     `is_admin_office=True` flag-os para o checklist do diagnostico documental
     (aliviar NR-18 etc) e tambem permite filtrar como "equipe administrativa"
     nas telas de RH.
+
+    Tambem aplica o overlay de demo (status afastado / ASO vencendo) em
+    todas as execucoes -- inclusive em admins que ja existiam -- para que
+    a demo do card `Em alerta` e dos badges fique sempre consistente.
     """
     created = 0
     async with SessionLocal() as db:
         for entry in _ADMINS:
+            overlay = _overlay_for(entry["cpf"])
             existing = (
                 await db.execute(
                     select(Employee).where(Employee.cpf == entry["cpf"])
                 )
             ).scalar_one_or_none()
             if existing is not None:
+                # Re-sync do overlay -- o /rh card depende destes valores
+                # estarem corretos toda vez que a demo rodar.
+                existing.status = overlay["status"]
+                existing.aso_data = overlay["aso_data"]
+                existing.aso_validade = overlay["aso_validade"]
+                existing.aso_resultado = overlay["aso_resultado"]
                 continue
             emp = Employee(
                 cpf=entry["cpf"],
@@ -653,6 +721,10 @@ async def _upsert_admins() -> int:
                 uf="MG",
                 is_admin_office=True,
                 source="seed_dossie",
+                status=overlay["status"],
+                aso_data=overlay["aso_data"],
+                aso_validade=overlay["aso_validade"],
+                aso_resultado=overlay["aso_resultado"],
             )
             db.add(emp)
             created += 1
