@@ -81,7 +81,7 @@ async def test_login_ok(
     # Access tem expires_in em segundos.
     assert body["expires_in"] >= 60
     # `refresh_expires_in` permite o frontend manter o cookie do refresh
-    # em sync com a config do backend (regressao Devin Review).
+    # em sync com a config do backend (regressao identificada em review).
     assert body["refresh_expires_in"] >= 60 * 60 * 24  # ao menos 1 dia
 
 
@@ -543,7 +543,7 @@ async def test_delete_self_proibido(
 async def test_patch_self_role_proibido(
     api_client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    """Regressao Devin Review: admin nao pode se auto-rebaixar.
+    """Regressao identificada em review: admin nao pode se auto-rebaixar.
 
     Sem este guard, o unico admin do sistema poderia trocar o proprio
     role para `leitor` -- recovery exigiria re-seed via env (so funciona
@@ -574,7 +574,7 @@ async def test_patch_self_role_proibido(
 async def test_patch_self_is_active_false_proibido(
     api_client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    """Regressao Devin Review: admin nao pode se auto-desativar."""
+    """Regressao identificada em review: admin nao pode se auto-desativar."""
     admin = await _create_user(db_session, email="admin@primor.com", password="hunter22zz")
     token = await _login_token(api_client, "admin@primor.com", "hunter22zz")
     resp = await api_client.patch(
@@ -591,7 +591,7 @@ async def test_patch_self_is_active_false_proibido(
 async def test_patch_module_roles_dict_vazio_limpa_overrides(
     api_client: AsyncClient, db_session: AsyncSession
 ) -> None:
-    """Regressao Devin Review: PATCH `{"module_roles": {}}` deve limpar
+    """Regressao identificada em review: PATCH `{"module_roles": {}}` deve limpar
     overrides; antes da fix, validate_module_roles colapsava {} em None
     e o service nao distinguia "nao tocar" de "limpar"."""
     await _create_user(db_session, email="admin@primor.com", password="hunter22zz")
@@ -628,7 +628,7 @@ async def test_patch_module_roles_dict_vazio_limpa_overrides(
 async def test_login_user_inativo_paga_custo_bcrypt(
     api_client: AsyncClient, db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Regressao Devin Review: `authenticate()` com user inativo deve
+    """Regressao identificada em review: `authenticate()` com user inativo deve
     chamar verify_password (mitigacao de timing-attack). Antes da fix,
     a branch retornava em ~0ms e ficava distinguivel via timing."""
     await _create_user(

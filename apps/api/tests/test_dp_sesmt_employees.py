@@ -440,7 +440,7 @@ async def test_dossie_cpf_invalido_400(api_client: AsyncClient) -> None:
 async def test_update_employee_rejeita_status_arbitrario(
     api_client: AsyncClient, auth_headers: dict[str, str]
 ) -> None:
-    """Devin Review #10: EmployeeUpdate aceitava qualquer string de
+    """Review #10: EmployeeUpdate aceitava qualquer string de
     status porque herdava de BaseModel direto, sem o validator.
     """
     r = await api_client.post(

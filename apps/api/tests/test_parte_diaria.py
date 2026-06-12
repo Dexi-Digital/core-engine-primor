@@ -447,7 +447,7 @@ async def test_dispatcher_broker_down_marca_erro(
 ) -> None:
     """Broker do Celery indisponivel -> upload nao falha; row fica `erro`.
 
-    Regressao do fix do Devin Review #2: AGENTS.md exige OCR no worker,
+    Regressao de fix de review #2: AGENTS.md exige OCR no worker,
     mas se o broker estiver fora a UX nao pode quebrar -- o operador
     precisa ver o anexo persistido com mensagem de erro clara.
     """
@@ -578,12 +578,12 @@ async def test_processar_ocr_falha_de_read_anexo(
     assert "file not found" in (parte.ocr_error_msg or "")
 
 
-# --- regressao Devin Review post-merge -------------------------------------
+# --- regressao identificada em review pos-merge -------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_celery_dispatcher_e_singleton() -> None:
-    """Bug do Devin Review: cada `enqueue_ocr_parte_diaria` criava um
+    """Bug identificado em review: cada `enqueue_ocr_parte_diaria` criava um
     novo `Celery(...)` -- vazava pool de conexoes Redis/AMQP. O fix
     cacheia em `_celery_dispatcher_singleton`.
     """
@@ -623,7 +623,7 @@ async def test_open_partes_diarias_storage_local(tmp_path) -> None:
     """`open_partes_diarias_storage` (helper compartilhado API/worker)
     deve devolver `LocalStorage` quando `STORAGE_BACKEND` != onedrive.
 
-    Regressao do Devin Review: API saving em OneDrive / worker lendo com
+    Regressao identificada em review: API saving em OneDrive / worker lendo com
     LocalStorage -> FileNotFoundError. Helper unico evita divergencia.
     """
     from types import SimpleNamespace
@@ -964,7 +964,7 @@ async def test_endpoint_consumo_404_se_inexistente(
 async def test_consumo_ignora_horimetro_de_partes_pendentes_ou_erro(
     db_session: AsyncSession,
 ) -> None:
-    """Regressao do finding Devin Review #24: a query do horimetro
+    """Regressao identificada em review #24: a query do horimetro
     anterior precisa filtrar por ocr_status revisado/processado --
     senao uma parte pendente (com horimetro_fim cru de OCR ainda
     nao validado) seria usada como base do gatilho de 250h e
@@ -1031,7 +1031,7 @@ async def test_manual_post_idempotente_em_race_toctou(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regressao do finding Devin Review #24: simula race entre o
+    """Regressao identificada em review #24: simula race entre o
     fast-path (find_by_uuid) e o commit. Se uma requisicao concorrente
     inserir entre os dois, o IntegrityError do unique deve ser
     capturado e tratado como idempotente (devolve a row existente).
@@ -1118,7 +1118,7 @@ async def test_manual_post_veiculo_inexistente_devolve_422(
     api_client: AsyncClient,
     auth_headers: dict[str, str],
 ) -> None:
-    """Regressao do finding Devin Review #24: PWA com cache stale
+    """Regressao identificada em review #24: PWA com cache stale
     enviando veiculo_id que ja foi removido nao pode cair no
     try/except IntegrityError do client_uuid e voltar 500. Tem que
     validar a FK antes do INSERT e devolver 422 explicando."""
@@ -1160,7 +1160,7 @@ async def test_manual_post_validacao_horimetro_devolve_422(
 async def test_consumo_tiebreaker_por_id_quando_mesma_data(
     db_session: AsyncSession,
 ) -> None:
-    """Regressao do finding Devin Review #24: quando ha varias
+    """Regressao identificada em review #24: quando ha varias
     partes na mesma data (ex.: turno manha + tarde), o ORDER BY
     sem tiebreaker pode escolher qualquer uma -- afeta o gatilho
     de 250h. Garantimos que escolhe a de id maior (mais recente
@@ -1225,7 +1225,7 @@ async def test_manual_post_client_uuid_string_vazia_tratada_como_ausente(
     api_client: AsyncClient,
     auth_headers: dict[str, str],
 ) -> None:
-    """Regressao do finding Devin Review #24: client_uuid="" passa
+    """Regressao identificada em review #24: client_uuid="" passa
     pela validacao Pydantic mas e gravado como NOT NULL no PG. Em
     qualquer segundo POST com "", o unique parcial dispara
     IntegrityError e o recovery (`if client_uuid:`) e falsy --
@@ -1254,7 +1254,7 @@ async def test_manual_post_client_uuid_string_vazia_tratada_como_ausente(
 async def test_consumo_inclui_predecessora_no_mesmo_dia(
     db_session: AsyncSession,
 ) -> None:
-    """Regressao do finding Devin Review #24: turno manha + tarde
+    """Regressao identificada em review #24: turno manha + tarde
     no MESMO dia. Tarde precisa achar a manha como predecessora;
     senao volta pro dia anterior e gatilho de 250h dispara duas
     vezes (uma na manha, outra de novo na tarde porque ela compara

@@ -1,7 +1,6 @@
 # AGENTS.md
 
-Guia operacional para agentes de IA (Devin, Copilot, etc.) que trabalharem
-neste repositório.
+Guia operacional para quem trabalha neste repositório.
 
 ## Onde fazer mudanças
 
@@ -25,7 +24,7 @@ neste repositório.
 
 ## Workflow de PR
 
-1. Branch a partir de `main`: `git checkout -b devin/$(date +%s)-<descricao>`.
+1. Branch a partir de `main`: `git checkout -b feat/<descricao-curta>`.
 2. Rodar lint/tests localmente: `ruff check . && pytest` em `apps/api`; `npm run lint && npm run build` em `apps/web`.
 3. Abrir PR descrevendo **qual demanda do briefing** está sendo atendida (1–12).
 4. CI precisa passar (api + workers + web).

@@ -210,7 +210,7 @@ async def test_mock_client_health_check_sempre_ok():
 
 @pytest.mark.asyncio
 async def test_token_lock_evita_thundering_herd_em_uploads_concorrentes():
-    # Regressao Devin Review #12: o DominioClient agora e singleton de
+    # Regressao identificada em review #12: o DominioClient agora e singleton de
     # processo (`get_dominio_singleton`). Sem `asyncio.Lock` no
     # `_get_token`, varios uploads simultaneos com cache vazio
     # disparariam N POST /token concorrentes -- a Dominio rate-limita

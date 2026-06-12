@@ -302,7 +302,7 @@ async def get_partes_diarias_storage() -> AsyncIterator[EditaisStorage]:
     compartilhado API/worker) para garantir que ambos usem o mesmo
     backend conforme `STORAGE_BACKEND`. Sem essa fatoracao, API podia
     salvar em OneDrive enquanto worker tentava ler com LocalStorage --
-    bug apontado pelo Devin Review.
+    bug apontado em code review.
     """
     settings = get_settings()
     async with service.open_partes_diarias_storage(settings) as storage:

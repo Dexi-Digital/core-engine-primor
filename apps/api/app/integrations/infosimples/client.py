@@ -569,7 +569,7 @@ def _normalize_crea_empresa(raw: dict[str, Any]) -> dict[str, Any]:
         ),
         "situacao": raw.get("situacao") or raw.get("status"),
         # `or` descartaria `0` (empresa sem ART e legitimo). Usa is-not-None
-        # explicito pra preservar a contagem real -- regressao Devin Review #28.
+        # explicito pra preservar a contagem real -- regressao identificada em review #28.
         "arts_count": (
             raw.get("arts_count")
             if raw.get("arts_count") is not None

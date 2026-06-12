@@ -3,7 +3,7 @@
 Applies to any flow whose `EditaisStorage` is backed by `OneDriveStorage`
 (today: Fiscal C, Licitacoes anexos D.4, OneDrive sync D.1 fase 2, ART D.6).
 
-## Devin Secrets Needed
+## Secrets Needed
 
 All org-scoped:
 - `MS_GRAPH_TENANT_ID`
@@ -138,7 +138,7 @@ Expect 204; subsequent GET returns 404 with `error.code=itemNotFound`.
 
 If Chrome refuses to start, before pivoting try:
 ```bash
-dbus-launch /opt/.devin/chrome/chrome/linux-*/chrome-linux64/chrome \
+dbus-launch chrome \
   --no-sandbox --disable-gpu --disable-dev-shm-usage \
   --user-data-dir=/home/ubuntu/.browser_data_dir \
   --remote-debugging-port=29229

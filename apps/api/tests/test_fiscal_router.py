@@ -304,7 +304,7 @@ async def test_enviar_dominio_em_erro_persiste_status_e_retry(
 async def test_storage_path_inclui_xml_hash_para_evitar_colisao(
     api_client: AsyncClient, db_session: AsyncSession, auth_headers: dict[str, str]
 ):
-    # Regressao Devin Review #12: dois XMLs distintos com o mesmo nome
+    # Regressao identificada em review #12: dois XMLs distintos com o mesmo nome
     # de arquivo ("doc.xml") cairiam no mesmo target do disco se o
     # storage usasse so (bucket, filename). O hash do XML precisa
     # entrar no path. Usamos NFE + CTE que tem hash garantidamente
@@ -336,7 +336,7 @@ async def test_storage_path_inclui_xml_hash_para_evitar_colisao(
 
 @pytest.mark.asyncio
 async def test_dominio_dep_devolve_singleton_entre_requests():
-    # Regressao Devin Review #12: criar um DominioClient novo por
+    # Regressao identificada em review #12: criar um DominioClient novo por
     # request invalida o token-cache (a Dominio rate-limita /token).
     # `get_dominio_dep` PRECISA devolver a mesma instancia entre
     # chamadas dentro do mesmo processo.
@@ -352,7 +352,7 @@ async def test_dominio_dep_devolve_singleton_entre_requests():
 async def test_fiscal_storage_isolado_do_editais_storage(
     api_client: AsyncClient, db_session: AsyncSession, auth_headers: dict[str, str]
 ):
-    # Regressao Devin Review #12: fiscal_storage_subdir foi declarado
+    # Regressao identificada em review #12: fiscal_storage_subdir foi declarado
     # no config mas nunca era lido. Resultado: XMLs fiscais e PDFs
     # de edital iam para o mesmo `editais_storage_path/{licitacao_id}/`
     # com o `licitacao_id` do fiscal sendo um bucket numerico do hash --

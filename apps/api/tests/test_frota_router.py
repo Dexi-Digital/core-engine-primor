@@ -114,7 +114,7 @@ async def test_create_veiculo_chassi_invalido(
 async def test_update_status_null_explicito(
     api_client: AsyncClient, auth_headers: dict[str, str]
 ) -> None:
-    """Regressao do Devin Review: PATCH `{"status": null}` nao pode
+    """Regressao identificada em review: PATCH `{"status": null}` nao pode
     bater no NOT NULL do DB e virar 500. Tem que falhar com 422."""
     cr = await api_client.post(
         "/api/v1/manutencao-frota/veiculos", json=_veiculo_payload(), headers=auth_headers

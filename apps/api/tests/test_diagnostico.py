@@ -735,7 +735,7 @@ async def test_create_empresa_documento(
     assert audits[0].actor == "test-admin@primor.com"
 
 
-# --- Afastamento midnight consistency (Devin Review #22 finding) --------
+# --- Afastamento midnight consistency (review #22 finding) --------
 
 
 @pytest.mark.asyncio

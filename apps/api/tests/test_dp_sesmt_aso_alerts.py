@@ -256,7 +256,7 @@ async def test_dispatch_continues_after_db_rollback_in_loop(
     db_session: AsyncSession,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regressao do bug do Devin Review: quando `db.commit()` falha
+    """Regressao identificada em review: quando `db.commit()` falha
     no meio do loop e dispara `db.rollback()`, SQLAlchemy 2.0 expira
     TODOS os ORM objects da sessao. O AsyncSession nao suporta
     lazy-refresh implicito (sem greenlet), entao o proximo acesso a

@@ -283,7 +283,7 @@ def test_crea_tipos_suportados_constante():
 
 
 def test_normalize_crea_empresa_preserva_arts_count_zero():
-    """Regressao Devin Review #28: empresa sem ART devolvia `arts_count=None`.
+    """Regressao identificada em review #28: empresa sem ART devolvia `arts_count=None`.
 
     `raw.get("arts_count") or raw.get("total_arts")` tratava 0 como falsy
     e caia no fallback. Pra empresa nova / sem ART registrada, isso
@@ -307,7 +307,7 @@ def test_normalize_crea_empresa_preserva_arts_count_zero():
 
 @pytest.mark.asyncio
 async def test_crea_mock_art_dates_sao_sempre_validas():
-    """Regressao Devin Review #28: mock devolvia day=31 em meses de 30 dias.
+    """Regressao identificada em review #28: mock devolvia day=31 em meses de 30 dias.
 
     Antes do fix, ~42% dos `idx` (107/256) geravam strings tipo '2023-02-31'
     que `_parse_iso_date` nao consegue parsear -> certidao importada com

@@ -141,7 +141,7 @@ async def _run_ocr_parte_diaria(
     # (`open_partes_diarias_storage`) -- assim ambos respeitam
     # `STORAGE_BACKEND`. Sem isso, API saving em OneDrive escrevia o
     # item_id no DB e o worker tentava `LocalStorage.read(item_id)` ->
-    # FileNotFoundError. Bug apontado pelo Devin Review.
+    # FileNotFoundError. Bug apontado em code review.
     try:
         async with open_partes_diarias_storage(settings) as storage:
             async with SessionLocal() as session:

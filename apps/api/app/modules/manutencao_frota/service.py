@@ -1356,7 +1356,7 @@ def reset_documentai_singleton() -> Any | None:
 # storage de partes diarias respeitando `STORAGE_BACKEND`. Sem essa
 # fatoracao, a API saving em OneDrive escrevia o item_id no DB e o worker
 # tentava `LocalStorage.read(item_id)` -> FileNotFoundError. (Apontado
-# pelo Devin Review.) Devolvemos como async context manager porque o
+# em code review.) Devolvemos como async context manager porque o
 # OneDriveStorage segura um httpx client que precisa de aclose().
 
 @contextlib.asynccontextmanager
@@ -1414,7 +1414,7 @@ def get_celery_dispatcher() -> Any:
 
     Cada `Celery(...)` aloca pool de conexoes (Redis/AMQP) interno. Como
     `enqueue_ocr_parte_diaria` e chamado em todo upload + reprocessar,
-    instanciar por chamada vaza conexoes (apontado pelo Devin Review).
+    instanciar por chamada vaza conexoes (apontado em code review).
     Mantemos um singleton por processo da API, mesmo padrao do Infosimples
     /Dominio/OneDrive (so que esses sao httpx clients, nao Celery).
     """

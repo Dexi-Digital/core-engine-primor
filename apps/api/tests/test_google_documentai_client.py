@@ -135,7 +135,7 @@ async def test_mock_creds_json_invalido_cai_em_mock():
     # para que `is_mock` devolva True. Sem isso, `processar_documento`
     # levantaria DocumentAIAuthError em produção dando a impressão de
     # que o cliente esta em modo real (o log diz "caindo em modo mock"
-    # mas o `is_mock` continuaria False -- bug pego pelo Devin Review).
+    # mas o `is_mock` continuaria False -- bug identificado em code review).
     assert c.is_mock is True
     out = await c.processar_documento(
         content=b"x", mime_type="application/pdf", filename="x.pdf"
@@ -325,7 +325,7 @@ async def test_real_client_oauth_falha_levanta_auth():
 
 @pytest.mark.asyncio
 async def test_real_client_token_refresh_serializa_concorrente():
-    """Bug do Devin Review: 2 OCRs concorrentes batendo o token expirado
+    """Bug identificado em review: 2 OCRs concorrentes batendo o token expirado
     faziam 2 POSTs em /token paralelos (gastando rate-limit Google).
 
     Com o `asyncio.Lock` em `_get_access_token`, mesmo N coroutines
