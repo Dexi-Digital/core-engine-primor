@@ -308,6 +308,56 @@ nenhum tráfego de rede sai da máquina).
 
 ---
 
+## OnSafety — SST: ASOs, EPIs, treinamentos (Módulo A, em implementação)
+
+**Adapter:** `app/integrations/onsafety/client.py` (`OnsafetyClient` com
+modo mock determinístico embutido — padrão Infosimples).
+**Branch:** `feat/integracao-onsafety` — ver
+`docs/adr/adr-001-onsafety-squads.md` para a divisão de squads.
+
+API REST/JSON estilo Spring Data, auth por API key no header `token`.
+Swagger: <https://api.dev.onsafety.com.br/swagger-ui/>.
+
+| Ambiente     | Base URL                        |
+|--------------|---------------------------------|
+| Homologação  | `https://api.dev.onsafety.com.br` (default) |
+| Produção     | `https://api.onsafety.com.br`   |
+
+**Tokens não são intercambiáveis entre ambientes** — token de produção
+contra `api.dev.*` devolve 401 ("Usuário ou senha incorretos"), o que
+confunde o diagnóstico. O `OnsafetyAuthError` do adapter menciona isso.
+
+Endpoints usados:
+
+| Método | Path                                           | Caso de uso        |
+|--------|------------------------------------------------|--------------------|
+| GET    | `/v2/trabalhadores`                            | pull cadastro      |
+| GET    | `/v2/exames_ocupacionais`                      | pull ASO (A.2)     |
+| GET    | `/v2/controles_epi`                            | pull ficha de EPI  |
+| GET    | `/v2/treinamentos_realizados_trabalhadores`    | pull treinamentos  |
+| POST   | `/v2/trabalhadores/create_or_update`           | push onboarding    |
+
+Particularidades confirmadas em chamadas reais (2026-07-12):
+
+- Listagens são páginas Spring Data (`?page=&size=`, resposta
+  `{content, totalElements}`).
+- Parâmetro `fields` (projeção de colunas) é **obrigatório** — 409 sem
+  ele. Usamos projeções mínimas por recurso (minimização LGPD).
+- `/v2/*/contar` está quebrado no backend deles (erro Querydsl) —
+  contagens via `totalElements` de uma página `size=1`.
+- `codigoExterno` no trabalhador carrega o nosso employee id
+  (reconciliação/idempotência do onboarding).
+
+**LGPD:** ASO é dado de saúde. Todo pull deve gravar log de auditoria
+(padrão `dp_dossie_consultas`) no service que consome o adapter.
+
+Env vars:
+
+| Variável            | Obrigatória | Descrição                                    |
+|---------------------|-------------|----------------------------------------------|
+| `ONSAFETY_TOKEN`    | opcional    | Sem token, adapter opera em mock determinístico. |
+| `ONSAFETY_BASE_URL` | não         | Default: homologação (`api.dev.onsafety.com.br`). |
+
 ## Infosimples — Consultas Detran (Módulo B.3)
 
 **Adapter:** `apps/api/app/integrations/infosimples/client.py`
