@@ -58,7 +58,11 @@ async def _run_sync_onboarding(cpf: str) -> dict[str, object]:
         )
         try:
             run = await sync_employee_onsafety(
-                db, client, employee, actor=SYSTEM_WORKER
+                db,
+                client,
+                employee,
+                actor=SYSTEM_WORKER,
+                projeto_id=settings.onsafety_projeto_id,
             )
         finally:
             await client.aclose()

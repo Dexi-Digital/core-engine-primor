@@ -66,15 +66,22 @@ async def sync_employee_onsafety(
     *,
     actor: str = _AUDIT_ACTOR_SYSTEM,
     is_editing: bool = False,
+    projeto_id: str | None = None,
 ) -> OnboardingSyncRun:
     """Push de um funcionario para a OnSafety. Sempre devolve uma row
-    (ok ou erro); nunca levanta erro de upstream."""
+    (ok ou erro); nunca levanta erro de upstream.
+
+    `projeto_id` (ONSAFETY_PROJETO_ID) vincula o trabalhador a um
+    estabelecimento OnSafety -- sem ele o push real e recusado (403 de
+    negocio) e vira row erro, visivel na UI.
+    """
     correlation_id = f"{SISTEMA_ONSAFETY}-emp-{employee.id}"
     try:
         result = await client.create_or_update_trabalhador(
             nome=employee.nome_completo,
             cpf=employee.cpf,
             codigo_externo=str(employee.id),
+            projeto_id=projeto_id,
             matricula=employee.matricula,
             email=employee.email,
             data_admissao=employee.data_admissao.isoformat()

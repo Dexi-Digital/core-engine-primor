@@ -264,7 +264,11 @@ async def sync_onsafety_endpoint(
         raise HTTPException(404, f"Funcionario {employee_id} nao encontrado")
     try:
         run = await onboarding_svc.sync_employee_onsafety(
-            db, client, employee, actor=current_user.email
+            db,
+            client,
+            employee,
+            actor=current_user.email,
+            projeto_id=get_settings().onsafety_projeto_id,
         )
     finally:
         await client.aclose()

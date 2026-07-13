@@ -337,16 +337,34 @@ Endpoints usados:
 | GET    | `/v2/treinamentos_realizados_trabalhadores`    | pull treinamentos  |
 | POST   | `/v2/trabalhadores/create_or_update`           | push onboarding    |
 
-Particularidades confirmadas em chamadas reais (2026-07-12):
+Particularidades confirmadas em chamadas reais (2026-07-12) e no smoke
+de homologação (2026-07-13):
 
 - Listagens são páginas Spring Data (`?page=&size=`, resposta
   `{content, totalElements}`).
 - Parâmetro `fields` (projeção de colunas) é **obrigatório** — 409 sem
-  ele. Usamos projeções mínimas por recurso (minimização LGPD).
+  ele. Usamos projeções mínimas por recurso (minimização LGPD). Sintaxe
+  aninhada (`trabalhador.cpf`) **validada em homolog**.
 - `/v2/*/contar` está quebrado no backend deles (erro Querydsl) —
   contagens via `totalElements` de uma página `size=1`.
 - `codigoExterno` no trabalhador carrega o nosso employee id
-  (reconciliação/idempotência do onboarding).
+  (reconciliação do onboarding).
+- **CPF é armazenado formatado** (`529.982.247-25`) e filtros comparam a
+  string exata — filtrar pelos 11 dígitos devolve vazio. O adapter
+  normaliza na saída e formata nos filtros (`find_trabalhador_by_cpf`).
+- **Push exige projeto/estabelecimento vinculado** (403 "Estabelecimento
+  não especificado" sem ele) → `ONSAFETY_PROJETO_ID`.
+- **`create_or_update` com `isEditing=false` é upsert completo por CPF**
+  (cria e atualiza; N pushes = 1 registro — idempotência confirmada).
+  `isEditing=true` exige `id`+`versao` (lock otimista) e responde 409
+  sem eles; não é usado no fluxo padrão.
+- **Escrita bem-sucedida responde 200 com corpo vazio** — o id sai de um
+  lookup por CPF na sequência.
+- **DELETE é soft-delete** (`excluidoEm` + `ativo=false`) e a listagem
+  padrão deles **inclui** excluídos — os `list_*` do adapter defaultam
+  `ativo=True` para o pull não ingerir registros deletados.
+- 401 = auth (token inválido/ambiente errado); **403 = validação de
+  negócio**, não auth.
 
 **LGPD:** ASO é dado de saúde. Todo pull deve gravar log de auditoria
 (padrão `dp_dossie_consultas`) no service que consome o adapter.
@@ -358,6 +376,7 @@ Env vars:
 | `ONSAFETY_TOKEN`            | opcional    | Sem token, adapter opera em mock determinístico. |
 | `ONSAFETY_BASE_URL`         | não         | Default: homologação (`api.dev.onsafety.com.br`). |
 | `ONSAFETY_ALLOW_PROD_WRITE` | não         | Default: `false`. **Guard-rail**: `create_or_update` contra `api.onsafety.com.br` levanta `OnsafetyProdWriteBlockedError` sem este opt-in (o token disponível hoje é o de produção — ADR-001). Leitura não é afetada. |
+| `ONSAFETY_PROJETO_ID`       | p/ push     | Estabelecimento/projeto OnSafety ao qual o push vincula o trabalhador. Sem ele a API deles recusa com 403. Em homolog: obra de teste "OBRA TESTE MOTOR CENTRAL". |
 
 **Push de onboarding (etapa 3):** `POST /api/v1/dp-sesmt/employees/{id}/sync-onsafety`
 envia o funcionário via `create_or_update` (`codigoExterno` = employee id;

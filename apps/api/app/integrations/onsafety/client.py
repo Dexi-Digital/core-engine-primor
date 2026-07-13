@@ -25,6 +25,17 @@ Particularidades da API (confirmadas em chamadas reais):
 - Homologacao: `api.dev.onsafety.com.br`; producao: `api.onsafety.com.br`
   (tokens NAO sao intercambiaveis entre ambientes). O default aqui e
   homologacao -- producao exige `ONSAFETY_BASE_URL` explicito.
+- CPF e armazenado FORMATADO ("529.982.247-25") e filtros comparam a
+  string exata -- filtrar pelos 11 digitos devolve vazio. Pull
+  normaliza na saida; filtros server-side usam `format_cpf`.
+- Escrita bem-sucedida responde 200 com corpo VAZIO; o id do registro
+  sai de um lookup por CPF na sequencia.
+- 401 = auth (token invalido/ambiente errado); 403 = validacao de
+  negocio (ex.: push sem projeto vinculado). Smoke em homolog 2026-07-13.
+- DELETE e SOFT-delete (`excluidoEm` + `ativo=false`) e a listagem
+  padrao deles INCLUI excluidos. Por isso os metodos `list_*` daqui
+  defaultam `ativo=True` -- sem filtro o pull ingeriria registros
+  deletados. `ativo=None` traz tudo (auditoria/debug).
 
 Padrao do projeto: sem token (`ONSAFETY_TOKEN` vazio), o adapter cai
 num mock deterministico para nao bloquear dev/CI -- mesmo padrao de
@@ -43,11 +54,11 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import re
 from typing import Any
 
 import httpx
 
+from app.core.cpf import format_cpf, normalize_cpf
 from app.integrations.base import IntegrationClient
 
 logger = logging.getLogger(__name__)
@@ -74,14 +85,6 @@ FIELDS_TREINAMENTOS = (
     "trabalhador.id,trabalhador.nome,trabalhador.cpf,"
     "treinamentoRealizado.id,treinamentoRealizado.descricao"
 )
-
-_NON_DIGIT = re.compile(r"\D")
-
-
-def normalize_cpf(cpf: str) -> str:
-    """Remove pontuacao e devolve so os 11 digitos ("529.982.247-25" -> "52998224725")."""
-    return _NON_DIGIT.sub("", cpf or "")
-
 
 def _mock_cpf(digest: str) -> str:
     """CPF deterministico com digitos verificadores VALIDOS.
@@ -175,14 +178,19 @@ class OnsafetyClient(IntegrationClient):
         page: int = 0,
         size: int = 100,
         nome: str | None = None,
-        ativo: bool | None = None,
+        ativo: bool | None = True,
     ) -> dict[str, Any]:
         """Lista trabalhadores cadastrados na OnSafety.
+
+        `ativo=True` por default: o DELETE deles e soft-delete e a
+        listagem padrao INCLUI excluidos. `ativo=None` traz tudo.
 
         Item: {id, nome, cpf, matricula, data_admissao, codigo_externo, ativo}
         """
         if self.is_mock:
-            return self._mock_page("trabalhadores", page, size, nome=nome)
+            return self._mock_page(
+                "trabalhadores", page, size, nome=nome, ativo=ativo
+            )
         params: dict[str, Any] = {}
         if nome:
             params["nome"] = nome
@@ -197,13 +205,53 @@ class OnsafetyClient(IntegrationClient):
         )
         return self._envelope(raw, page, size, self._normalize_trabalhador)
 
-    async def count_trabalhadores(self) -> int:
-        """Total de trabalhadores. Via `totalElements` (o `/contar` da
-        OnSafety esta quebrado -- erro Querydsl no backend deles)."""
+    async def find_trabalhador_by_cpf(self, cpf: str) -> dict[str, Any] | None:
+        """Localiza um trabalhador pelo CPF (None se nao existir).
+
+        A OnSafety armazena o CPF FORMATADO ("529.982.247-25") e o
+        filtro compara a string exata -- confirmado no smoke em homolog
+        (2026-07-13): filtrar pelos 11 digitos devolve vazio. Este
+        metodo aceita qualquer formato e converte para o pontuado.
+        """
+        cpf_norm = normalize_cpf(cpf)
+        if len(cpf_norm) != 11:
+            raise ValueError(f"cpf invalido: {cpf!r} (esperado 11 digitos)")
         if self.is_mock:
-            return self._mock_total("trabalhadores")
+            digest = hashlib.sha1(cpf_norm.encode()).hexdigest()
+            return {
+                "id": f"mock-{digest[:24]}",
+                "nome": None,
+                "cpf": cpf_norm,
+                "matricula": None,
+                "data_admissao": None,
+                "codigo_externo": None,
+                "ativo": True,
+            }
         raw = await self._get_page(
-            "/v2/trabalhadores", fields="id", page=0, size=1
+            "/v2/trabalhadores",
+            fields=FIELDS_TRABALHADORES,
+            page=0,
+            size=1,
+            cpf=format_cpf(cpf_norm),
+        )
+        content = raw.get("content") or []
+        if not content:
+            return None
+        return self._normalize_trabalhador(content[0])
+
+    async def count_trabalhadores(self, *, ativo: bool | None = True) -> int:
+        """Total de trabalhadores. Via `totalElements` (o `/contar` da
+        OnSafety esta quebrado -- erro Querydsl no backend deles).
+        Default conta so ativos (soft-delete, ver docstring do modulo)."""
+        if self.is_mock:
+            return self._mock_page("trabalhadores", 0, 1, ativo=ativo)[
+                "total"
+            ]
+        params: dict[str, Any] = {}
+        if ativo is not None:
+            params["ativo"] = ativo
+        raw = await self._get_page(
+            "/v2/trabalhadores", fields="id", page=0, size=1, **params
         )
         return int(raw.get("totalElements") or 0)
 
@@ -212,16 +260,18 @@ class OnsafetyClient(IntegrationClient):
         *,
         page: int = 0,
         size: int = 100,
-        ativo: bool | None = None,
+        ativo: bool | None = True,
     ) -> dict[str, Any]:
         """Lista exames ocupacionais (ASOs). Dado de saude -- todo pull
         deve gerar log de auditoria no caller (padrao dp_dossie_consultas).
+
+        `ativo=True` por default (soft-delete, ver docstring do modulo).
 
         Item: {id, tipo_exame, data_aso, data_vencimento_aso,
                resultado_aso, situacao, ativo, trabalhador: {id, nome, cpf}}
         """
         if self.is_mock:
-            return self._mock_page("exames", page, size)
+            return self._mock_page("exames", page, size, ativo=ativo)
         params: dict[str, Any] = {}
         if ativo is not None:
             params["ativo"] = ativo
@@ -241,16 +291,18 @@ class OnsafetyClient(IntegrationClient):
         size: int = 100,
         data_de: str | None = None,
         data_ate: str | None = None,
-        ativo: bool | None = None,
+        ativo: bool | None = True,
     ) -> dict[str, Any]:
         """Lista entregas de EPI (ficha de EPI).
+
+        `ativo=True` por default (soft-delete, ver docstring do modulo).
 
         Item: {id, data_entrega, nome_equipamento, ca, quantidade,
                validade, previsao_devolucao, data_devolucao,
                status_entrega, ativo, trabalhador: {id, nome, cpf}}
         """
         if self.is_mock:
-            return self._mock_page("controles_epi", page, size)
+            return self._mock_page("controles_epi", page, size, ativo=ativo)
         params: dict[str, Any] = {}
         if data_de:
             params["dataDe"] = data_de
@@ -272,15 +324,17 @@ class OnsafetyClient(IntegrationClient):
         *,
         page: int = 0,
         size: int = 100,
-        ativo: bool | None = None,
+        ativo: bool | None = True,
     ) -> dict[str, Any]:
         """Lista participacoes de trabalhadores em treinamentos (NRs).
+
+        `ativo=True` por default (soft-delete, ver docstring do modulo).
 
         Item: {id, descricao, aprovado, renovado, certificado_id, ativo,
                trabalhador: {id, nome, cpf}}
         """
         if self.is_mock:
-            return self._mock_page("treinamentos", page, size)
+            return self._mock_page("treinamentos", page, size, ativo=ativo)
         params: dict[str, Any] = {}
         if ativo is not None:
             params["ativo"] = ativo
@@ -301,6 +355,7 @@ class OnsafetyClient(IntegrationClient):
         nome: str,
         cpf: str,
         codigo_externo: str,
+        projeto_id: str | None = None,
         matricula: str | None = None,
         email: str | None = None,
         data_admissao: str | None = None,
@@ -312,6 +367,21 @@ class OnsafetyClient(IntegrationClient):
         `codigo_externo` carrega o nosso employee id -- e a chave de
         reconciliacao entre Motor Central e OnSafety (idempotencia do
         `sync_onboarding`). Datas em ISO `YYYY-MM-DD`.
+
+        `projeto_id` vincula o trabalhador a um estabelecimento/projeto
+        OnSafety (entidade `Projeto`; a UI deles chama "estabelecimento").
+        Sem ele a OnSafety recusa o push com 403 "Estabelecimento não
+        especificado" (confirmado no smoke em homolog, 2026-07-13) --
+        vem de ONSAFETY_PROJETO_ID ate existir mapeamento obra->projeto.
+
+        Semantica confirmada em homolog (2026-07-13):
+        - `isEditing=false` e upsert COMPLETO por CPF: cria se nao
+          existe e atualiza campos de registro existente (mesmo id,
+          `versao` incrementada). E o fluxo padrao -- N pushes = 1 registro.
+        - `isEditing=true` exige `id` + `versao` (lock otimista) no body
+          e responde 409 sem eles. Nao e usado no fluxo padrao; o
+          parametro `is_editing` existe para um futuro fluxo de edicao
+          concorrencia-segura.
         """
         cpf_norm = normalize_cpf(cpf)
         if len(cpf_norm) != 11:
@@ -346,6 +416,8 @@ class OnsafetyClient(IntegrationClient):
             "ativo": True,
             "validateCpf": True,
         }
+        if projeto_id:
+            body["projeto"] = {"id": projeto_id}
         if matricula:
             body["matricula"] = matricula
         if email:
@@ -367,9 +439,19 @@ class OnsafetyClient(IntegrationClient):
                 f"transporte OnSafety (create_or_update): {exc}"
             ) from exc
         self._raise_for_status(r, "create_or_update")
-        data = self._json_or_raise(r, "create_or_update")
+        # Sucesso vem com HTTP 200 e corpo VAZIO (confirmado no smoke em
+        # homolog, 2026-07-13) -- o id sai de um lookup por CPF na
+        # sequencia. Se a API algum dia devolver o objeto, aproveitamos.
+        external_id: str | None = None
+        if r.content:
+            data = self._json_or_raise(r, "create_or_update")
+            if isinstance(data, dict):
+                external_id = data.get("id")
+        if external_id is None:
+            found = await self.find_trabalhador_by_cpf(cpf_norm)
+            external_id = found["id"] if found else None
         return {
-            "id": data.get("id") if isinstance(data, dict) else None,
+            "id": external_id,
             "nome": nome,
             "cpf": cpf_norm,
             "codigo_externo": codigo_externo,
@@ -406,15 +488,19 @@ class OnsafetyClient(IntegrationClient):
         return data
 
     def _raise_for_status(self, r: httpx.Response, endpoint: str) -> None:
-        if r.status_code in (401, 403):
+        if r.status_code == 401:
             # A OnSafety devolve 401 tambem para token do OUTRO ambiente
             # (prod x dev) -- a mensagem ajuda a diagnosticar isso.
             raise OnsafetyAuthError(
-                f"OnSafety {endpoint} status {r.status_code}: token "
-                f"invalido ou de outro ambiente (dev x prod). "
+                f"OnSafety {endpoint} status 401: token invalido ou de "
+                f"outro ambiente (dev x prod). "
                 f"Base URL atual: {self._client.base_url}"
             )
         if r.status_code >= 300:
+            # 403 NAO e auth aqui: a OnSafety usa 403 para validacao de
+            # negocio (ex.: "Estabelecimento não especificado" num push
+            # sem projeto vinculado -- visto no smoke de 2026-07-13).
+            # Auth de fato e sempre 401.
             raise OnsafetyError(
                 f"OnSafety {endpoint} status {r.status_code}: {r.text[:200]}"
             )
@@ -542,15 +628,16 @@ class OnsafetyClient(IntegrationClient):
         size: int,
         *,
         nome: str | None = None,
+        ativo: bool | None = None,
     ) -> dict[str, Any]:
         # Dataset deterministico: o item de indice global `i` e sempre
         # identico entre chamadas/paginas -- mesma semantica do mock do
-        # Infosimples (testes reprodutiveis sem rede).
-        total = self._mock_total(recurso)
-        start = page * size
+        # Infosimples (testes reprodutiveis sem rede). Filtros sao
+        # aplicados ANTES da paginacao e `total` reflete o filtrado --
+        # mesma semantica do Spring no lado real.
         items = [
             self._mock_item(recurso, i)
-            for i in range(start, min(start + size, total))
+            for i in range(self._mock_total(recurso))
         ]
         if nome:
             items = [
@@ -558,8 +645,12 @@ class OnsafetyClient(IntegrationClient):
                 for it in items
                 if nome.upper() in (it.get("nome") or "").upper()
             ]
+        if ativo is not None:
+            items = [it for it in items if it.get("ativo") is ativo]
+        total = len(items)
+        start = page * size
         return {
-            "items": items,
+            "items": items[start : start + size],
             "total": total,
             "page": page,
             "size": size,
