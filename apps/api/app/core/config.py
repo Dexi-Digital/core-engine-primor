@@ -142,6 +142,11 @@ class Settings(BaseSettings):
     # a base_url para https://api.onsafety.com.br explicitamente.
     onsafety_token: str | None = Field(default=None)
     onsafety_base_url: str = Field(default="https://api.dev.onsafety.com.br")
+    # Guard-rail: escrita (create_or_update) contra api.onsafety.com.br
+    # (PRODUCAO) so com opt-in explicito. O unico token disponivel hoje
+    # e o de prod (ADR-001) -- este flag impede que um dev com o token
+    # no .env crie trabalhadores reais sem querer. Leitura nao e afetada.
+    onsafety_allow_prod_write: bool = Field(default=False)
 
 
 @lru_cache

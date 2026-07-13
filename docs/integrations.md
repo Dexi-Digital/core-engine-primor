@@ -353,10 +353,18 @@ Particularidades confirmadas em chamadas reais (2026-07-12):
 
 Env vars:
 
-| Variável            | Obrigatória | Descrição                                    |
-|---------------------|-------------|----------------------------------------------|
-| `ONSAFETY_TOKEN`    | opcional    | Sem token, adapter opera em mock determinístico. |
-| `ONSAFETY_BASE_URL` | não         | Default: homologação (`api.dev.onsafety.com.br`). |
+| Variável                    | Obrigatória | Descrição                                    |
+|-----------------------------|-------------|----------------------------------------------|
+| `ONSAFETY_TOKEN`            | opcional    | Sem token, adapter opera em mock determinístico. |
+| `ONSAFETY_BASE_URL`         | não         | Default: homologação (`api.dev.onsafety.com.br`). |
+| `ONSAFETY_ALLOW_PROD_WRITE` | não         | Default: `false`. **Guard-rail**: `create_or_update` contra `api.onsafety.com.br` levanta `OnsafetyProdWriteBlockedError` sem este opt-in (o token disponível hoje é o de produção — ADR-001). Leitura não é afetada. |
+
+**Push de onboarding (etapa 3):** `POST /api/v1/dp-sesmt/employees/{id}/sync-onsafety`
+envia o funcionário via `create_or_update` (`codigoExterno` = employee id;
+upsert na OnSafety → idempotente). Cada tentativa vira uma row append-only
+em `dp_onboarding_syncs` (ok/erro) + audit log; a task Celery
+`worker.tasks.dp_sesmt.sync_onboarding` faz o mesmo por CPF. Erros de
+upstream (inclusive o guard de prod) viram row `status="erro"` — nunca 500.
 
 ## Infosimples — Consultas Detran (Módulo B.3)
 

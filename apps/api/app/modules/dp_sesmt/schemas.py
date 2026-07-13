@@ -360,3 +360,19 @@ class AfastamentoAlertaSummary(BaseModel):
     skipped: int
     failed: int
     results: list[dict] = Field(default_factory=list)
+
+
+class OnboardingSyncRead(BaseModel):
+    """Row de `dp_onboarding_syncs` (push de onboarding, etapa 3)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    employee_id: int
+    sistema: str
+    correlation_id: str
+    status: str
+    external_id: str | None = None
+    source: str | None = None
+    error_msg: str | None = None
+    executed_at: datetime | None = None

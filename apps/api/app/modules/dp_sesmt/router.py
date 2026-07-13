@@ -21,6 +21,7 @@ from app.integrations.brasilapi.client import (
     BrasilAPINotFoundError,
 )
 from app.integrations.directdata.client import DirectDataClient, DirectDataError
+from app.integrations.onsafety.client import OnsafetyClient
 from app.integrations.viacep.client import (
     ViaCEPClient,
     ViaCEPError,
@@ -29,6 +30,7 @@ from app.integrations.viacep.client import (
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.dp_sesmt import afastamentos as afastamentos_svc
+from app.modules.dp_sesmt import onboarding as onboarding_svc
 from app.modules.dp_sesmt import service
 from app.modules.dp_sesmt.afastamentos import (
     compute_dcb_status,
@@ -47,6 +49,7 @@ from app.modules.dp_sesmt.schemas import (
     EmployeeRead,
     EmployeeUpdate,
     ModuleStatus,
+    OnboardingSyncRead,
 )
 
 logger = logging.getLogger(__name__)
@@ -220,6 +223,65 @@ async def delete_employee_endpoint(
     )
     if not deleted:
         raise HTTPException(404, f"Funcionario {employee_id} nao encontrado")
+
+
+# --- Onboarding sync OnSafety (etapa 3, ADR-001) ----------------------------
+
+
+def get_onsafety_dep() -> OnsafetyClient:
+    """Dependency override-friendly (padrao get_infosimples_dep).
+
+    Sem ONSAFETY_TOKEN o client opera em mock deterministico. O guard
+    de escrita em prod vem de ONSAFETY_ALLOW_PROD_WRITE (default off).
+    """
+    settings = get_settings()
+    return OnsafetyClient(
+        api_token=settings.onsafety_token,
+        base_url=settings.onsafety_base_url,
+        allow_prod_write=settings.onsafety_allow_prod_write,
+    )
+
+
+@router.post(
+    "/employees/{employee_id}/sync-onsafety",
+    response_model=OnboardingSyncRead,
+    status_code=201,
+)
+async def sync_onsafety_endpoint(
+    employee_id: int,
+    db: AsyncSession = Depends(get_db),
+    client: OnsafetyClient = Depends(get_onsafety_dep),
+    current_user: User = Depends(get_current_user),
+) -> OnboardingSyncRead:
+    """Push do funcionario para a OnSafety.
+
+    Devolve 201 mesmo em erro de upstream (row `status="erro"`, padrao
+    B.3) -- a UI mostra o erro inline e permite retry. 404 so para
+    funcionario inexistente.
+    """
+    employee = await service.get_employee(db, employee_id)
+    if employee is None:
+        raise HTTPException(404, f"Funcionario {employee_id} nao encontrado")
+    try:
+        run = await onboarding_svc.sync_employee_onsafety(
+            db, client, employee, actor=current_user.email
+        )
+    finally:
+        await client.aclose()
+    return OnboardingSyncRead.model_validate(run)
+
+
+@router.get(
+    "/employees/{employee_id}/sync-onsafety",
+    response_model=list[OnboardingSyncRead],
+)
+async def list_sync_onsafety_endpoint(
+    employee_id: int, db: AsyncSession = Depends(get_db)
+) -> list[OnboardingSyncRead]:
+    if await service.get_employee(db, employee_id) is None:
+        raise HTTPException(404, f"Funcionario {employee_id} nao encontrado")
+    runs = await onboarding_svc.list_onboarding_runs(db, employee_id)
+    return [OnboardingSyncRead.model_validate(r) for r in runs]
 
 
 # --- Dossie de admissao -----------------------------------------------------

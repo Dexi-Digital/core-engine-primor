@@ -10,6 +10,7 @@ from app.integrations.onsafety.client import (
     OnsafetyAuthError,
     OnsafetyClient,
     OnsafetyError,
+    OnsafetyProdWriteBlockedError,
     normalize_cpf,
 )
 
@@ -302,6 +303,59 @@ async def test_real_create_or_update_monta_body_camel_case():
     assert body["codigoExterno"] == "emp-1"
     assert body["dataAdmissao"] == "2026-07-01T00:00:00"
     assert "dataNascimento" not in body
+
+
+# --- guard de escrita em producao -------------------------------------------
+
+
+def _prod_client(handler=None, **kwargs):
+    transport = MockTransport(
+        handler or (lambda req: Response(200, json={"id": "u-1"}))
+    )
+    http = AsyncClient(
+        transport=transport, base_url="https://api.onsafety.com.br"
+    )
+    return OnsafetyClient(api_token="t-prod", client=http, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_escrita_em_prod_bloqueada_por_default():
+    c = _prod_client()
+    with pytest.raises(OnsafetyProdWriteBlockedError) as exc:
+        await c.create_or_update_trabalhador(
+            nome="X", cpf="52998224725", codigo_externo="emp-1"
+        )
+    assert "ONSAFETY_ALLOW_PROD_WRITE" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_escrita_em_prod_liberada_com_opt_in():
+    c = _prod_client(allow_prod_write=True)
+    r = await c.create_or_update_trabalhador(
+        nome="X", cpf="52998224725", codigo_externo="emp-1"
+    )
+    assert r["id"] == "u-1"
+
+
+@pytest.mark.asyncio
+async def test_leitura_em_prod_nao_e_bloqueada():
+    def handler(request: Request) -> Response:
+        return _spring_page([], 5306)
+
+    c = _prod_client(handler)
+    assert (await c.list_trabalhadores())["total"] == 5306
+
+
+@pytest.mark.asyncio
+async def test_escrita_em_homolog_nao_e_bloqueada():
+    def handler(request: Request) -> Response:
+        return Response(200, json={"id": "u-dev"})
+
+    c = _real_client(handler)  # base_url api.dev.*
+    r = await c.create_or_update_trabalhador(
+        nome="X", cpf="52998224725", codigo_externo="emp-1"
+    )
+    assert r["id"] == "u-dev"
 
 
 @pytest.mark.asyncio

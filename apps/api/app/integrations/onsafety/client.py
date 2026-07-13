@@ -53,6 +53,7 @@ from app.integrations.base import IntegrationClient
 logger = logging.getLogger(__name__)
 
 ONSAFETY_BASE_URL = "https://api.dev.onsafety.com.br"
+ONSAFETY_PROD_HOST = "api.onsafety.com.br"
 
 # Projecoes `fields` por recurso. Minimas por LGPD; campos aninhados
 # (`trabalhador.cpf`) seguem a sintaxe de projection do Spring, a
@@ -117,6 +118,17 @@ class OnsafetyAuthError(OnsafetyError):
     """
 
 
+class OnsafetyProdWriteBlockedError(OnsafetyError):
+    """Escrita contra PRODUCAO bloqueada por guard-rail.
+
+    O unico token que a Primor tem hoje e o de producao (ADR-001);
+    qualquer `create_or_update` contra `api.onsafety.com.br` criaria/
+    alteraria trabalhadores REAIS. Escrita em prod exige opt-in duplo:
+    `allow_prod_write=True` no construtor (vem de
+    `ONSAFETY_ALLOW_PROD_WRITE=true` no env) -- leitura nao e afetada.
+    """
+
+
 class OnsafetyClient(IntegrationClient):
     name = "onsafety"
 
@@ -127,16 +139,22 @@ class OnsafetyClient(IntegrationClient):
         base_url: str = ONSAFETY_BASE_URL,
         client: httpx.AsyncClient | None = None,
         timeout: float = 30.0,
+        allow_prod_write: bool = False,
     ) -> None:
         self._api_token = api_token or ""
         self._own_client = client is None
         self._client = client or httpx.AsyncClient(
             base_url=base_url, timeout=timeout
         )
+        self._allow_prod_write = allow_prod_write
 
     @property
     def is_mock(self) -> bool:
         return not self._api_token
+
+    @property
+    def is_prod(self) -> bool:
+        return self._client.base_url.host == ONSAFETY_PROD_HOST
 
     async def health_check(self) -> bool:
         if self.is_mock:
@@ -312,6 +330,14 @@ class OnsafetyClient(IntegrationClient):
                 "codigo_externo": codigo_externo,
                 "source": "onsafety_mock",
             }
+
+        if self.is_prod and not self._allow_prod_write:
+            raise OnsafetyProdWriteBlockedError(
+                "escrita contra PRODUCAO OnSafety bloqueada "
+                f"(base_url={self._client.base_url}). Use o ambiente de "
+                "homologacao, ou -- se a escrita em prod for intencional "
+                "-- setar ONSAFETY_ALLOW_PROD_WRITE=true."
+            )
 
         body: dict[str, Any] = {
             "nome": nome,
