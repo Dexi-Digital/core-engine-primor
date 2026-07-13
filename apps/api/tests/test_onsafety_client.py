@@ -73,6 +73,21 @@ async def test_mock_itens_estaveis_entre_paginacoes():
 
 
 @pytest.mark.asyncio
+async def test_mock_cpfs_passam_no_validador_do_repo():
+    # A Squad 2 valida CPF (dp_sesmt/cpf.py) antes do matching; CPFs
+    # mock com verificadores errados descartariam o dataset em silencio.
+    from app.modules.dp_sesmt.cpf import is_valid_cpf
+
+    c = OnsafetyClient(api_token=None)
+    trabalhadores = await c.list_trabalhadores(page=0, size=100)
+    exames = await c.list_exames_ocupacionais(page=0, size=100)
+    cpfs = [i["cpf"] for i in trabalhadores["items"]] + [
+        i["trabalhador"]["cpf"] for i in exames["items"]
+    ]
+    assert cpfs and all(is_valid_cpf(cpf) for cpf in cpfs)
+
+
+@pytest.mark.asyncio
 async def test_mock_count_bate_com_total():
     c = OnsafetyClient(api_token=None)
     assert await c.count_trabalhadores() == 12

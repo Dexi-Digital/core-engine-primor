@@ -82,6 +82,21 @@ def normalize_cpf(cpf: str) -> str:
     return _NON_DIGIT.sub("", cpf or "")
 
 
+def _mock_cpf(digest: str) -> str:
+    """CPF deterministico com digitos verificadores VALIDOS.
+
+    O matching da Squad 2 valida CPF antes de casar (is_valid_cpf em
+    dp_sesmt/cpf.py); um CPF aleatorio reprovaria ~99% das vezes e o
+    dataset mock inteiro seria descartado em silencio.
+    """
+    base = [int(d) for d in str(int(digest[:12], 16) % 10**9).zfill(9)]
+    resto = sum(d * (10 - i) for i, d in enumerate(base)) % 11
+    base.append(0 if resto < 2 else 11 - resto)
+    resto = sum(d * (11 - i) for i, d in enumerate(base)) % 11
+    base.append(0 if resto < 2 else 11 - resto)
+    return "".join(map(str, base))
+
+
 def _date10(value: Any) -> str | None:
     """Trunca date-time ISO da OnSafety ("2025-01-02T00:00:00") para "2025-01-02"."""
     if not value or not isinstance(value, str):
@@ -533,7 +548,7 @@ class OnsafetyClient(IntegrationClient):
             f"{digest[16:20]}-{digest[20:32]}"
         )
         nome = self._MOCK_NOMES[i % len(self._MOCK_NOMES)]
-        cpf = str(int(digest[:12], 16) % 10**11).zfill(11)
+        cpf = _mock_cpf(digest)
         trabalhador = {"id": uid, "nome": nome, "cpf": cpf}
         if recurso == "trabalhadores":
             return {
