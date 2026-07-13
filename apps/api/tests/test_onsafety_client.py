@@ -10,6 +10,7 @@ from app.integrations.onsafety.client import (
     OnsafetyAuthError,
     OnsafetyClient,
     OnsafetyError,
+    OnsafetyProdWriteBlockedError,
     normalize_cpf,
 )
 
@@ -51,15 +52,16 @@ async def test_mock_e_deterministico():
     assert r1 == r2
     assert r1["source"] == "onsafety_mock"
     assert len(r1["items"]) == 5
-    assert r1["total"] == 12
+    assert r1["total"] == 10  # 12 no dataset, 2 inativos (default so ativos)
 
 
 @pytest.mark.asyncio
 async def test_mock_paginacao_ultima_pagina_parcial():
     c = OnsafetyClient(api_token=None)
-    ultima = await c.list_trabalhadores(page=2, size=5)  # 12 itens: 5+5+2
+    # ativo=None -> dataset completo (12 itens: 5+5+2)
+    ultima = await c.list_trabalhadores(page=2, size=5, ativo=None)
     assert len(ultima["items"]) == 2
-    alem = await c.list_trabalhadores(page=3, size=5)
+    alem = await c.list_trabalhadores(page=3, size=5, ativo=None)
     assert alem["items"] == []
 
 
@@ -67,9 +69,35 @@ async def test_mock_paginacao_ultima_pagina_parcial():
 async def test_mock_itens_estaveis_entre_paginacoes():
     # O item de indice global N deve ser o mesmo em qualquer size.
     c = OnsafetyClient(api_token=None)
-    size3 = await c.list_trabalhadores(page=2, size=3)  # indices 6,7,8
-    size7 = await c.list_trabalhadores(page=0, size=7)  # indices 0..6
+    size3 = await c.list_trabalhadores(page=2, size=3, ativo=None)
+    size7 = await c.list_trabalhadores(page=0, size=7, ativo=None)
     assert size3["items"][0] == size7["items"][6]
+
+
+@pytest.mark.asyncio
+async def test_mock_filtro_ativo_soft_delete():
+    # OnSafety faz soft-delete e a listagem padrao deles INCLUI
+    # excluidos; nosso default ativo=True protege o pull disso.
+    c = OnsafetyClient(api_token=None)
+    default = await c.list_trabalhadores(page=0, size=100)
+    todos = await c.list_trabalhadores(page=0, size=100, ativo=None)
+    inativos = await c.list_trabalhadores(page=0, size=100, ativo=False)
+    assert default["total"] == 10
+    assert todos["total"] == 12
+    assert inativos["total"] == 2
+    assert all(it["ativo"] for it in default["items"])
+    assert await c.count_trabalhadores() == 10
+    assert await c.count_trabalhadores(ativo=None) == 12
+
+
+@pytest.mark.asyncio
+async def test_mock_filtro_nome_pre_paginacao():
+    # Filtro aplicado ANTES da paginacao: total reflete o filtrado
+    # (mesma semantica do Spring no lado real).
+    c = OnsafetyClient(api_token=None)
+    r = await c.list_trabalhadores(page=0, size=2, nome="JOSE", ativo=None)
+    assert r["total"] == 2  # JOSE aparece 2x no dataset de 12
+    assert all("JOSE" in it["nome"] for it in r["items"])
 
 
 @pytest.mark.asyncio
@@ -90,7 +118,8 @@ async def test_mock_cpfs_passam_no_validador_do_repo():
 @pytest.mark.asyncio
 async def test_mock_count_bate_com_total():
     c = OnsafetyClient(api_token=None)
-    assert await c.count_trabalhadores() == 12
+    lst = await c.list_trabalhadores(page=0, size=1)
+    assert await c.count_trabalhadores() == lst["total"]
 
 
 @pytest.mark.asyncio
@@ -255,6 +284,26 @@ async def test_real_401_levanta_auth_error_com_dica_de_ambiente():
 
 
 @pytest.mark.asyncio
+async def test_real_403_e_erro_de_negocio_nao_auth():
+    # OnSafety usa 403 para validacao de negocio (ex.: push sem projeto
+    # vinculado -> "Estabelecimento não especificado", visto no smoke em
+    # homolog). Auth de fato e sempre 401.
+    def handler(request: Request) -> Response:
+        return Response(
+            403, text="Não foi possível salvar o trabalhador X(null). "
+            "Estabelecimento não especificado (null)"
+        )
+
+    c = _real_client(handler)
+    with pytest.raises(OnsafetyError) as exc:
+        await c.create_or_update_trabalhador(
+            nome="X", cpf="52998224725", codigo_externo="emp-1"
+        )
+    assert not isinstance(exc.value, OnsafetyAuthError)
+    assert "Estabelecimento" in str(exc.value)
+
+
+@pytest.mark.asyncio
 async def test_real_409_levanta_onsafety_error():
     def handler(request: Request) -> Response:
         return Response(
@@ -290,6 +339,7 @@ async def test_real_create_or_update_monta_body_camel_case():
         nome="JOSE DA SILVA",
         cpf="529.982.247-25",
         codigo_externo="emp-1",
+        projeto_id="proj-99",
         matricula="M42",
         data_admissao="2026-07-01",
         is_editing=False,
@@ -300,8 +350,121 @@ async def test_real_create_or_update_monta_body_camel_case():
     body = captured["body"]
     assert body["cpf"] == "52998224725"
     assert body["codigoExterno"] == "emp-1"
+    assert body["projeto"] == {"id": "proj-99"}
     assert body["dataAdmissao"] == "2026-07-01T00:00:00"
     assert "dataNascimento" not in body
+
+    # sem projeto_id o campo nao vai no body (OnSafety recusa com 403
+    # de negocio -- coberto em test_real_403_e_erro_de_negocio_nao_auth)
+    await c.create_or_update_trabalhador(
+        nome="JOSE DA SILVA", cpf="52998224725", codigo_externo="emp-1"
+    )
+    assert "projeto" not in captured["body"]
+
+
+@pytest.mark.asyncio
+async def test_real_create_corpo_vazio_busca_id_por_cpf():
+    # Sucesso real vem com 200 e corpo VAZIO (smoke homolog 2026-07-13);
+    # o adapter deve buscar o id via filtro por CPF FORMATADO.
+    def handler(request: Request) -> Response:
+        if request.method == "POST":
+            return Response(200, text="")
+        assert request.url.params["cpf"] == "529.982.247-25"
+        return _spring_page(
+            [{"id": "u-real", "cpf": "529.982.247-25", "ativo": True}], 1
+        )
+
+    c = _real_client(handler)
+    r = await c.create_or_update_trabalhador(
+        nome="X", cpf="52998224725", codigo_externo="emp-1"
+    )
+    assert r["id"] == "u-real"
+
+
+@pytest.mark.asyncio
+async def test_real_find_by_cpf_formata_e_normaliza():
+    def handler(request: Request) -> Response:
+        assert request.url.params["cpf"] == "529.982.247-25"
+        return _spring_page(
+            [{"id": "u-1", "nome": "A", "cpf": "529.982.247-25"}], 1
+        )
+
+    c = _real_client(handler)
+    found = await c.find_trabalhador_by_cpf("52998224725")
+    assert found["id"] == "u-1"
+    assert found["cpf"] == "52998224725"  # normalizado na saida
+
+
+@pytest.mark.asyncio
+async def test_real_find_by_cpf_inexistente_devolve_none():
+    def handler(request: Request) -> Response:
+        return _spring_page([], 0)
+
+    c = _real_client(handler)
+    assert await c.find_trabalhador_by_cpf("529.982.247-25") is None
+
+
+@pytest.mark.asyncio
+async def test_mock_find_by_cpf_consistente_com_create():
+    c = OnsafetyClient(api_token=None)
+    created = await c.create_or_update_trabalhador(
+        nome="X", cpf="52998224725", codigo_externo="emp-1"
+    )
+    found = await c.find_trabalhador_by_cpf("529.982.247-25")
+    assert found["id"] == created["id"]
+
+
+# --- guard de escrita em producao -------------------------------------------
+
+
+def _prod_client(handler=None, **kwargs):
+    transport = MockTransport(
+        handler or (lambda req: Response(200, json={"id": "u-1"}))
+    )
+    http = AsyncClient(
+        transport=transport, base_url="https://api.onsafety.com.br"
+    )
+    return OnsafetyClient(api_token="t-prod", client=http, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_escrita_em_prod_bloqueada_por_default():
+    c = _prod_client()
+    with pytest.raises(OnsafetyProdWriteBlockedError) as exc:
+        await c.create_or_update_trabalhador(
+            nome="X", cpf="52998224725", codigo_externo="emp-1"
+        )
+    assert "ONSAFETY_ALLOW_PROD_WRITE" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_escrita_em_prod_liberada_com_opt_in():
+    c = _prod_client(allow_prod_write=True)
+    r = await c.create_or_update_trabalhador(
+        nome="X", cpf="52998224725", codigo_externo="emp-1"
+    )
+    assert r["id"] == "u-1"
+
+
+@pytest.mark.asyncio
+async def test_leitura_em_prod_nao_e_bloqueada():
+    def handler(request: Request) -> Response:
+        return _spring_page([], 5306)
+
+    c = _prod_client(handler)
+    assert (await c.list_trabalhadores())["total"] == 5306
+
+
+@pytest.mark.asyncio
+async def test_escrita_em_homolog_nao_e_bloqueada():
+    def handler(request: Request) -> Response:
+        return Response(200, json={"id": "u-dev"})
+
+    c = _real_client(handler)  # base_url api.dev.*
+    r = await c.create_or_update_trabalhador(
+        nome="X", cpf="52998224725", codigo_externo="emp-1"
+    )
+    assert r["id"] == "u-dev"
 
 
 @pytest.mark.asyncio

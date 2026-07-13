@@ -25,8 +25,54 @@ def ocr_varredura_onedrive(folder_path: str) -> dict[str, object]:
 
 @celery_app.task(name="worker.tasks.dp_sesmt.sync_onboarding")
 def sync_onboarding(cpf: str) -> dict[str, object]:
-    # TODO: disparar Dominio/Onvio/Tangerino/OnSafety em paralelo.
-    return {"stub": True, "cpf": cpf}
+    """Push do onboarding para a OnSafety (etapa 3, ADR-001).
+
+    Dominio/Onvio/Tangerino continuam TODO (aguardando credenciais) --
+    entram aqui como novos `sistema` em `dp_onboarding_syncs`. O guard
+    de escrita em producao vive no adapter (ONSAFETY_ALLOW_PROD_WRITE);
+    bloqueio vira row `status="erro"`, sem stacktrace.
+    """
+    return asyncio.run(_run_sync_onboarding(cpf))
+
+
+async def _run_sync_onboarding(cpf: str) -> dict[str, object]:
+    try:
+        from app.audit.actors import SYSTEM_WORKER
+        from app.core.config import get_settings
+        from app.core.db import SessionLocal
+        from app.integrations.onsafety.client import OnsafetyClient
+        from app.modules.dp_sesmt import service
+        from app.modules.dp_sesmt.onboarding import sync_employee_onsafety
+    except ImportError as exc:  # pragma: no cover
+        return {"error": f"API package not available in worker: {exc}"}
+
+    settings = get_settings()
+    async with SessionLocal() as db:
+        employee = await service.get_employee_by_cpf(db, cpf)
+        if employee is None:
+            return {"error": f"employee com cpf {cpf!r} nao encontrado"}
+        client = OnsafetyClient(
+            api_token=settings.onsafety_token,
+            base_url=settings.onsafety_base_url,
+            allow_prod_write=settings.onsafety_allow_prod_write,
+        )
+        try:
+            run = await sync_employee_onsafety(
+                db,
+                client,
+                employee,
+                actor=SYSTEM_WORKER,
+                projeto_id=settings.onsafety_projeto_id,
+            )
+        finally:
+            await client.aclose()
+    return {
+        "employee_id": run.employee_id,
+        "sistema": run.sistema,
+        "status": run.status,
+        "external_id": run.external_id,
+        "error": run.error_msg,
+    }
 
 
 @celery_app.task(name="worker.tasks.dp_sesmt.dispatch_aso_alerts")

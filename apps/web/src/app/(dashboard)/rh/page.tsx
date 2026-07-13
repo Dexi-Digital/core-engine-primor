@@ -87,7 +87,7 @@ export default async function RHPage() {
         scope={[
           "Cadastro de funcionarios (manual + dossie via APIs publicas).",
           "Dossie de admissao (CEP via ViaCEP, CNPJ via BrasilAPI, CPF via DirectData).",
-          "Onboarding sync com Dominio/Onvio/Tangerino/OnSafety (aguardando credenciais).",
+          "Onboarding sync: push para OnSafety disponivel (mock ate o token de homologacao; escrita em prod bloqueada por guard). Dominio/Onvio/Tangerino aguardando credenciais.",
           "Varredura documental OCR do OneDrive (ASOs e docs faltantes).",
           "Acompanhamento de INSS para afastados (alertas e documentos periodicos).",
         ]}
