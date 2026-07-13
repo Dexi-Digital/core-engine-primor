@@ -134,6 +134,15 @@ class Settings(BaseSettings):
         default="MotorCentral/partes-diarias"
     )
 
+    # OnSafety (Modulo A -- SST: ASOs, fichas de EPI, treinamentos).
+    # Sem token o adapter cai em modo mock deterministico -- mesmo
+    # padrao DirectData/Infosimples/Dominio. ATENCAO: tokens nao sao
+    # intercambiaveis entre ambientes (token de producao devolve 401
+    # em api.dev.*); o default e homologacao, producao exige trocar
+    # a base_url para https://api.onsafety.com.br explicitamente.
+    onsafety_token: str | None = Field(default=None)
+    onsafety_base_url: str = Field(default="https://api.dev.onsafety.com.br")
+
 
 @lru_cache
 def get_settings() -> Settings:
