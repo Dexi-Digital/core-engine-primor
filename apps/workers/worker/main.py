@@ -79,6 +79,14 @@ celery_app.conf.beat_schedule = {
         "task": "worker.tasks.licitacoes.dispatch_certidao_alerts",
         "schedule": crontab(hour="8", minute="0"),
     },
+    # Squad 2: pull SST da OnSafety (ASOs + fichas de EPI) uma vez por
+    # dia, 07h30 -- ANTES dos alertas ASO das 08h05, para os alertas
+    # usarem dado fresco. Idempotente: ASO so avanca (nunca regride) e
+    # EPIs upsertam por `onsafety_external_id`.
+    "onsafety-pull-daily": {
+        "task": "worker.tasks.dp_sesmt.pull_onsafety",
+        "schedule": crontab(hour="7", minute="30"),
+    },
     # A.2: alertas de vencimento de ASO uma vez por dia (08h05 America/Sao_Paulo).
     # 5min apos certidoes para distribuir carga do SMTP do Resend.
     # Idempotente via `dp_aso_alertas_log` (uniq employee_id + janela).

@@ -378,6 +378,16 @@ Env vars:
 | `ONSAFETY_ALLOW_PROD_WRITE` | não         | Default: `false`. **Guard-rail**: `create_or_update` contra `api.onsafety.com.br` levanta `OnsafetyProdWriteBlockedError` sem este opt-in (o token disponível hoje é o de produção — ADR-001). Leitura não é afetada. |
 | `ONSAFETY_PROJETO_ID`       | p/ push     | Estabelecimento/projeto OnSafety ao qual o push vincula o trabalhador. Sem ele a API deles recusa com 403. Em homolog: obra de teste "OBRA TESTE MOTOR CENTRAL". |
 
+**Pull SST (Squad 2):** `POST /api/v1/dp-sesmt/onsafety/pull` (manual) e
+cron 07h30 (`worker.tasks.dp_sesmt.pull_onsafety` — antes dos alertas ASO
+das 08h05, para usarem dado fresco). Matching por CPF (validado com
+`is_valid_cpf`; sem match não cria funcionário). ASOs → colunas `aso_*`
+de `dp_employees` com regra **"ASO nunca regride"** (pull não sobrescreve
+dado mais recente); fichas de EPI → `EmployeeDocument` tipo `FICHA_EPI`
+com `source="onsafety"` e upsert por `onsafety_external_id` (docs manuais
+nunca são tocados). LGPD: 1 row em `dp_dossie_consultas` por
+(funcionário, fonte) por run + summary do run em `audit_log`.
+
 **Push de onboarding (etapa 3):** `POST /api/v1/dp-sesmt/employees/{id}/sync-onsafety`
 envia o funcionário via `create_or_update` (`codigoExterno` = employee id;
 upsert na OnSafety → idempotente). Cada tentativa vira uma row append-only

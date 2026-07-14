@@ -499,6 +499,15 @@ class EmployeeDocument(Base):
         nullable=True,
     )
 
+    # --- Sync OnSafety (pull de fichas de EPI, Squad 2) ---
+    # Id do `controle_epi` na OnSafety quando a row veio do pull --
+    # chave de idempotencia do sync (re-pull atualiza em vez de
+    # duplicar). Unique parcial `IS NOT NULL` no banco (migration
+    # b8c9d0e1f2a3), mesmo padrao de `onedrive_item_id`.
+    onsafety_external_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

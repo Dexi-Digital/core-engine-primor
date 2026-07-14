@@ -275,6 +275,30 @@ async def sync_onsafety_endpoint(
     return OnboardingSyncRead.model_validate(run)
 
 
+@router.post("/onsafety/pull", response_model=dict)
+async def onsafety_pull_endpoint(
+    db: AsyncSession = Depends(get_db),
+    client: OnsafetyClient = Depends(get_onsafety_dep),
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """Dispara manualmente o pull SST da OnSafety (ASOs + fichas de EPI).
+
+    Endpoint sincrono (padrao /aso/alerts/dispatch) -- util para teste
+    manual e para a UI "Sincronizar agora". Em prod o cron roda 1x/dia
+    (07h30, antes dos alertas ASO das 08h05). Erro de upstream nao vira
+    5xx: volta no campo `error` do summary, com o parcial ja commitado.
+    """
+    from app.modules.dp_sesmt.onsafety_sync import pull_onsafety
+
+    try:
+        summary = await pull_onsafety(db, client, actor=current_user.email)
+    finally:
+        await client.aclose()
+    from dataclasses import asdict
+
+    return asdict(summary)
+
+
 @router.get(
     "/employees/{employee_id}/sync-onsafety",
     response_model=list[OnboardingSyncRead],

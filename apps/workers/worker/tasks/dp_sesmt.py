@@ -75,6 +75,45 @@ async def _run_sync_onboarding(cpf: str) -> dict[str, object]:
     }
 
 
+@celery_app.task(name="worker.tasks.dp_sesmt.pull_onsafety")
+def pull_onsafety() -> dict[str, object]:
+    """Pull SST da OnSafety: ASOs -> dp_employees.aso_*, EPIs ->
+    dp_employee_documents (Squad 2, ADR-001).
+
+    Roda 1x/dia (Celery beat 07h30) -- ANTES dos alertas ASO das 08h05,
+    para os alertas usarem o dado fresco da OnSafety. Erro de upstream
+    nao explode a task: volta em `error` com o parcial commitado.
+    """
+    return asyncio.run(_run_pull_onsafety())
+
+
+async def _run_pull_onsafety() -> dict[str, object]:
+    try:
+        from dataclasses import asdict
+
+        from app.audit.actors import SYSTEM_BEAT
+        from app.core.config import get_settings
+        from app.core.db import SessionLocal
+        from app.integrations.onsafety.client import OnsafetyClient
+        from app.modules.dp_sesmt.onsafety_sync import (
+            pull_onsafety as pull_svc,
+        )
+    except ImportError as exc:  # pragma: no cover
+        return {"error": f"API package not available in worker: {exc}"}
+
+    settings = get_settings()
+    async with SessionLocal() as db:
+        client = OnsafetyClient(
+            api_token=settings.onsafety_token,
+            base_url=settings.onsafety_base_url,
+        )
+        try:
+            summary = await pull_svc(db, client, actor=SYSTEM_BEAT)
+        finally:
+            await client.aclose()
+    return asdict(summary)
+
+
 @celery_app.task(name="worker.tasks.dp_sesmt.dispatch_aso_alerts")
 def dispatch_aso_alerts(
     recipients: list[str] | None = None,
