@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import date
 from typing import Any
 
@@ -53,10 +53,13 @@ logger = logging.getLogger(__name__)
 _AUDIT_RESOURCE = "dp_sesmt.onsafety_pull"
 _PAGE_SIZE = 200
 
-# resultado_aso da OnSafety e um inteiro; mapeamento confirmado com os
-# valores canonicos de `Employee.aso_resultado` (apto, inapto,
-# apto_restricoes). Valores desconhecidos ficam como string do numero
-# (nao inventamos semantica) e contam em `aso_resultado_desconhecido`.
+# resultado_aso da OnSafety e um int32 SEM enum/descricao no spec
+# OpenAPI e a base de homolog esta vazia -- este mapeamento e
+# ASSUMIDO, nao confirmado. NAO fazer rollout em producao antes da
+# confirmacao da OnSafety (pergunta registrada na issue #39): e dado
+# de saude exibido ao RH -- rotulo invertido e pior que nenhum.
+# Valores fora do mapa ficam como string do numero (nao inventamos
+# semantica) e contam em `aso_resultado_desconhecido`.
 _RESULTADO_MAP = {1: "apto", 2: "inapto", 3: "apto_restricoes"}
 
 
@@ -67,6 +70,7 @@ class PullSummary:
     exames_total: int = 0
     aso_updated: int = 0
     aso_skipped_older: int = 0
+    aso_sem_data: int = 0
     aso_no_match: int = 0
     aso_resultado_desconhecido: int = 0
     # EPI
@@ -76,9 +80,9 @@ class PullSummary:
     epis_no_match: int = 0
     # geral
     cpfs_invalidos: int = 0
+    datas_invalidas: int = 0
     error: str | None = None
     consultas_logadas: int = 0
-    detalhes: dict[str, Any] = field(default_factory=dict)
 
 
 def _parse_date(value: Any) -> date | None:
@@ -88,6 +92,21 @@ def _parse_date(value: Any) -> date | None:
         return date.fromisoformat(value[:10])
     except ValueError:
         return None
+
+
+def _parse_date_counted(value: Any, summary: PullSummary) -> date | None:
+    """Como `_parse_date`, mas conta string nao-vazia que falhou o parse.
+
+    `validade` do controle de EPI e string LIVRE no spec (nao
+    date-time) e nao foi validada em homolog (base sem EPIs). Se vier
+    em formato BR ("30/05/2026"), sem este contador todas as fichas
+    ficariam sem validade EM SILENCIO -- e o diagnostico documental
+    deixaria de alertar vencimento.
+    """
+    parsed = _parse_date(value)
+    if parsed is None and value:
+        summary.datas_invalidas += 1
+    return parsed
 
 
 async def _iter_paginado(fetch: Any) -> list[dict[str, Any]]:
@@ -127,14 +146,22 @@ async def _log_consulta(
 
 
 async def _match_employee(
-    db: AsyncSession, item: dict[str, Any], summary: PullSummary
-) -> Employee | None:
+    db: AsyncSession, item: dict[str, Any]
+) -> tuple[Employee | None, str | None]:
+    """Devolve (employee, motivo_da_falha).
+
+    Motivos disjuntos -- `cpfs_invalidos` e `*_no_match` do summary
+    NAO se sobrepoem: "invalido" = CPF reprovado em is_valid_cpf;
+    "no_match" = CPF valido sem funcionario correspondente.
+    """
     trabalhador = item.get("trabalhador") or {}
     cpf = trabalhador.get("cpf") or ""
     if not is_valid_cpf(cpf):
-        summary.cpfs_invalidos += 1
-        return None
-    return await get_employee_by_cpf(db, cpf)
+        return None, "invalido"
+    employee = await get_employee_by_cpf(db, cpf)
+    if employee is None:
+        return None, "no_match"
+    return employee, None
 
 
 async def pull_asos(
@@ -146,9 +173,12 @@ async def pull_asos(
     exames = await _iter_paginado(client.list_exames_ocupacionais)
     summary.exames_total = len(exames)
     for exame in exames:
-        employee = await _match_employee(db, exame, summary)
+        employee, motivo = await _match_employee(db, exame)
         if employee is None:
-            summary.aso_no_match += 1
+            if motivo == "invalido":
+                summary.cpfs_invalidos += 1
+            else:
+                summary.aso_no_match += 1
             continue
         if await _log_consulta(
             db,
@@ -159,9 +189,9 @@ async def pull_asos(
         ):
             summary.consultas_logadas += 1
 
-        data_aso = _parse_date(exame.get("data_aso"))
+        data_aso = _parse_date_counted(exame.get("data_aso"), summary)
         if data_aso is None:
-            summary.aso_skipped_older += 1
+            summary.aso_sem_data += 1
             continue
         # ASO nunca regride: pull atrasado nao sobrescreve dado manual
         # (ou de pull anterior) mais recente.
@@ -176,7 +206,9 @@ async def pull_asos(
             resultado = str(resultado_raw)[:16]
 
         employee.aso_data = data_aso
-        employee.aso_validade = _parse_date(exame.get("data_vencimento_aso"))
+        employee.aso_validade = _parse_date_counted(
+            exame.get("data_vencimento_aso"), summary
+        )
         employee.aso_resultado = resultado
         summary.aso_updated += 1
     await db.commit()
@@ -191,9 +223,12 @@ async def pull_epis(
     controles = await _iter_paginado(client.list_controles_epi)
     summary.epis_total = len(controles)
     for controle in controles:
-        employee = await _match_employee(db, controle, summary)
+        employee, motivo = await _match_employee(db, controle)
         if employee is None:
-            summary.epis_no_match += 1
+            if motivo == "invalido":
+                summary.cpfs_invalidos += 1
+            else:
+                summary.epis_no_match += 1
             continue
         if await _log_consulta(
             db,
@@ -220,8 +255,12 @@ async def pull_epis(
             "employee_id": employee.id,
             "tipo": DOC_EMP_FICHA_EPI,
             "numero": f"CA {ca}" if ca is not None else None,
-            "emissao": _parse_date(controle.get("data_entrega")),
-            "validade": _parse_date(controle.get("validade")),
+            "emissao": _parse_date_counted(
+                controle.get("data_entrega"), summary
+            ),
+            "validade": _parse_date_counted(
+                controle.get("validade"), summary
+            ),
             "observacoes": observacoes,
             "source": "onsafety",
             "onsafety_external_id": external_id,

@@ -287,6 +287,12 @@ async def onsafety_pull_endpoint(
     manual e para a UI "Sincronizar agora". Em prod o cron roda 1x/dia
     (07h30, antes dos alertas ASO das 08h05). Erro de upstream nao vira
     5xx: volta no campo `error` do summary, com o parcial ja commitado.
+
+    ATENCAO escala: o pull processa a base INTEIRA da OnSafety inline
+    neste request (1 SELECT por item -- ver follow-up na issue #39).
+    Com a base de producao (~5.3k trabalhadores) isso pode levar
+    minutos; para rodadas grandes prefira a task Celery
+    `worker.tasks.dp_sesmt.pull_onsafety`.
     """
     from app.modules.dp_sesmt.onsafety_sync import pull_onsafety
 
