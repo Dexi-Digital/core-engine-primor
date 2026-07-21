@@ -1,0 +1,19 @@
+# Espelho de [project.dependencies] em pyproject.toml, so para o builder
+# Python da Vercel (@vercel/python le requirements.txt, nao pyproject.toml).
+# Celery/Redis ficam de fora: o deploy serverless nao roda worker/beat
+# (ver docs/deployment-vercel.md) -- reduz o bundle e o cold start.
+fastapi>=0.115.0
+pydantic[email]>=2.9.0
+pydantic-settings>=2.6.0
+sqlalchemy>=2.0.35
+alembic>=1.13.3
+asyncpg>=0.29.0
+httpx>=0.27.2
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+bcrypt>=4.0.0
+python-multipart>=0.0.12
+structlog>=24.4.0
+tenacity>=9.0.0
+pypdf>=5.1.0
+defusedxml>=0.7.1
