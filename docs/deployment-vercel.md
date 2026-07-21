@@ -17,24 +17,54 @@ correspondentes na UI.
 
 ## 1. Criar o banco (Neon)
 
-1. Criar conta grátis em neon.tech, criar um projeto/database `primor`.
-2. Copiar a **pooled connection string** (Neon oferece duas: direta e
-   pooled via PgBouncer — usar a **pooled**, é a que funciona bem com
-   serverless). Formato:
-   `postgresql://user:pass@ep-xxx-pooler.region.aws.neon.tech/primor?sslmode=require`
-3. Converter para o driver async que a API usa: trocar `postgresql://`
-   por `postgresql+asyncpg://` no início da string.
+1. Criar conta grátis em neon.tech, criar um projeto/database.
+2. Copiar a connection string (Neon oferece direta e *pooled* via
+   PgBouncer — para uso em serverless, preferir a **pooled**, com
+   `-pooler` no hostname). Formato:
+   `postgresql://user:pass@ep-xxx-pooler.region.aws.neon.tech/dbname?sslmode=require`
+3. Converter para o driver async que a API usa em runtime: trocar
+   `postgresql://` por `postgresql+asyncpg://`.
+
+**Pegadinha de SSL entre drivers** (descoberta rodando as migrations
+pela 1ª vez, 2026-07-20): `asyncpg` (runtime/Vercel) e `psycopg2`
+(Alembic, via `resolve_sync_database_url`) esperam nomes de parâmetro
+de SSL **diferentes** na URL — a conversão sync/async no repo só troca
+o prefixo do driver, não a query string:
+
+| Uso | Parâmetro correto | Exemplo |
+|---|---|---|
+| Runtime da API / `DATABASE_URL` na Vercel (asyncpg) | `ssl=require` | `...?ssl=require` |
+| Rodar `alembic upgrade head` localmente (psycopg2) | `sslmode=require` | `...?sslmode=require` |
+
+Usar o parâmetro errado falha nos dois sentidos: `ssl=` no Alembic dá
+`invalid dsn`; `sslmode=` no runtime asyncpg dá
+`TypeError: connect() got an unexpected keyword argument 'sslmode'`.
+A string que o Neon mostra no dashboard já vem com `sslmode=require`
+(certa para o passo 2 abaixo); trocar para `ssl=require` só na hora de
+configurar `DATABASE_URL` na Vercel (passo 3).
 
 ## 2. Rodar migrations + seed (uma vez, antes do primeiro deploy)
 
 Não depende da Vercel — pode ser feito de qualquer máquina com acesso
-à internet:
+à internet. Usar `sslmode=require` aqui (ver tabela acima):
 
 ```bash
 cd apps/api
-export DATABASE_URL="postgresql+asyncpg://...<a string do Neon, convertida>..."
+export DATABASE_URL="postgresql+asyncpg://...neon.../dbname?sslmode=require"
 uv run --extra dev --with greenlet alembic upgrade head
-uv run --extra dev --with greenlet python -m scripts.seed_dossie   # opcional: dados de demo
+
+# admin de demo (idempotente)
+export ADMIN_EMAIL="admin@primor.com"
+export ADMIN_PASSWORD="<escolher uma senha>"
+uv run --extra dev --with greenlet python -c "
+import asyncio
+from app.core.config import get_settings
+from app.modules.auth.startup import ensure_admin_seed
+asyncio.run(ensure_admin_seed(get_settings()))
+"
+
+# dados de demo (organograma, empresas, editais, overlay de alertas) -- opcional
+uv run --extra dev --with greenlet python -m scripts.seed_dossie
 ```
 
 ## 3. Deploy da API na Vercel
@@ -47,7 +77,7 @@ uv run --extra dev --with greenlet python -m scripts.seed_dossie   # opcional: d
 
    | Variável | Valor |
    |---|---|
-   | `DATABASE_URL` | pooled string do Neon (passo 1), com `+asyncpg` |
+   | `DATABASE_URL` | pooled string do Neon (passo 1), com `+asyncpg` **e `ssl=require`** (não `sslmode=`, ver pegadinha acima) |
    | `ENVIRONMENT` | `staging` (evita os guards de produção do repo — ver nota abaixo) |
    | `SECRET_KEY` | gerar com `openssl rand -hex 32` |
    | `ADMIN_EMAIL` / `ADMIN_PASSWORD` | credenciais do admin de demo |
