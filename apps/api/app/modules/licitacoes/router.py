@@ -46,6 +46,7 @@ from app.modules.licitacoes.processamento import (
     marcar_planilha_principal,
     processar_aprovado,
 )
+from app.modules.licitacoes.resultados import ingest_resultados
 from app.modules.licitacoes.schemas import (
     AnexoEditalRead,
     BoletimDispatchSummary,
@@ -59,6 +60,7 @@ from app.modules.licitacoes.schemas import (
     PlanilhaOrcamentariaRead,
     PlanilhaPrincipalUpdate,
     ProcessamentoResult,
+    ResultadoIngestSummary,
     SavedQueryCreate,
     SavedQueryRead,
     TriagemAprovarPayload,
@@ -229,6 +231,28 @@ async def ingest_endpoint(
             data_final=data_final,
             uf=uf,
             max_paginas=max_paginas,
+        )
+    finally:
+        await client.aclose()
+
+
+@router.post("/ingest/resultados", response_model=ResultadoIngestSummary)
+async def ingest_resultados_endpoint(
+    dias: int = Query(30, ge=1, le=365),
+    uf: str | None = Query(None, max_length=2),
+    max_licitacoes: int = Query(200, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+    client: PncpClient = Depends(get_pncp_client),
+    _: User = Depends(get_current_user),
+) -> ResultadoIngestSummary:
+    """Baixa resultados homologados (vencedores) das licitacoes recentes.
+
+    Alimenta os dashboards de concorrentes e geotargeting. Disparo
+    manual (sem worker), igual ao /ingest/pncp.
+    """
+    try:
+        return await ingest_resultados(
+            db, client, dias=dias, uf=uf, max_licitacoes=max_licitacoes
         )
     finally:
         await client.aclose()

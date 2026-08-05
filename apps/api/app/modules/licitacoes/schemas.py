@@ -390,3 +390,13 @@ class TriagemListResponse(BaseModel):
     page: int
     page_size: int
     data: list[TriagemRow]
+
+
+# --- Captador Squad 3: ingestao de resultados homologados -----------------
+
+
+class ResultadoIngestSummary(BaseModel):
+    licitacoes_processadas: int
+    com_resultado: int
+    resultados_gravados: int
+    falhas: int
