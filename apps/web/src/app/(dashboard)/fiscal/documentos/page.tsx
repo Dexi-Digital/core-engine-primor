@@ -15,6 +15,10 @@ type DocumentoFiscal = {
   destinatario_nome: string | null;
   valor_total: string | null;
   data_emissao: string | null;
+  uf: string | null;
+  chave_dv_valida: boolean | null;
+  valor_icms: string | null;
+  obra_id: number | null;
   status_envio: string;
   protocolo_dominio: string | null;
   sent_at: string | null;
@@ -88,11 +92,17 @@ async function fetchDocumentos(params: {
   tipo?: string;
   status_envio?: string;
   search?: string;
+  emitida_de?: string;
+  emitida_ate?: string;
+  obra_id?: string;
 }): Promise<DocumentoFiscal[]> {
   const qs = new URLSearchParams();
   if (params.tipo) qs.set("tipo", params.tipo);
   if (params.status_envio) qs.set("status_envio", params.status_envio);
   if (params.search) qs.set("search", params.search);
+  if (params.emitida_de) qs.set("emitida_de", params.emitida_de);
+  if (params.emitida_ate) qs.set("emitida_ate", params.emitida_ate);
+  if (params.obra_id) qs.set("obra_id", params.obra_id);
   const path = `/api/v1/fiscal/documentos${qs.toString() ? `?${qs}` : ""}`;
   try {
     return await apiFetch<DocumentoFiscal[]>(path);
@@ -131,6 +141,9 @@ type SearchParams = Promise<{
   tipo?: string;
   status_envio?: string;
   search?: string;
+  emitida_de?: string;
+  emitida_ate?: string;
+  obra_id?: string;
 }>;
 
 export default async function FiscalDocumentosPage({
@@ -143,6 +156,9 @@ export default async function FiscalDocumentosPage({
     tipo: sp.tipo ?? "",
     status_envio: sp.status_envio ?? "",
     search: sp.search ?? "",
+    emitida_de: sp.emitida_de ?? "",
+    emitida_ate: sp.emitida_ate ?? "",
+    obra_id: sp.obra_id ?? "",
   };
   const documentos = await fetchDocumentos(filtros);
 
@@ -239,6 +255,18 @@ export default async function FiscalDocumentosPage({
               className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
             />
           </label>
+          <input
+            type="date"
+            name="emitida_de"
+            defaultValue={filtros.emitida_de ?? ""}
+            className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+          />
+          <input
+            type="date"
+            name="emitida_ate"
+            defaultValue={filtros.emitida_ate ?? ""}
+            className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
+          />
           <button
             type="submit"
             className="rounded-md bg-slate-200 px-4 py-2 text-sm font-medium hover:bg-slate-300"
@@ -253,6 +281,7 @@ export default async function FiscalDocumentosPage({
               <tr>
                 <th className="px-4 py-3 text-left">Tipo</th>
                 <th className="px-4 py-3 text-left">Número</th>
+                <th className="px-4 py-3 text-left">UF</th>
                 <th className="px-4 py-3 text-left">Emitente</th>
                 <th className="px-4 py-3 text-left">Destinatário</th>
                 <th className="px-4 py-3 text-right">Valor</th>
@@ -265,7 +294,7 @@ export default async function FiscalDocumentosPage({
               {documentos.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={8}
+                    colSpan={9}
                     className="px-4 py-12 text-center text-sm text-slate-500"
                   >
                     Nenhum documento. Importe um XML acima.
@@ -278,7 +307,17 @@ export default async function FiscalDocumentosPage({
                       {doc.tipo}
                     </td>
                     <td className="px-4 py-3 text-slate-700">
-                      {doc.numero ?? "—"}
+                      <Link
+                        href={`/fiscal/documentos/${doc.id}`}
+                        className="font-medium text-slate-900 hover:underline"
+                      >
+                        {doc.numero ?? doc.chave_acesso ?? `#${doc.id}`}
+                      </Link>
+                      {doc.chave_dv_valida === false && (
+                        <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-700">
+                          DV inválido
+                        </span>
+                      )}
                       {doc.serie ? (
                         <span className="text-xs text-slate-400"> / {doc.serie}</span>
                       ) : null}
@@ -287,6 +326,9 @@ export default async function FiscalDocumentosPage({
                           {doc.chave_acesso}
                         </div>
                       ) : null}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {doc.uf ?? "—"}
                     </td>
                     <td className="px-4 py-3 text-slate-700">
                       <div>{doc.emitente_nome ?? "—"}</div>
