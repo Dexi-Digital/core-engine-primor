@@ -50,6 +50,7 @@ from app.modules.fiscal.service import (
     import_xml,
     list_documentos,
     list_itens,
+    reprocessar_documento,
     update_documento,
 )
 from app.modules.licitacoes.storage import EditaisStorage, LocalStorage
@@ -228,6 +229,38 @@ async def update_endpoint(
     if doc is None:
         raise HTTPException(status_code=404, detail="documento nao encontrado")
     return DocumentoFiscalRead.model_validate(doc)
+
+
+@router.post(
+    "/documentos/{doc_id}/reprocessar",
+    response_model=DocumentoFiscalDetail,
+)
+async def reprocessar_endpoint(
+    doc_id: int,
+    db: AsyncSession = Depends(get_db),
+    storage: EditaisStorage = Depends(get_fiscal_storage),
+    current_user: User = Depends(get_current_user),
+) -> DocumentoFiscalDetail:
+    """Re-extrai impostos/UF/itens do XML bruto (docs pre-feature)."""
+    try:
+        doc = await reprocessar_documento(
+            db, doc_id, storage=storage, actor=current_user.email
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (FileNotFoundError, OSError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"XML nao encontrado no storage: {exc}",
+        ) from exc
+    if doc is None:
+        raise HTTPException(status_code=404, detail="documento nao encontrado")
+    itens = await list_itens(db, doc_id)
+    base = DocumentoFiscalRead.model_validate(doc).model_dump()
+    return DocumentoFiscalDetail(
+        **base,
+        itens=[DocumentoFiscalItemRead.model_validate(i) for i in itens],
+    )
 
 
 @router.delete("/documentos/{doc_id}", status_code=204)

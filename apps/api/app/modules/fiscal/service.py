@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import desc, or_, select
+from sqlalchemy import delete, desc, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -253,6 +253,74 @@ async def list_itens(
     )
     result = await db.scalars(stmt)
     return result.all()
+
+
+async def reprocessar_documento(
+    db: AsyncSession,
+    doc_id: int,
+    *,
+    storage: EditaisStorage,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
+) -> DocumentoFiscal | None:
+    """Re-executa o 2o passe (parse_nfe_detalhes) sobre o XML bruto do
+    storage. Uso: enriquecer documentos importados antes da feature de
+    detalhes. Idempotente: apaga e reinsere os itens.
+
+    Levanta ValueError para tipos sem 2o passe; FileNotFoundError/OSError
+    sobem se o XML sumiu do storage (o router converte em HTTP).
+    """
+    doc = await get_documento(db, doc_id)
+    if doc is None:
+        return None
+    if doc.tipo not in {"nfe", "nfce"}:
+        raise ValueError(
+            f"reprocessamento so se aplica a nfe/nfce (tipo={doc.tipo!r})"
+        )
+    xml_bytes = await storage.read(doc.xml_path)
+    detalhes = parse_nfe_detalhes(xml_bytes)
+    if detalhes is None:
+        raise ValueError("XML no storage nao e mais uma NF-e/NFC-e valida")
+
+    doc.uf = detalhes.uf
+    doc.chave_dv_valida = detalhes.chave_dv_valida
+    doc.valor_icms = detalhes.valor_icms
+    doc.valor_ipi = detalhes.valor_ipi
+    doc.valor_pis = detalhes.valor_pis
+    doc.valor_cofins = detalhes.valor_cofins
+    await db.execute(
+        delete(DocumentoFiscalItem).where(
+            DocumentoFiscalItem.documento_id == doc.id
+        )
+    )
+    for item in detalhes.itens:
+        db.add(
+            DocumentoFiscalItem(
+                documento_id=doc.id,
+                ordem=item.ordem,
+                codigo=item.codigo,
+                descricao=item.descricao,
+                ncm=item.ncm,
+                cfop=item.cfop,
+                unidade=item.unidade,
+                quantidade=item.quantidade,
+                valor_unitario=item.valor_unitario,
+                valor_total=item.valor_total,
+            )
+        )
+    await db.commit()
+    await db.refresh(doc)
+    await _record_audit(
+        db,
+        action="reprocessar",
+        resource_id=doc.id,
+        actor=actor,
+        metadata={
+            "uf": doc.uf,
+            "chave_dv_valida": doc.chave_dv_valida,
+            "itens_count": len(detalhes.itens),
+        },
+    )
+    return doc
 
 
 async def list_documentos(
@@ -586,6 +654,7 @@ __all__ = [
     "import_xml",
     "list_documentos",
     "list_itens",
+    "reprocessar_documento",
     "reset_dominio_singleton",
     "update_documento",
 ]

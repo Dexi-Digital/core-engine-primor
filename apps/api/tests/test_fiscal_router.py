@@ -7,7 +7,7 @@ from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.models import AuditLog
@@ -587,3 +587,77 @@ async def test_patch_obra_null_desvincula(
     )
     assert r.status_code == 200
     assert r.json()["obra_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_reprocessar_preenche_detalhes_e_e_idempotente(
+    api_client: AsyncClient,
+    auth_headers: dict[str, str],
+    db_session: AsyncSession,
+):
+    """Simula documento importado ANTES da feature: zera os campos novos
+    direto no banco e reprocessa -- os detalhes voltam do XML no storage.
+    Segunda chamada nao duplica itens (delete + re-insert)."""
+    r = await api_client.post(
+        "/api/v1/fiscal/documentos",
+        files=_upload_payload(NFE_DETALHADA_XML, "nfe.xml"),
+        headers=auth_headers,
+    )
+    doc_id = r.json()["id"]
+
+    # "Documento legado": apaga o resultado do 2o passe.
+    doc = await db_session.get(DocumentoFiscal, doc_id)
+    doc.uf = None
+    doc.valor_icms = None
+    doc.chave_dv_valida = None
+    await db_session.execute(
+        delete(DocumentoFiscalItem).where(
+            DocumentoFiscalItem.documento_id == doc_id
+        )
+    )
+    await db_session.commit()
+
+    r = await api_client.post(
+        f"/api/v1/fiscal/documentos/{doc_id}/reprocessar",
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["uf"] == "SP"
+    assert body["valor_icms"] == "3000.00"
+    assert len(body["itens"]) == 2
+
+    # Idempotencia: reprocessar de novo mantem 2 itens (nao 4).
+    r = await api_client.post(
+        f"/api/v1/fiscal/documentos/{doc_id}/reprocessar",
+        headers=auth_headers,
+    )
+    assert len(r.json()["itens"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_reprocessar_tipo_nao_suportado_retorna_422(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+):
+    r = await api_client.post(
+        "/api/v1/fiscal/documentos",
+        files=_upload_payload(CTE_XML, "cte.xml"),
+        headers=auth_headers,
+    )
+    doc_id = r.json()["id"]
+    r = await api_client.post(
+        f"/api/v1/fiscal/documentos/{doc_id}/reprocessar",
+        headers=auth_headers,
+    )
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_reprocessar_documento_inexistente_retorna_404(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+):
+    r = await api_client.post(
+        "/api/v1/fiscal/documentos/999999/reprocessar",
+        headers=auth_headers,
+    )
+    assert r.status_code == 404
