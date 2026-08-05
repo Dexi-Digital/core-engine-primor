@@ -415,7 +415,19 @@ class ResultadoIngestSummary(BaseModel):
 
 
 class AtaIngestSummary(BaseModel):
+    """Resumo de uma rodada de `ingest_atas`.
+
+    `falhas` conta paginacoes interrompidas por erro de rede/HTTP (apos
+    esgotar os retries do `PncpClient`) -- quando > 0, o resultado e
+    parcial: as atas das paginas ja buscadas ANTES da falha foram
+    persistidas normalmente (contadas em `total_fetched`/`gravadas`/
+    `atualizadas`/`vinculadas`), mas a janela pode nao ter sido coberta
+    por inteiro. Um novo disparo com a mesma janela e seguro (idempotente
+    via `numero_controle_pncp_ata`) e tende a completar o restante.
+    """
+
     total_fetched: int
     gravadas: int
     atualizadas: int
     vinculadas: int
+    falhas: int = 0
