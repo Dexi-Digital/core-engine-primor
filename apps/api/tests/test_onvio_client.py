@@ -4,7 +4,12 @@ from __future__ import annotations
 import pytest
 from httpx import AsyncClient, MockTransport, Request, Response
 
-from app.integrations.onvio.client import OnvioAuthError, OnvioClient
+from app.integrations.onvio.client import (
+    ONVIO_DEFAULT_AUDIENCE,
+    OnvioAuthError,
+    OnvioClient,
+    OnvioSendBlockedError,
+)
 
 XML = b"<?xml version='1.0'?><NFe><infNFe Id='NFe123'/></NFe>"
 
@@ -101,6 +106,7 @@ def _route(request: Request, *, token_calls: list) -> Response | None:
         body = request.content.decode()
         assert "grant_type=client_credentials" in body
         assert "client_id=cid" in body
+        assert f"audience={ONVIO_DEFAULT_AUDIENCE}" in body
         return Response(
             200, json={"access_token": "tok-abc", "expires_in": 86400}
         )
@@ -147,3 +153,70 @@ async def test_real_token_rejeitado_vira_auth_error():
     c = _real_onvio(handler)
     with pytest.raises(OnvioAuthError):
         await c.check_activation()
+
+
+@pytest.mark.asyncio
+async def test_real_send_bloqueado_sem_allow_send():
+    def handler(request: Request) -> Response:
+        raise AssertionError("nenhuma chamada HTTP deveria acontecer")
+
+    c = _real_onvio(handler, allow_send=False)
+    with pytest.raises(OnvioSendBlockedError):
+        await c.send_nfe_xml(filename="nf.xml", content=XML)
+
+
+@pytest.mark.asyncio
+async def test_real_send_e_status():
+    token_calls: list = []
+
+    def handler(request: Request) -> Response:
+        shared = _route(request, token_calls=token_calls)
+        if shared is not None:
+            return shared
+        if request.url.path == "/dominio/invoice/v3/batches":
+            # invoice usa a integrationKey de SESSAO do /enable
+            assert request.headers["x-integration-key"] == "sess-key-1"
+            assert request.method == "POST"
+            assert b"NFe123" in request.content
+            return Response(200, json={"id": "batch-77"})
+        if request.url.path == "/dominio/invoice/v3/batches/batch-77":
+            return Response(
+                200,
+                json={
+                    "filesExpanded": [
+                        {"apiStatus": {"message": "Arquivo armazenado na API"}}
+                    ]
+                },
+            )
+        raise AssertionError(f"rota inesperada: {request.url}")
+
+    c = _real_onvio(handler, allow_send=True)
+    sent = await c.send_nfe_xml(filename="nf.xml", content=XML)
+    assert sent == {"batch_id": "batch-77", "source": "onvio"}
+    st = await c.get_batch_status("batch-77")
+    assert st["stored"] is True
+    assert st["message"] == "Arquivo armazenado na API"
+    assert st["source"] == "onvio"
+
+
+@pytest.mark.asyncio
+async def test_real_status_nao_armazenado():
+    token_calls: list = []
+
+    def handler(request: Request) -> Response:
+        shared = _route(request, token_calls=token_calls)
+        if shared is not None:
+            return shared
+        return Response(
+            200,
+            json={
+                "filesExpanded": [
+                    {"apiStatus": {"message": "Arquivo com schema invalido"}}
+                ]
+            },
+        )
+
+    c = _real_onvio(handler, allow_send=True)
+    st = await c.get_batch_status("batch-99")
+    assert st["stored"] is False
+    assert st["message"] == "Arquivo com schema invalido"

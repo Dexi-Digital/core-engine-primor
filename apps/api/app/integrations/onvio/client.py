@@ -81,6 +81,7 @@ class OnvioClient(IntegrationClient):
         self._token_expires_at: float = 0.0
         self._activation_key: str | None = None
         self._token_lock = asyncio.Lock()
+        self._activation_lock = asyncio.Lock()
 
     @property
     def is_mock(self) -> bool:
@@ -171,17 +172,22 @@ class OnvioClient(IntegrationClient):
     async def _get_activation_key(self) -> str:
         # integrationKey de SESSAO devolvida pelo /enable -- usada nos
         # calls de invoice no lugar da key configurada (fluxo do script
-        # de referencia; reutilizacao entre envios a confirmar).
-        if self._activation_key:
+        # de referencia; reutilizacao entre envios a confirmar). Lock
+        # evita double-POST em /activation/enable sob concorrencia --
+        # e escrita real, mesmo padrao de _get_token.
+        async with self._activation_lock:
+            if self._activation_key:
+                return self._activation_key
+            data = await self._post_json(
+                f"{ONVIO_API_BASE}/dominio/integration/v1/activation/enable"
+            )
+            key = data.get("integrationKey")
+            if not key:
+                raise OnvioError(
+                    "resposta /activation/enable sem integrationKey"
+                )
+            self._activation_key = str(key)
             return self._activation_key
-        data = await self._post_json(
-            f"{ONVIO_API_BASE}/dominio/integration/v1/activation/enable"
-        )
-        key = data.get("integrationKey")
-        if not key:
-            raise OnvioError("resposta /activation/enable sem integrationKey")
-        self._activation_key = str(key)
-        return self._activation_key
 
     async def _get_json(self, url: str) -> dict[str, Any]:
         headers = await self._api_headers()
@@ -240,7 +246,34 @@ class OnvioClient(IntegrationClient):
                 len(content),
             )
             return {"batch_id": f"mock-{digest}", "source": "onvio_mock"}
-        raise NotImplementedError  # Task 6
+        if not self._allow_send:
+            raise OnvioSendBlockedError(
+                "envio real de NF-e ao Onvio bloqueado: e escrita no "
+                "Dominio de PRODUCAO do escritorio contabil. Se "
+                "intencional, setar ONVIO_ALLOW_SEND=true."
+            )
+        activation_key = await self._get_activation_key()
+        token = await self._get_token()
+        files = {
+            "file[]": (filename, content, "application/xml"),
+            "query": (None, '{"boxe/File": false}', "application/json"),
+        }
+        try:
+            r = await self._client.post(
+                f"{ONVIO_API_BASE}/dominio/invoice/v3/batches",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "x-integration-key": activation_key,
+                },
+                files=files,
+            )
+        except httpx.HTTPError as exc:
+            raise OnvioError(f"envio NF-e Onvio falhou: {exc}") from exc
+        data = self._json_or_raise(r, "/dominio/invoice/v3/batches")
+        batch_id = data.get("id")
+        if not batch_id:
+            raise OnvioError(f"resposta de envio sem id: {data}")
+        return {"batch_id": str(batch_id), "source": "onvio"}
 
     async def get_batch_status(self, batch_id: str) -> dict[str, Any]:
         """Status de processamento de um envio (batch)."""
@@ -251,4 +284,29 @@ class OnvioClient(IntegrationClient):
                 "message": _STORED_MESSAGE,
                 "source": "onvio_mock",
             }
-        raise NotImplementedError  # Task 6
+        activation_key = await self._get_activation_key()
+        token = await self._get_token()
+        url = f"{ONVIO_API_BASE}/dominio/invoice/v3/batches/{batch_id}"
+        try:
+            r = await self._client.get(
+                url,
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "x-integration-key": activation_key,
+                },
+            )
+        except httpx.HTTPError as exc:
+            raise OnvioError(f"status de batch Onvio falhou: {exc}") from exc
+        data = self._json_or_raise(r, url)
+        expanded = data.get("filesExpanded") or []
+        message = ""
+        if expanded and isinstance(expanded[0], dict):
+            message = str(
+                (expanded[0].get("apiStatus") or {}).get("message") or ""
+            )
+        return {
+            "batch_id": batch_id,
+            "stored": message == _STORED_MESSAGE,
+            "message": message,
+            "source": "onvio",
+        }
