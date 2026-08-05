@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
@@ -24,7 +25,7 @@ async def test_contrato_model_roundtrip(db_session: AsyncSession) -> None:
         contraparte_nome="TratorMax Ltda",
         contraparte_documento="12345678000190",
         tipo="locacao",
-        valor=1500000,  # em centavos
+        valor=Decimal("15000.00"),
         data_inicio=date(2026, 1, 1),
         data_fim=date(2026, 12, 31),
         status="vigente",
@@ -33,6 +34,7 @@ async def test_contrato_model_roundtrip(db_session: AsyncSession) -> None:
     await db_session.commit()
     await db_session.refresh(row)
     assert row.id is not None
+    assert row.valor == Decimal("15000.00")
     assert row.obra_id is None
     assert row.arquivo_path is None
     assert row.easyjur_ref is None

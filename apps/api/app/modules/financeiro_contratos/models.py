@@ -12,6 +12,7 @@ nenhum campo atual muda. NAO criar as colunas agora (YAGNI).
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 
 from sqlalchemy import (
     JSON,
@@ -20,6 +21,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     UniqueConstraint,
     func,
@@ -50,10 +52,11 @@ STATUS_CONTRATO_VALIDOS: frozenset[str] = frozenset(s for s, _ in STATUS_CONTRAT
 class Contrato(Base):
     """Um contrato da Primor (cliente, fornecedor ou locacao).
 
-    `valor` em centavos (int) -- evita float e casa com o padrao de
-    valores monetarios do restante do repo. `data_fim` nullable: contrato
-    por prazo indeterminado nao gera alerta de vencimento (mesmo
-    tratamento de certidao sem validade no D.6).
+    `valor` em `Numeric(20, 2)` -- mesma convencao monetaria do restante
+    do repo (`fiscal.DocumentoFiscal.valor_total`, `licitacoes`,
+    `manutencao_frota`, `dp_sesmt`): `Decimal`, nunca `float`.
+    `data_fim` nullable: contrato por prazo indeterminado nao gera alerta
+    de vencimento (mesmo tratamento de certidao sem validade no D.6).
 
     `easyjur_ref` e referencia textual livre (numero do processo /
     codigo interno EasyJur) enquanto a integracao real nao existe.
@@ -74,7 +77,7 @@ class Contrato(Base):
         nullable=True,
         index=True,
     )
-    valor: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    valor: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
     data_inicio: Mapped[date] = mapped_column(Date)
     data_fim: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(32), default="rascunho", index=True)

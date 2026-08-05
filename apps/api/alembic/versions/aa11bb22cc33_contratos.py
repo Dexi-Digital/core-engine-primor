@@ -35,7 +35,7 @@ def upgrade() -> None:
             nullable=True,
             index=True,
         ),
-        sa.Column("valor", sa.Integer(), nullable=True),
+        sa.Column("valor", sa.Numeric(20, 2), nullable=True),
         sa.Column("data_inicio", sa.Date(), nullable=False),
         sa.Column("data_fim", sa.Date(), nullable=True, index=True),
         sa.Column(
