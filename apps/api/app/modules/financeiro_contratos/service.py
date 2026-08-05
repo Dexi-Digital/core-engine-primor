@@ -11,7 +11,7 @@ import json
 import logging
 from datetime import date as _date
 from datetime import timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from sqlalchemy import select
@@ -37,6 +37,26 @@ _AUDIT_RESOURCE = "financeiro.contrato"
 # contratos, `sem_validade` significa prazo indeterminado (UI rotula
 # "Sem prazo").
 compute_vencimento_status = compute_status
+
+
+def _coerce_valor(valor: Decimal | int | float | str | None) -> Decimal | None:
+    """Normaliza `valor` para `Decimal`, evitando ruido binario de float.
+
+    `Decimal(str(valor))` (nao `Decimal(valor)` direto) e o que garante que
+    um float como `1234.1` vire `Decimal("1234.1")` exato, nao
+    `Decimal("1234.099999999999909050529822707176208496093750")`.
+
+    Um `valor` nao-numerico (ex.: payload malicioso ou bug do caller) faz
+    `Decimal(str(...))` levantar `decimal.InvalidOperation` -- convertemos
+    para `ValueError` para cair no mesmo tratamento 422 do resto do modulo
+    (tipo/status invalidos), em vez de vazar como 500.
+    """
+    if valor is None:
+        return None
+    try:
+        return Decimal(str(valor))
+    except InvalidOperation as exc:
+        raise ValueError(f"valor invalido: {valor!r}") from exc
 
 
 async def _record_audit(
@@ -98,7 +118,7 @@ async def create_contrato(
     data_inicio: _date,
     contraparte_documento: str | None = None,
     obra_id: int | None = None,
-    valor: Decimal | int | str | None = None,
+    valor: Decimal | int | float | str | None = None,
     data_fim: _date | None = None,
     status: str = "rascunho",
     easyjur_ref: str | None = None,
@@ -118,7 +138,7 @@ async def create_contrato(
         contraparte_documento=contraparte_documento,
         tipo=tipo,
         obra_id=obra_id,
-        valor=Decimal(str(valor)) if valor is not None else None,
+        valor=_coerce_valor(valor),
         data_inicio=data_inicio,
         data_fim=data_fim,
         status=status,
@@ -158,7 +178,7 @@ async def update_contrato(
     if "status" in fields and fields["status"] not in STATUS_CONTRATO_VALIDOS:
         raise ValueError(f"status de contrato invalido: {fields['status']}")
     if "valor" in fields and fields["valor"] is not None:
-        fields["valor"] = Decimal(str(fields["valor"]))
+        fields["valor"] = _coerce_valor(fields["valor"])
     changed: dict[str, Any] = {}
     for key, value in fields.items():
         if hasattr(row, key):

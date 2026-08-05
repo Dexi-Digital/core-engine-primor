@@ -109,6 +109,9 @@ async def test_create_e_get_contrato_com_audit(db_session: AsyncSession) -> None
         actor="teste@primor.com",
     )
     assert row.id is not None
+    # valor coagido para Decimal (Numeric(20,2), nunca float/int-cru no ORM)
+    assert isinstance(row.valor, Decimal)
+    assert row.valor == Decimal("250000000")
     fetched = await get_contrato(db_session, row.id)
     assert fetched is not None and fetched.titulo == "Obra BR-040 lote 2"
     # audit_log gravado com actor real
@@ -133,6 +136,22 @@ async def test_create_contrato_tipo_invalido(db_session: AsyncSession) -> None:
             contraparte_nome="Y",
             tipo="permuta",  # nao esta em TIPOS_CONTRATO_VALIDOS
             data_inicio=date(2026, 1, 1),
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_contrato_valor_invalido(db_session: AsyncSession) -> None:
+    # `Decimal(str("abc"))` levantaria decimal.InvalidOperation (viraria 500
+    # no router se nao interceptado) -- o service converte para ValueError,
+    # mesma convencao 422 do tipo/status invalidos.
+    with pytest.raises(ValueError):
+        await create_contrato(
+            db_session,
+            titulo="X",
+            contraparte_nome="Y",
+            tipo="cliente",
+            data_inicio=date(2026, 1, 1),
+            valor="abc",
         )
 
 
@@ -167,11 +186,17 @@ async def test_update_e_delete_contrato(db_session: AsyncSession) -> None:
     )
     updated = await update_contrato(
         db_session, row.id, titulo="Novo", status="judicializado",
-        easyjur_ref="EJ-2026-0042", actor="teste@primor.com",
+        easyjur_ref="EJ-2026-0042", valor=1234.1, actor="teste@primor.com",
     )
     assert updated is not None
     assert updated.titulo == "Novo"
     assert updated.easyjur_ref == "EJ-2026-0042"
+    # valor via update tambem passa por Decimal(str(...)) -- float 1234.1
+    # deve virar Decimal("1234.1") exato, sem ruido binario.
+    assert isinstance(updated.valor, Decimal)
+    assert updated.valor == Decimal("1234.1")
+    with pytest.raises(ValueError):
+        await update_contrato(db_session, row.id, valor="abc")
     assert await update_contrato(db_session, 99999, titulo="x") is None
     assert await delete_contrato(db_session, row.id) is True
     assert await get_contrato(db_session, row.id) is None
