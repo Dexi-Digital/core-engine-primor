@@ -264,3 +264,43 @@ async def test_storage_save_network_error_becomes_oserror():
             )
     finally:
         await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_onedrive_storage_ensure_project_folder_retorna_weburl() -> None:
+    from app.integrations.onedrive.client import OneDriveMockClient
+    from app.integrations.onedrive.storage import OneDriveStorage
+
+    client = OneDriveMockClient()
+    storage = OneDriveStorage(client)
+    caminho, link = await storage.ensure_project_folder(
+        licitacao_id=42, nome_pasta="mg-bh-prefeitura-002_2026"
+    )
+    assert caminho.endswith("/42")
+    assert link is not None and link.startswith("https://onedrive.mock/folders/")
+    # Idempotente: mesmo id na segunda chamada.
+    caminho2, link2 = await storage.ensure_project_folder(
+        licitacao_id=42, nome_pasta="qualquer"
+    )
+    assert (caminho2, link2) == (caminho, link)
+
+
+@pytest.mark.asyncio
+async def test_onedrive_mock_ensure_project_folder_nao_aparece_no_list_folder() -> None:
+    """Regressao: `create_folder` grava metadata da pasta no mock, mas
+    `list_folder` precisa ignorar essas entradas -- paridade com o client
+    real, que nunca lista uma pasta como arquivo (so recursa nela). Sem o
+    filtro, cada `ensure_project_folder` polui `list_folder` com um
+    "arquivo fantasma" (size 0) que quebraria onedrive_sync/onedrive_diagnostico.
+    """
+    from app.integrations.onedrive.client import OneDriveMockClient
+    from app.integrations.onedrive.storage import OneDriveStorage
+
+    client = OneDriveMockClient()
+    storage = OneDriveStorage(client)
+    await storage.ensure_project_folder(licitacao_id=42, nome_pasta="qualquer")
+    client.seed(relative_path="42/edital.pdf")
+
+    items = await client.list_folder()
+    paths = {it["path"] for it in items}
+    assert paths == {"42/edital.pdf"}

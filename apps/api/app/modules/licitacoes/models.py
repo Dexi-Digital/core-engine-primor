@@ -515,3 +515,85 @@ class ConsultaCrea(Base):
     executed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+# --- Captador Squad 2: pasta do projeto + planilha orcamentaria -----------
+
+
+class PastaProjeto(Base):
+    """Pasta do projeto criada no storage apos aprovacao na triagem.
+
+    Uma por licitacao. `caminho` e o handle fisico (path local ou path
+    Graph); `link_pasta` e a URL clicavel (webUrl do OneDrive) quando o
+    backend fornece uma -- no backend local fica None e a Aba de
+    Triagem cai no detalhe interno da licitacao.
+
+    Decisao registrada no plano: a pasta fisica continua sendo
+    `{licitacao_id}` (idempotencia do D.4); o slug humano
+    `<uf>-<municipio>-<orgao>-<numero>` fica so em `nome_pasta`.
+    """
+
+    __tablename__ = "licitacoes_pastas_projeto"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    licitacao_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("licitacoes.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+    )
+    nome_pasta: Mapped[str] = mapped_column(String(255))
+    caminho: Mapped[str] = mapped_column(String(1024))
+    link_pasta: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    storage_backend: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(
+        String(32), default="criada", server_default="criada"
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class PlanilhaOrcamentaria(Base):
+    """Anexo elegivel (XLSX/XLS/ODS) classificado como possivel planilha
+    orcamentaria. A de maior score acima do limiar vira `principal=True`;
+    a analista pode trocar via PATCH (`status_validacao=principal_manual`,
+    que o reprocessamento respeita).
+    """
+
+    __tablename__ = "licitacoes_planilhas_orcamentarias"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    licitacao_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("licitacoes.id", ondelete="CASCADE"),
+        index=True,
+    )
+    anexo_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("licitacoes_editais_anexos.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+    )
+    nome_arquivo: Mapped[str] = mapped_column(String(255))
+    extensao: Mapped[str] = mapped_column(String(16))
+    score_classificacao: Mapped[int] = mapped_column(Integer, default=0)
+    link: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # "automatica" | "principal_manual" | "descartada"
+    status_validacao: Mapped[str] = mapped_column(
+        String(32), default="automatica", server_default="automatica"
+    )
+    principal: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="0"
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

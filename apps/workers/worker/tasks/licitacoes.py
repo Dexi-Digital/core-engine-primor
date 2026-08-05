@@ -174,3 +174,41 @@ async def _run_certidao_alerts(
         "skipped": summary.skipped,
         "failed": summary.failed,
     }
+
+
+@celery_app.task(name="worker.tasks.licitacoes.processar_edital_aprovado")
+def processar_edital_aprovado(licitacao_id: int) -> dict[str, object]:
+    """Processa um edital aprovado na triagem (Captador Squad 2).
+
+    Despachada pela Tela de Captacao (Squad 1) via `send_task` quando a
+    analista aprova. Baixa anexos, cria pasta do projeto e identifica a
+    planilha orcamentaria. Idempotente -- pode ser re-executada.
+    """
+    return asyncio.run(_run_processamento(licitacao_id))
+
+
+async def _run_processamento(licitacao_id: int) -> dict[str, object]:
+    try:
+        from app.core.config import get_settings
+        from app.core.db import SessionLocal
+        from app.integrations.pncp.client import PncpClient
+        from app.modules.licitacoes.processamento import processar_aprovado
+        from app.modules.licitacoes.storage_factory import editais_storage
+    except ImportError as exc:  # pragma: no cover
+        return {"error": f"API package not available in worker: {exc}"}
+
+    settings = get_settings()
+    async with SessionLocal() as db:
+        pncp = PncpClient(
+            base_url=os.getenv(
+                "PNCP_BASE_URL", "https://pncp.gov.br/api/consulta"
+            )
+        )
+        try:
+            async with editais_storage(settings) as storage:
+                result = await processar_aprovado(
+                    db, licitacao_id=licitacao_id, pncp=pncp, storage=storage
+                )
+        finally:
+            await pncp.aclose()
+    return result.model_dump()

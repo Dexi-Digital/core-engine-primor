@@ -97,6 +97,12 @@ export default async function LicitacoesPage(props: {
             Tela de Captação →
           </Link>
           <Link
+            href="/licitacoes/triagem"
+            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+          >
+            Aba de Triagem →
+          </Link>
+          <Link
             href="/licitacoes/certidoes"
             className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
           >
