@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import pytest
+from httpx import AsyncClient, MockTransport, Request, Response
 
-from app.integrations.onvio.client import OnvioClient
+from app.integrations.onvio.client import OnvioAuthError, OnvioClient
 
 XML = b"<?xml version='1.0'?><NFe><infNFe Id='NFe123'/></NFe>"
 
@@ -80,3 +81,69 @@ async def test_health_check_nao_mock_tolera_not_implemented():
     )
     assert c.is_mock is False
     assert await c.health_check() is False
+
+
+CREDS = dict(
+    client_id="cid", client_secret="csec", integration_key="ikey"
+)
+
+
+def _real_onvio(handler, **kwargs):
+    transport = MockTransport(handler)
+    http = AsyncClient(transport=transport)
+    return OnvioClient(client=http, **{**CREDS, **kwargs})
+
+
+def _route(request: Request, *, token_calls: list) -> Response | None:
+    """Rotas compartilhadas de auth/activation para os handlers."""
+    if request.url.host == "auth.thomsonreuters.com":
+        token_calls.append(1)
+        body = request.content.decode()
+        assert "grant_type=client_credentials" in body
+        assert "client_id=cid" in body
+        return Response(
+            200, json={"access_token": "tok-abc", "expires_in": 86400}
+        )
+    if request.url.path.endswith("/activation/info"):
+        assert request.headers["Authorization"] == "Bearer tok-abc"
+        assert request.headers["x-integration-key"] == "ikey"
+        return Response(
+            200,
+            json={
+                "accountantOfficeNationalIdentity": "11222333000181",
+                "clientNationalIdentity": "99888777000162",
+            },
+        )
+    if request.url.path.endswith("/activation/enable"):
+        assert request.headers["x-integration-key"] == "ikey"
+        return Response(200, json={"integrationKey": "sess-key-1"})
+    return None
+
+
+@pytest.mark.asyncio
+async def test_real_check_activation_e_cache_de_token():
+    token_calls: list = []
+
+    def handler(request: Request) -> Response:
+        r = _route(request, token_calls=token_calls)
+        assert r is not None, f"rota inesperada: {request.url}"
+        return r
+
+    c = _real_onvio(handler)
+    info1 = await c.check_activation()
+    info2 = await c.check_activation()
+    assert info1["escritorio_cnpj"] == "11222333000181"
+    assert info1["cliente_cnpj"] == "99888777000162"
+    assert info1["source"] == "onvio"
+    assert info2 == info1
+    assert len(token_calls) == 1  # token cachado entre chamadas
+
+
+@pytest.mark.asyncio
+async def test_real_token_rejeitado_vira_auth_error():
+    def handler(request: Request) -> Response:
+        return Response(401, json={"error": "access_denied"})
+
+    c = _real_onvio(handler)
+    with pytest.raises(OnvioAuthError):
+        await c.check_activation()

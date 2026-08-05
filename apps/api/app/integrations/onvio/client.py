@@ -27,6 +27,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -110,7 +111,118 @@ class OnvioClient(IntegrationClient):
                 "cliente_cnpj": "99888777000162",
                 "source": "onvio_mock",
             }
-        raise NotImplementedError  # Task 5
+        data = await self._get_json(
+            f"{ONVIO_API_BASE}/dominio/integration/v1/activation/info"
+        )
+        return {
+            "escritorio_cnpj": str(
+                data.get("accountantOfficeNationalIdentity") or ""
+            ),
+            "cliente_cnpj": str(data.get("clientNationalIdentity") or ""),
+            "source": "onvio",
+        }
+
+    # --------------------------- HTTP interno ----------------------------
+
+    async def _get_token(self) -> str:
+        # Token dura ~24h; renova com 5 min de folga. Lock evita
+        # thundering-herd no /oauth/token (padrao DominioClient).
+        async with self._token_lock:
+            if self._token and self._token_expires_at - time.time() > 300:
+                return self._token
+            try:
+                r = await self._client.post(
+                    ONVIO_AUTH_URL,
+                    data={
+                        "grant_type": "client_credentials",
+                        "client_id": self._client_id,
+                        "client_secret": self._client_secret,
+                        "audience": self._audience,
+                    },
+                )
+            except httpx.HTTPError as exc:
+                raise OnvioError(f"token Onvio falhou: {exc}") from exc
+            if r.status_code in (401, 403):
+                raise OnvioAuthError(
+                    f"credenciais Onvio rejeitadas ({r.status_code}): "
+                    f"{r.text[:200]}"
+                )
+            if r.status_code != 200:
+                raise OnvioError(
+                    f"token Onvio {r.status_code}: {r.text[:200]}"
+                )
+            data = r.json()
+            token = data.get("access_token")
+            if not token:
+                raise OnvioError("resposta /oauth/token sem access_token")
+            self._token = str(token)
+            self._token_expires_at = time.time() + int(
+                data.get("expires_in", 86400)
+            )
+            return self._token
+
+    async def _api_headers(self) -> dict[str, str]:
+        token = await self._get_token()
+        return {
+            "Authorization": f"Bearer {token}",
+            "x-integration-key": self._integration_key,
+        }
+
+    async def _get_activation_key(self) -> str:
+        # integrationKey de SESSAO devolvida pelo /enable -- usada nos
+        # calls de invoice no lugar da key configurada (fluxo do script
+        # de referencia; reutilizacao entre envios a confirmar).
+        if self._activation_key:
+            return self._activation_key
+        data = await self._post_json(
+            f"{ONVIO_API_BASE}/dominio/integration/v1/activation/enable"
+        )
+        key = data.get("integrationKey")
+        if not key:
+            raise OnvioError("resposta /activation/enable sem integrationKey")
+        self._activation_key = str(key)
+        return self._activation_key
+
+    async def _get_json(self, url: str) -> dict[str, Any]:
+        headers = await self._api_headers()
+        try:
+            r = await self._client.get(url, headers=headers)
+        except httpx.HTTPError as exc:
+            raise OnvioError(f"transporte Onvio ({url}): {exc}") from exc
+        return self._json_or_raise(r, url)
+
+    async def _post_json(self, url: str) -> dict[str, Any]:
+        headers = await self._api_headers()
+        try:
+            r = await self._client.post(url, headers=headers)
+        except httpx.HTTPError as exc:
+            raise OnvioError(f"transporte Onvio ({url}): {exc}") from exc
+        return self._json_or_raise(r, url)
+
+    def _json_or_raise(self, r: httpx.Response, url: str) -> dict[str, Any]:
+        if r.status_code in (401, 403):
+            # Token pode ter expirado entre cache e uso -- invalida para
+            # o proximo call renovar.
+            self._token = None
+            self._token_expires_at = 0.0
+            raise OnvioAuthError(
+                f"Onvio {url} status {r.status_code}: {r.text[:200]}"
+            )
+        if r.status_code >= 300:
+            raise OnvioError(
+                f"Onvio {url} status {r.status_code}: {r.text[:200]}"
+            )
+        try:
+            data = r.json()
+        except ValueError as exc:
+            raise OnvioError(
+                f"resposta nao-JSON Onvio ({url}): {exc}"
+            ) from exc
+        if not isinstance(data, dict):
+            raise OnvioError(
+                f"Onvio {url}: objeto esperado, veio {type(data).__name__}"
+            )
+        return data
 
     async def send_nfe_xml(
         self, *, filename: str, content: bytes
