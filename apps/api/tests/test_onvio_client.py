@@ -28,6 +28,18 @@ async def test_mock_send_distingue_conteudos():
 
 
 @pytest.mark.asyncio
+async def test_mock_send_distingue_conteudos_com_mesmo_1kb_inicial():
+    # Hash deve considerar o conteudo INTEIRO, nao so o primeiro 1KB --
+    # XMLs de NF-e reais compartilham cabecalhos e divergem depois.
+    header = b"<?xml version='1.0'?><NFe>" + b"<!-- pad -->" * 100
+    assert len(header) > 1024
+    c = OnvioClient()
+    r1 = await c.send_nfe_xml(filename="a.xml", content=header + b"<final>A</final>")
+    r2 = await c.send_nfe_xml(filename="a.xml", content=header + b"<final>B</final>")
+    assert r1["batch_id"] != r2["batch_id"]
+
+
+@pytest.mark.asyncio
 async def test_mock_status_sempre_armazenado():
     c = OnvioClient()
     r = await c.send_nfe_xml(filename="nf.xml", content=XML)
@@ -57,3 +69,14 @@ async def test_mock_ignora_guard_allow_send():
 @pytest.mark.asyncio
 async def test_mock_health_check_true():
     assert await OnvioClient().health_check() is True
+
+
+@pytest.mark.asyncio
+async def test_health_check_nao_mock_tolera_not_implemented():
+    # Ate as Tasks 5-6, o caminho real levanta NotImplementedError; o
+    # health_check deve tratar isso como indisponivel (False), nao propagar.
+    c = OnvioClient(
+        client_id="id", client_secret="secret", integration_key="key"
+    )
+    assert c.is_mock is False
+    assert await c.health_check() is False

@@ -96,7 +96,7 @@ class OnvioClient(IntegrationClient):
             return True
         try:
             await self.check_activation()
-        except OnvioError:
+        except (OnvioError, NotImplementedError):
             return False
         return True
 
@@ -122,7 +122,7 @@ class OnvioClient(IntegrationClient):
         if not content:
             raise ValueError("content vazio")
         if self.is_mock:
-            digest = hashlib.sha1(content[:1024]).hexdigest()[:24]
+            digest = hashlib.sha1(content).hexdigest()[:24]
             logger.info(
                 "onvio_mock.send_nfe_xml file=%s bytes=%d", filename,
                 len(content),
