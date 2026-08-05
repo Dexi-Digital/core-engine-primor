@@ -122,3 +122,12 @@ em staging).
   de longo prazo.
 - Features que disparam Celery diretamente (ex.: OCR de parte diária
   via `manutencao_frota`) vão falhar nesta demo — não há broker.
+- **Ingestões manuais de licitações rodam em lotes pequenos**: a
+  função serverless da API tem `maxDuration` de 60s
+  (`apps/api/vercel.json`), então os disparos manuais de
+  `POST /licitacoes/ingest/resultados` e `POST /licitacoes/ingest/atas`
+  já vêm com defaults conservadores (`max_licitacoes=25`,
+  janela de atas de 7 dias, `max_paginas=2`) para caber no timeout.
+  Para volumes maiores, use o Celery task agendado (fora desta demo)
+  ou dispare a ingestão várias vezes em janelas menores via os
+  parâmetros de query (`dias`, `uf`, `max_licitacoes`, `max_paginas`).

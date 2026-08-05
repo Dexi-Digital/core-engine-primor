@@ -1,6 +1,7 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
-import { apiFetch } from "@/lib/api";
+import { ApiError, apiFetch } from "@/lib/api";
 
 type ConcorrenteRow = {
   cnpj: string;
@@ -32,13 +33,14 @@ export const dynamic = "force-dynamic";
 async function safeFetch<T>(path: string): Promise<T | null> {
   try {
     return await apiFetch<T>(path);
-  } catch {
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) redirect("/logout");
     return null;
   }
 }
 
 function brl(value: string | null): string {
-  if (!value) return "—";
+  if (value == null) return "—";
   const num = Number(value);
   if (Number.isNaN(num)) return value;
   return num.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
@@ -60,8 +62,8 @@ export default async function DashboardsComerciaisPage(props: {
   const [concorrentes, geo, naoCaptados, eficiencia] = await Promise.all([
     safeFetch<ConcorrenteRow[]>(`/api/v1/licitacoes/dashboards/concorrentes?uf=${uf}`),
     safeFetch<GeotargetingRow[]>(`/api/v1/licitacoes/dashboards/geotargeting?uf=${uf}`),
-    safeFetch<NaoCaptados>("/api/v1/licitacoes/dashboards/nao-captados"),
-    safeFetch<Eficiencia>("/api/v1/licitacoes/dashboards/eficiencia"),
+    safeFetch<NaoCaptados>(`/api/v1/licitacoes/dashboards/nao-captados?uf=${uf}`),
+    safeFetch<Eficiencia>(`/api/v1/licitacoes/dashboards/eficiencia?uf=${uf}`),
   ]);
 
   return (

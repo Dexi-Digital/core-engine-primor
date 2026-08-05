@@ -230,16 +230,18 @@ async def dashboard_geotargeting_endpoint(
 
 @router.get("/dashboards/nao-captados", response_model=NaoCaptadosResponse)
 async def dashboard_nao_captados_endpoint(
+    uf: str | None = Query(None, max_length=2),
     db: AsyncSession = Depends(get_db),
 ) -> NaoCaptadosResponse:
-    return await dashboard_nao_captados(db)
+    return await dashboard_nao_captados(db, uf=uf)
 
 
 @router.get("/dashboards/eficiencia", response_model=EficienciaResponse)
 async def dashboard_eficiencia_endpoint(
+    uf: str | None = Query(None, max_length=2),
     db: AsyncSession = Depends(get_db),
 ) -> EficienciaResponse:
-    return await dashboard_eficiencia(db)
+    return await dashboard_eficiencia(db, uf=uf)
 
 
 @router.get("/{licitacao_id}", response_model=LicitacaoRead)
@@ -291,7 +293,9 @@ async def ingest_endpoint(
 async def ingest_resultados_endpoint(
     dias: int = Query(30, ge=1, le=365),
     uf: str | None = Query(None, max_length=2),
-    max_licitacoes: int = Query(200, ge=1, le=1000),
+    max_licitacoes: int = Query(
+        25, ge=1, le=1000, description="Default baixo (25) p/ caber no timeout serverless."
+    ),
     db: AsyncSession = Depends(get_db),
     client: PncpClient = Depends(get_pncp_client),
     _: User = Depends(get_current_user),
@@ -311,9 +315,11 @@ async def ingest_resultados_endpoint(
 
 @router.post("/ingest/atas", response_model=AtaIngestSummary)
 async def ingest_atas_endpoint(
-    data_inicial: Annotated[date | None, Query(description="Default: 90 dias atras")] = None,
+    data_inicial: Annotated[date | None, Query(description="Default: 7 dias atras")] = None,
     data_final: Annotated[date | None, Query(description="Default: hoje")] = None,
-    max_paginas: int | None = Query(None, ge=1, le=100),
+    max_paginas: int | None = Query(
+        2, ge=1, le=100, description="Default baixo (2) p/ caber no timeout serverless."
+    ),
     db: AsyncSession = Depends(get_db),
     client: PncpClient = Depends(get_pncp_client),
     _: User = Depends(get_current_user),
@@ -321,7 +327,7 @@ async def ingest_atas_endpoint(
     """Ingestao de atas de RP vigentes no periodo (D.9 / adesoes)."""
     today = date.today()
     data_final = data_final or today
-    data_inicial = data_inicial or (data_final - timedelta(days=90))
+    data_inicial = data_inicial or (data_final - timedelta(days=7))
     if data_inicial > data_final:
         raise HTTPException(status_code=400, detail="data_inicial > data_final")
     try:

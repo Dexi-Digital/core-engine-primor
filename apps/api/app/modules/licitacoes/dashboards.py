@@ -8,10 +8,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.modules.licitacoes.models import Licitacao, ResultadoLicitacao
+from app.modules.licitacoes.models import DecisaoTriagem, Licitacao, ResultadoLicitacao
 from app.modules.licitacoes.schemas import (
     ConcorrenteRow,
     EficienciaResponse,
@@ -20,6 +20,16 @@ from app.modules.licitacoes.schemas import (
 )
 
 NAO_CAPTADO_STATUSES = ("rejeitado", "sem_planilha", "erro_portal", "erro_sharepoint")
+
+# Resultados com situacao "cancelada" (ex: "Cancelado",
+# "Anulado/Revogado/Cancelado" -- o PNCP nao documenta um enum fechado
+# para `situacaoCompraItemResultadoNome`, e' texto livre) nao devem
+# entrar nas somas/contagens dos dashboards de concorrentes/geotargeting.
+# `is_(None)` mantem registros legados sem situacao preenchida.
+_RESULTADO_NAO_CANCELADO = or_(
+    ResultadoLicitacao.situacao.is_(None),
+    ~func.lower(ResultadoLicitacao.situacao).contains("cancel"),
+)
 
 
 async def dashboard_concorrentes(
@@ -44,6 +54,7 @@ async def dashboard_concorrentes(
         )
         .join(Licitacao, Licitacao.id == ResultadoLicitacao.licitacao_id)
         .where(ResultadoLicitacao.cnpj_vencedor.is_not(None))
+        .where(_RESULTADO_NAO_CANCELADO)
     )
     if uf:
         stmt = stmt.where(Licitacao.uf_sigla == uf.upper())
@@ -77,6 +88,7 @@ async def dashboard_geotargeting(
             valor_total.label("valor_total_homologado"),
         )
         .join(Licitacao, Licitacao.id == ResultadoLicitacao.licitacao_id)
+        .where(_RESULTADO_NAO_CANCELADO)
     )
     if uf:
         stmt = stmt.where(Licitacao.uf_sigla == uf.upper())
@@ -89,33 +101,45 @@ async def dashboard_geotargeting(
     return [GeotargetingRow(**row._mapping) for row in rows]
 
 
-async def dashboard_nao_captados(db: AsyncSession) -> NaoCaptadosResponse:
+async def dashboard_nao_captados(
+    db: AsyncSession, *, uf: str | None = None
+) -> NaoCaptadosResponse:
     """Contagem de licitacoes que nao avancaram na triagem/processamento.
 
     Ver Task 7 (Squad 3, pos Squads 1/2): status considerados "nao
     captados" sao rejeitado, sem_planilha, erro_portal, erro_sharepoint.
     """
-    stmt = (
-        select(Licitacao.status_triagem, func.count(Licitacao.id))
-        .where(Licitacao.status_triagem.in_(NAO_CAPTADO_STATUSES))
-        .group_by(Licitacao.status_triagem)
+    stmt = select(Licitacao.status_triagem, func.count(Licitacao.id)).where(
+        Licitacao.status_triagem.in_(NAO_CAPTADO_STATUSES)
     )
+    if uf:
+        stmt = stmt.where(Licitacao.uf_sigla == uf.upper())
+    stmt = stmt.group_by(Licitacao.status_triagem)
     rows = (await db.execute(stmt)).all()
     por_status = {status: count for status, count in rows}
     return NaoCaptadosResponse(total=sum(por_status.values()), por_status=por_status)
 
 
-async def dashboard_eficiencia(db: AsyncSession) -> EficienciaResponse:
+async def dashboard_eficiencia(
+    db: AsyncSession, *, uf: str | None = None
+) -> EficienciaResponse:
     """Eficiencia do funil de triagem (Squad 1) + processamento (Squad 2).
 
     `tempo_medio_triagem_horas` e `pct_com_planilha` ficam `None` quando
-    nao ha dados suficientes (divisao por zero tratada).
+    nao ha dados suficientes (divisao por zero tratada). Quando `uf` e
+    informado, filtra as duas pernas do funil (triagem e planilha), nao
+    so uma delas.
     """
-    from app.modules.licitacoes.models import DecisaoTriagem  # Squad 1
+    uf_norm = uf.upper() if uf else None
 
-    total_triadas = (
-        await db.execute(select(func.count(func.distinct(DecisaoTriagem.licitacao_id))))
-    ).scalar_one()
+    total_triadas_stmt = select(
+        func.count(func.distinct(DecisaoTriagem.licitacao_id))
+    )
+    if uf_norm:
+        total_triadas_stmt = total_triadas_stmt.join(
+            Licitacao, Licitacao.id == DecisaoTriagem.licitacao_id
+        ).where(Licitacao.uf_sigla == uf_norm)
+    total_triadas = (await db.execute(total_triadas_stmt)).scalar_one()
 
     # tempo medio captacao -> primeira decisao (em horas)
     tempos_stmt = (
@@ -126,6 +150,8 @@ async def dashboard_eficiencia(db: AsyncSession) -> EficienciaResponse:
         .join(Licitacao, Licitacao.id == DecisaoTriagem.licitacao_id)
         .group_by(DecisaoTriagem.licitacao_id, Licitacao.created_at)
     )
+    if uf_norm:
+        tempos_stmt = tempos_stmt.where(Licitacao.uf_sigla == uf_norm)
     pares = (await db.execute(tempos_stmt)).all()
     deltas = [
         (row.decidido_em - row.captado_em).total_seconds() / 3600
@@ -134,24 +160,24 @@ async def dashboard_eficiencia(db: AsyncSession) -> EficienciaResponse:
     ]
     tempo_medio = round(sum(deltas) / len(deltas), 2) if deltas else None
 
-    completo = (
-        await db.execute(
-            select(func.count()).where(Licitacao.status_triagem == "completo")
-        )
-    ).scalar_one()
-    sem_planilha = (
-        await db.execute(
-            select(func.count()).where(Licitacao.status_triagem == "sem_planilha")
-        )
-    ).scalar_one()
+    completo_stmt = select(func.count()).where(Licitacao.status_triagem == "completo")
+    sem_planilha_stmt = select(func.count()).where(
+        Licitacao.status_triagem == "sem_planilha"
+    )
+    if uf_norm:
+        completo_stmt = completo_stmt.where(Licitacao.uf_sigla == uf_norm)
+        sem_planilha_stmt = sem_planilha_stmt.where(Licitacao.uf_sigla == uf_norm)
+    completo = (await db.execute(completo_stmt)).scalar_one()
+    sem_planilha = (await db.execute(sem_planilha_stmt)).scalar_one()
     processadas = completo + sem_planilha
     pct = round(100.0 * completo / processadas, 2) if processadas else None
 
-    falhas_stmt = (
-        select(Licitacao.status_triagem, func.count(Licitacao.id))
-        .where(Licitacao.status_triagem.in_(("erro_portal", "erro_sharepoint")))
-        .group_by(Licitacao.status_triagem)
+    falhas_stmt = select(Licitacao.status_triagem, func.count(Licitacao.id)).where(
+        Licitacao.status_triagem.in_(("erro_portal", "erro_sharepoint"))
     )
+    if uf_norm:
+        falhas_stmt = falhas_stmt.where(Licitacao.uf_sigla == uf_norm)
+    falhas_stmt = falhas_stmt.group_by(Licitacao.status_triagem)
     falhas = {status: count for status, count in (await db.execute(falhas_stmt)).all()}
 
     return EficienciaResponse(
