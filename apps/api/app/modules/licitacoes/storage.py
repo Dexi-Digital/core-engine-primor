@@ -30,6 +30,16 @@ class EditaisStorage(Protocol):
     async def delete(self, storage_path: str) -> None:  # pragma: no cover - not used by MVP router
         """Remove a stored file (best-effort)."""
 
+    async def ensure_project_folder(
+        self, *, licitacao_id: int, nome_pasta: str
+    ) -> tuple[str, str | None]:
+        """Garante a pasta do projeto e retorna `(caminho, link_ou_None)`.
+
+        `nome_pasta` e o slug humano de exibicao; o backend decide se
+        consegue usa-lo fisicamente (o layout atual mantem a pasta
+        fisica `{licitacao_id}` pela idempotencia do D.4).
+        """
+
 
 def _safe_filename(raw: str) -> str:
     """Normalize a user-supplied filename so it stays inside the target dir."""
@@ -80,3 +90,12 @@ class LocalStorage:
         path = Path(storage_path)
         if path.exists():
             path.unlink()
+
+    async def ensure_project_folder(
+        self, *, licitacao_id: int, nome_pasta: str
+    ) -> tuple[str, str | None]:
+        # `nome_pasta` e so exibicao no backend local -- a pasta fisica
+        # segue `{licitacao_id}`, onde o D.4 ja grava os anexos.
+        subdir = self._root / str(licitacao_id)
+        subdir.mkdir(parents=True, exist_ok=True)
+        return str(subdir), None

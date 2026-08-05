@@ -96,3 +96,21 @@ async def test_planilha_orcamentaria_defaults(db_session: AsyncSession) -> None:
     ).scalar_one()
     assert row.status_validacao == "automatica"
     assert row.principal is False
+
+
+@pytest.mark.asyncio
+async def test_local_storage_ensure_project_folder(tmp_path) -> None:
+    from app.modules.licitacoes.storage import LocalStorage
+
+    storage = LocalStorage(tmp_path)
+    caminho, link = await storage.ensure_project_folder(
+        licitacao_id=42, nome_pasta="mg-bh-prefeitura-002_2026"
+    )
+    assert caminho == str(tmp_path / "42")
+    assert (tmp_path / "42").is_dir()
+    assert link is None
+    # Idempotente: segunda chamada nao explode e retorna o mesmo caminho.
+    caminho2, _ = await storage.ensure_project_folder(
+        licitacao_id=42, nome_pasta="mg-bh-prefeitura-002_2026"
+    )
+    assert caminho2 == caminho

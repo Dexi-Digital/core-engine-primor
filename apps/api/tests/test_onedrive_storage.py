@@ -264,3 +264,22 @@ async def test_storage_save_network_error_becomes_oserror():
             )
     finally:
         await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_onedrive_storage_ensure_project_folder_retorna_weburl() -> None:
+    from app.integrations.onedrive.client import OneDriveMockClient
+    from app.integrations.onedrive.storage import OneDriveStorage
+
+    client = OneDriveMockClient()
+    storage = OneDriveStorage(client)
+    caminho, link = await storage.ensure_project_folder(
+        licitacao_id=42, nome_pasta="mg-bh-prefeitura-002_2026"
+    )
+    assert caminho.endswith("/42")
+    assert link is not None and link.startswith("https://onedrive.mock/folders/")
+    # Idempotente: mesmo id na segunda chamada.
+    caminho2, link2 = await storage.ensure_project_folder(
+        licitacao_id=42, nome_pasta="qualquer"
+    )
+    assert (caminho2, link2) == (caminho, link)

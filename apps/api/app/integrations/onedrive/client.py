@@ -283,6 +283,54 @@ class OneDriveClient(IntegrationClient):
         if r.status_code not in (200, 204):
             raise OneDriveError(f"delete {r.status_code}: {r.text[:200]}")
 
+    async def create_folder(self, *, relative_path: str) -> dict[str, Any]:
+        """Garante a pasta `{root_folder}/{relative_path}` no drive.
+
+        Idempotente: se ja existe, retorna o item existente. Retorna o
+        JSON do item (com `id` e `webUrl`).
+        """
+        path = self._full_path(relative_path)
+        get_url = f"{GRAPH_BASE}/drives/{self._drive_id}/items/root:/{path}"
+        try:
+            r = await self._client.get(get_url, headers=await self._auth_header())
+        except httpx.HTTPError as exc:
+            raise OneDriveError(f"get folder Graph falhou: {exc}") from exc
+        if r.status_code == 200:
+            return r.json()
+        if r.status_code != 404:
+            raise OneDriveError(
+                f"get folder Graph falhou ({r.status_code}): {r.text[:200]}"
+            )
+
+        parent, _, name = path.rpartition("/")
+        if parent:
+            create_url = (
+                f"{GRAPH_BASE}/drives/{self._drive_id}/items/root:/{parent}:/children"
+            )
+        else:
+            create_url = f"{GRAPH_BASE}/drives/{self._drive_id}/items/root/children"
+        body = {
+            "name": name,
+            "folder": {},
+            "@microsoft.graph.conflictBehavior": "fail",
+        }
+        try:
+            r = await self._client.post(
+                create_url, headers=await self._auth_header(), json=body
+            )
+        except httpx.HTTPError as exc:
+            raise OneDriveError(f"create folder Graph falhou: {exc}") from exc
+        if r.status_code in (200, 201):
+            return r.json()
+        if r.status_code == 409:
+            # Corrida com outra criacao: a pasta passou a existir. Rele.
+            r = await self._client.get(get_url, headers=await self._auth_header())
+            if r.status_code == 200:
+                return r.json()
+        raise OneDriveError(
+            f"create folder Graph falhou ({r.status_code}): {r.text[:200]}"
+        )
+
     async def list_folder(
         self, *, relative_path: str = "", recursive: bool = True
     ) -> list[dict[str, Any]]:
@@ -440,6 +488,27 @@ class OneDriveMockClient(IntegrationClient):
             raise OneDriveItemNotFound(f"item {item_id} nao encontrado (mock)")
         del self._store[item_id]
         self._meta.pop(item_id, None)
+
+    async def create_folder(self, *, relative_path: str) -> dict[str, Any]:
+        path = self._full_path(relative_path)
+        item_id = self._id_for(f"folder:{path}")
+        self._meta.setdefault(
+            item_id,
+            {
+                "path": path,
+                "name": relative_path.rsplit("/", 1)[-1],
+                "size": 0,
+                "last_modified": "2026-04-23T00:00:00Z",
+                "folder": True,
+            },
+        )
+        return {
+            "id": item_id,
+            "name": relative_path.rsplit("/", 1)[-1],
+            "webUrl": f"https://onedrive.mock/folders/{item_id}",
+            "folder": {},
+            "source": "onedrive_mock",
+        }
 
     def seed(
         self,
