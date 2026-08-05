@@ -13,12 +13,19 @@ import json
 import logging
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.models import AuditLog
 from app.core.config import get_settings
-from app.modules.licitacoes.models import DecisaoTriagem, Licitacao
+from app.modules.licitacoes.models import (
+    DecisaoTriagem,
+    Edital,
+    Licitacao,
+    PastaProjeto,
+    PlanilhaOrcamentaria,
+)
+from app.modules.licitacoes.schemas import TriagemRow
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +60,10 @@ DECISAO_APROVADO = "aprovado"
 DECISAO_REJEITADO = "rejeitado"
 DECISAO_OBSERVACAO = "observacao"
 
-# De onde se pode ir para onde. `rejeitado` e `completo` sao terminais;
-# os `erro_*` e `sem_planilha` permitem reprocessar (Squad 2 re-dispara).
+# De onde se pode ir para onde. So `rejeitado` e terminal; os `erro_*`
+# e `sem_planilha` permitem reprocessar (Squad 2 re-dispara), e `completo`
+# tambem permite reprocesso (re-identificacao de planilha apos marcacao
+# manual da analista).
 TRANSICOES_VALIDAS: dict[str, frozenset[str]] = {
     STATUS_NOVO_CAPTADO: frozenset(
         {STATUS_EM_ANALISE, STATUS_APROVADO, STATUS_REJEITADO}
@@ -77,7 +86,7 @@ TRANSICOES_VALIDAS: dict[str, frozenset[str]] = {
     STATUS_ERRO_SHAREPOINT: frozenset({STATUS_PROCESSANDO_ANEXOS}),
     STATUS_SEM_PLANILHA: frozenset({STATUS_PROCESSANDO_ANEXOS}),
     STATUS_REJEITADO: frozenset(),
-    STATUS_COMPLETO: frozenset(),
+    STATUS_COMPLETO: frozenset({STATUS_PROCESSANDO_ANEXOS}),
 }
 
 
@@ -313,3 +322,124 @@ async def listar_decisoes(
         .order_by(DecisaoTriagem.created_at.desc(), DecisaoTriagem.id.desc())
     )
     return list(rows)
+
+
+# --- Aba de Triagem consolidada (Captador Squad 2) --------------------------
+#
+# Uma query paginada sobre `licitacoes` + 4 lookups em lote (edital, pasta,
+# planilha principal, ultima observacao) -- sem N+1 por linha. Criterio de
+# UAT do cliente: os links devem abrir pasta e planilha diretamente, sem
+# navegacao manual.
+
+
+def _link_portal(lic: Licitacao) -> str | None:
+    if lic.orgao_cnpj and lic.ano_compra and lic.sequencial_compra:
+        return (
+            "https://pncp.gov.br/app/editais/"
+            f"{lic.orgao_cnpj}/{lic.ano_compra}/{lic.sequencial_compra}"
+        )
+    return None
+
+
+async def montar_triagem(
+    db: AsyncSession,
+    *,
+    status: str | None = None,
+    uf: str | None = None,
+    page: int = 1,
+    page_size: int = 20,
+) -> tuple[list[TriagemRow], int]:
+    base = select(Licitacao)
+    if status:
+        base = base.where(Licitacao.status_triagem == status)
+    if uf:
+        base = base.where(Licitacao.uf_sigla == uf.upper())
+
+    total = (
+        await db.execute(select(func.count()).select_from(base.subquery()))
+    ).scalar_one()
+
+    licitacoes = list(
+        (
+            await db.execute(
+                base.order_by(
+                    Licitacao.data_publicacao_pncp.desc().nullslast(),
+                    Licitacao.id.desc(),
+                )
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not licitacoes:
+        return [], int(total)
+
+    ids = [lic.id for lic in licitacoes]
+
+    editais = {
+        e.licitacao_id: e
+        for e in (
+            await db.execute(select(Edital).where(Edital.licitacao_id.in_(ids)))
+        ).scalars()
+    }
+    pastas = {
+        p.licitacao_id: p
+        for p in (
+            await db.execute(
+                select(PastaProjeto).where(PastaProjeto.licitacao_id.in_(ids))
+            )
+        ).scalars()
+    }
+    principais = {
+        p.licitacao_id: p
+        for p in (
+            await db.execute(
+                select(PlanilhaOrcamentaria).where(
+                    PlanilhaOrcamentaria.licitacao_id.in_(ids),
+                    PlanilhaOrcamentaria.principal,
+                )
+            )
+        ).scalars()
+    }
+    # Ultima observacao nao-nula por licitacao (id mais alto = mais recente).
+    observacoes: dict[int, str] = {}
+    decisoes = (
+        await db.execute(
+            select(DecisaoTriagem)
+            .where(
+                DecisaoTriagem.licitacao_id.in_(ids),
+                DecisaoTriagem.observacao.is_not(None),
+            )
+            .order_by(DecisaoTriagem.id)
+        )
+    ).scalars()
+    for d in decisoes:
+        observacoes[d.licitacao_id] = d.observacao
+
+    rows: list[TriagemRow] = []
+    for lic in licitacoes:
+        edital = editais.get(lic.id)
+        pasta = pastas.get(lic.id)
+        planilha = principais.get(lic.id)
+        rows.append(
+            TriagemRow(
+                licitacao_id=lic.id,
+                status_triagem=lic.status_triagem,
+                uf_sigla=lic.uf_sigla,
+                municipio_nome=lic.municipio_nome,
+                orgao_razao_social=lic.orgao_razao_social,
+                objeto_compra=lic.objeto_compra,
+                modalidade_nome=lic.modalidade_nome,
+                valor_total_estimado=lic.valor_total_estimado,
+                data_publicacao_pncp=lic.data_publicacao_pncp,
+                link_portal=_link_portal(lic),
+                link_pasta=pasta.link_pasta if pasta else None,
+                link_planilha=planilha.link if planilha else None,
+                planilha_nome=planilha.nome_arquivo if planilha else None,
+                anexos_count=edital.anexos_count if edital else 0,
+                observacao=observacoes.get(lic.id),
+            )
+        )
+    return rows, int(total)

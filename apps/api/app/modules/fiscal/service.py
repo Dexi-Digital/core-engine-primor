@@ -4,10 +4,12 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time, timedelta
+from decimal import Decimal
 from typing import Any
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import desc, or_, select
+from sqlalchemy import delete, desc, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,11 +23,22 @@ from app.integrations.dominio.client import (
 from app.modules.fiscal.models import (
     STATUS_ENVIO_VALIDOS,
     DocumentoFiscal,
+    DocumentoFiscalItem,
 )
-from app.modules.fiscal.parser import FiscalParseError, parse_xml
+from app.modules.fiscal.parser import (
+    FiscalParseError,
+    parse_nfe_detalhes,
+    parse_xml,
+)
 from app.modules.licitacoes.storage import EditaisStorage
+from app.modules.obras.models import Obra
 
 logger = logging.getLogger(__name__)
+
+# Filtros de "emitida_de"/"emitida_ate" usam o fuso local (nao UTC): uma
+# nota emitida as 21h-23h59 -03:00 ainda cai no dia UTC seguinte, o que
+# quebraria fechamentos de mes se comparassemos contra meia-noite UTC.
+_TZ_SP = ZoneInfo("America/Sao_Paulo")
 
 
 # Igual ao padrao do dp_sesmt: AGENTS.md exige que toda mutacao de
@@ -89,6 +102,13 @@ async def import_xml(
     """
     parsed = parse_xml(xml_bytes)
 
+    # 2o passe: impostos/UF/itens (so NF-e/NFC-e; None para os demais).
+    detalhes = (
+        parse_nfe_detalhes(xml_bytes)
+        if parsed.tipo in {"nfe", "nfce"}
+        else None
+    )
+
     # Idempotencia ANTES de gravar no storage. Evita arquivo orfao.
     existing = await _find_duplicate(
         db,
@@ -136,6 +156,12 @@ async def import_xml(
         destinatario_nome=parsed.destinatario_nome,
         valor_total=parsed.valor_total,
         data_emissao=parsed.data_emissao,
+        uf=detalhes.uf if detalhes else None,
+        chave_dv_valida=detalhes.chave_dv_valida if detalhes else None,
+        valor_icms=detalhes.valor_icms if detalhes else None,
+        valor_ipi=detalhes.valor_ipi if detalhes else None,
+        valor_pis=detalhes.valor_pis if detalhes else None,
+        valor_cofins=detalhes.valor_cofins if detalhes else None,
         xml_path=storage_path,
         xml_hash=parsed.xml_hash,
         status_envio="pendente",
@@ -144,6 +170,23 @@ async def import_xml(
     )
     db.add(doc)
     try:
+        await db.flush()  # materializa doc.id para os itens
+        if detalhes:
+            for item in detalhes.itens:
+                db.add(
+                    DocumentoFiscalItem(
+                        documento_id=doc.id,
+                        ordem=item.ordem,
+                        codigo=item.codigo,
+                        descricao=item.descricao,
+                        ncm=item.ncm,
+                        cfop=item.cfop,
+                        unidade=item.unidade,
+                        quantidade=item.quantidade,
+                        valor_unitario=item.valor_unitario,
+                        valor_total=item.valor_total,
+                    )
+                )
         await db.commit()
     except IntegrityError as exc:
         # Race entre verificacao e commit -- duplicado paralelo. Limpa
@@ -175,6 +218,7 @@ async def import_xml(
             "emitente_cnpj": doc.emitente_cnpj,
             "valor_total": doc.valor_total,
             "source": doc.source,
+            "itens_count": len(detalhes.itens) if detalhes else 0,
         },
     )
     return doc
@@ -205,6 +249,86 @@ async def get_documento(
     return await db.get(DocumentoFiscal, doc_id)
 
 
+async def list_itens(
+    db: AsyncSession, documento_id: int
+) -> Sequence[DocumentoFiscalItem]:
+    stmt = (
+        select(DocumentoFiscalItem)
+        .where(DocumentoFiscalItem.documento_id == documento_id)
+        .order_by(DocumentoFiscalItem.ordem)
+    )
+    result = await db.scalars(stmt)
+    return result.all()
+
+
+async def reprocessar_documento(
+    db: AsyncSession,
+    doc_id: int,
+    *,
+    storage: EditaisStorage,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
+) -> DocumentoFiscal | None:
+    """Re-executa o 2o passe (parse_nfe_detalhes) sobre o XML bruto do
+    storage. Uso: enriquecer documentos importados antes da feature de
+    detalhes. Idempotente: apaga e reinsere os itens.
+
+    Levanta ValueError para tipos sem 2o passe; FileNotFoundError/OSError
+    sobem se o XML sumiu do storage (o router converte em HTTP).
+    """
+    doc = await get_documento(db, doc_id)
+    if doc is None:
+        return None
+    if doc.tipo not in {"nfe", "nfce"}:
+        raise ValueError(
+            f"reprocessamento so se aplica a nfe/nfce (tipo={doc.tipo!r})"
+        )
+    xml_bytes = await storage.read(doc.xml_path)
+    detalhes = parse_nfe_detalhes(xml_bytes)
+    if detalhes is None:
+        raise ValueError("XML no storage nao e mais uma NF-e/NFC-e valida")
+
+    doc.uf = detalhes.uf
+    doc.chave_dv_valida = detalhes.chave_dv_valida
+    doc.valor_icms = detalhes.valor_icms
+    doc.valor_ipi = detalhes.valor_ipi
+    doc.valor_pis = detalhes.valor_pis
+    doc.valor_cofins = detalhes.valor_cofins
+    await db.execute(
+        delete(DocumentoFiscalItem).where(
+            DocumentoFiscalItem.documento_id == doc.id
+        )
+    )
+    for item in detalhes.itens:
+        db.add(
+            DocumentoFiscalItem(
+                documento_id=doc.id,
+                ordem=item.ordem,
+                codigo=item.codigo,
+                descricao=item.descricao,
+                ncm=item.ncm,
+                cfop=item.cfop,
+                unidade=item.unidade,
+                quantidade=item.quantidade,
+                valor_unitario=item.valor_unitario,
+                valor_total=item.valor_total,
+            )
+        )
+    await db.commit()
+    await db.refresh(doc)
+    await _record_audit(
+        db,
+        action="reprocessar",
+        resource_id=doc.id,
+        actor=actor,
+        metadata={
+            "uf": doc.uf,
+            "chave_dv_valida": doc.chave_dv_valida,
+            "itens_count": len(detalhes.itens),
+        },
+    )
+    return doc
+
+
 async def list_documentos(
     db: AsyncSession,
     *,
@@ -213,6 +337,11 @@ async def list_documentos(
     emitente_cnpj: str | None = None,
     destinatario_cnpj: str | None = None,
     search: str | None = None,
+    emitida_de: date | None = None,
+    emitida_ate: date | None = None,
+    obra_id: int | None = None,
+    valor_min: Decimal | None = None,
+    valor_max: Decimal | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> Sequence[DocumentoFiscal]:
@@ -235,11 +364,34 @@ async def list_documentos(
                 DocumentoFiscal.destinatario_nome.ilike(like),
             )
         )
+    if emitida_de is not None:
+        stmt = stmt.where(
+            DocumentoFiscal.data_emissao
+            >= datetime.combine(emitida_de, time.min, tzinfo=_TZ_SP)
+        )
+    if emitida_ate is not None:
+        # limite exclusivo no dia seguinte, na mesma tz local (-03:00)
+        stmt = stmt.where(
+            DocumentoFiscal.data_emissao
+            < datetime.combine(
+                emitida_ate + timedelta(days=1), time.min, tzinfo=_TZ_SP
+            )
+        )
+    if obra_id is not None:
+        stmt = stmt.where(DocumentoFiscal.obra_id == obra_id)
+    if valor_min is not None:
+        stmt = stmt.where(DocumentoFiscal.valor_total >= valor_min)
+    if valor_max is not None:
+        stmt = stmt.where(DocumentoFiscal.valor_total <= valor_max)
     stmt = stmt.order_by(desc(DocumentoFiscal.created_at)).offset(offset).limit(
         limit
     )
     result = await db.scalars(stmt)
     return result.all()
+
+
+# Distingue "nao enviou obra_id" de "enviou obra_id=null" (desvincular).
+_UNSET: Any = object()
 
 
 async def update_documento(
@@ -248,6 +400,7 @@ async def update_documento(
     *,
     observacoes: str | None = None,
     status_envio: str | None = None,
+    obra_id: Any = _UNSET,
     actor: str = _AUDIT_ACTOR_PLACEHOLDER,
 ) -> DocumentoFiscal | None:
     doc = await get_documento(db, doc_id)
@@ -271,6 +424,13 @@ async def update_documento(
             "to": status_envio,
         }
         doc.status_envio = status_envio
+    if obra_id is not _UNSET and obra_id != doc.obra_id:
+        if obra_id is not None:
+            obra = await db.get(Obra, obra_id)
+            if obra is None:
+                raise ValueError(f"obra {obra_id} nao encontrada")
+        changed["obra_id"] = {"from": doc.obra_id, "to": obra_id}
+        doc.obra_id = obra_id
     if not changed:
         return doc
     await db.commit()
@@ -499,6 +659,8 @@ __all__ = [
     "get_dominio_singleton",
     "import_xml",
     "list_documentos",
+    "list_itens",
+    "reprocessar_documento",
     "reset_dominio_singleton",
     "update_documento",
 ]

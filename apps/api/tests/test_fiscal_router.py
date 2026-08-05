@@ -3,23 +3,27 @@
 from __future__ import annotations
 
 import io
+from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.models import AuditLog
 from app.main import app
-from app.modules.fiscal.models import DocumentoFiscal
+from app.modules.fiscal.models import DocumentoFiscal, DocumentoFiscalItem
 from app.modules.fiscal.router import get_dominio_dep
 from app.modules.fiscal.service import reset_dominio_singleton
+from app.modules.obras.models import Obra
 from tests.fixtures.fiscal.samples import (
     BAIXA_XML,
     CFE_XML,
     CTE_XML,
     NFCE_65_XML,
     NFE_44_XML,
+    NFE_BOUNDARY_22H_XML,
+    NFE_DETALHADA_XML,
 )
 
 
@@ -369,3 +373,323 @@ async def test_fiscal_storage_isolado_do_editais_storage(
     # O subdir fiscal precisa aparecer no path final; sem o fix o path
     # seria so `{editais_storage_path}/{bucket}/...`.
     assert settings.fiscal_storage_subdir in doc.xml_path
+
+
+# ---------------------------------------------------------------------------
+# Task 3 -- persistencia de detalhes NF-e (colunas novas + tabela de itens)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_modelo_persiste_detalhes_e_itens(db_session: AsyncSession):
+    doc = DocumentoFiscal(
+        tipo="nfe",
+        chave_acesso="35240414200166000187550010000543211000000008",
+        xml_path="fiscal/1/teste.xml",
+        xml_hash="deadbeef" * 8,
+        status_envio="pendente",
+        retry_count=0,
+        uf="SP",
+        chave_dv_valida=True,
+        valor_icms=Decimal("3000.00"),
+        valor_ipi=Decimal("250.00"),
+        valor_pis=Decimal("165.00"),
+        valor_cofins=Decimal("760.00"),
+    )
+    db_session.add(doc)
+    await db_session.flush()
+    db_session.add(
+        DocumentoFiscalItem(
+            documento_id=doc.id,
+            ordem=1,
+            codigo="CIM-CP2",
+            descricao="Cimento CP-II 50kg",
+            ncm="25232910",
+            cfop="5102",
+            unidade="SC",
+            quantidade=Decimal("100.0000"),
+            valor_unitario=Decimal("200.00"),
+            valor_total=Decimal("20000.00"),
+        )
+    )
+    await db_session.commit()
+
+    row = await db_session.scalar(
+        select(DocumentoFiscalItem).where(
+            DocumentoFiscalItem.documento_id == doc.id
+        )
+    )
+    assert row is not None
+    assert row.ncm == "25232910"
+    assert doc.uf == "SP"
+    assert doc.chave_dv_valida is True
+    assert doc.obra_id is None
+
+
+@pytest.mark.asyncio
+async def test_upload_nfe_detalhada_persiste_impostos_e_itens(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+):
+    r = await api_client.post(
+        "/api/v1/fiscal/documentos",
+        files=_upload_payload(NFE_DETALHADA_XML, "nfe-detalhada.xml"),
+        headers=auth_headers,
+    )
+    assert r.status_code == 201, r.text
+    data = r.json()
+    assert data["uf"] == "SP"
+    assert data["chave_dv_valida"] is True
+    assert data["valor_icms"] == "3000.00"
+    assert data["valor_cofins"] == "760.00"
+
+    detail = await api_client.get(
+        f"/api/v1/fiscal/documentos/{data['id']}", headers=auth_headers
+    )
+    assert detail.status_code == 200
+    body = detail.json()
+    assert len(body["itens"]) == 2
+    assert body["itens"][0]["ncm"] == "25232910"
+    assert body["itens"][0]["cfop"] == "5102"
+    assert body["itens"][1]["codigo"] == "ACO-CA50"
+
+
+@pytest.mark.asyncio
+async def test_upload_cte_nao_gera_itens_nem_detalhes(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+):
+    """Tipos != nfe/nfce seguem exatamente como antes (2o passe e no-op)."""
+    r = await api_client.post(
+        "/api/v1/fiscal/documentos",
+        files=_upload_payload(CTE_XML, "cte.xml"),
+        headers=auth_headers,
+    )
+    assert r.status_code == 201
+    data = r.json()
+    assert data["uf"] is None
+    assert data["valor_icms"] is None
+    detail = await api_client.get(
+        f"/api/v1/fiscal/documentos/{data['id']}", headers=auth_headers
+    )
+    assert detail.json()["itens"] == []
+
+
+@pytest.mark.asyncio
+async def test_filtros_periodo_valor_e_obra(
+    api_client: AsyncClient,
+    auth_headers: dict[str, str],
+    db_session: AsyncSession,
+):
+    """NFE_44 (2024-04-15, 15750.50) e NFE_DETALHADA (2024-04-22, 25000.00):
+    filtros de periodo, valor e obra isolam cada uma."""
+    r1 = await api_client.post(
+        "/api/v1/fiscal/documentos",
+        files=_upload_payload(NFE_44_XML, "a.xml"),
+        headers=auth_headers,
+    )
+    r2 = await api_client.post(
+        "/api/v1/fiscal/documentos",
+        files=_upload_payload(NFE_DETALHADA_XML, "b.xml"),
+        headers=auth_headers,
+    )
+    assert r1.status_code == 201 and r2.status_code == 201
+    id1, id2 = r1.json()["id"], r2.json()["id"]
+
+    # Periodo: so a detalhada foi emitida a partir de 2024-04-20.
+    r = await api_client.get(
+        "/api/v1/fiscal/documentos",
+        params={"emitida_de": "2024-04-20"},
+        headers=auth_headers,
+    )
+    ids = [d["id"] for d in r.json()]
+    assert id2 in ids and id1 not in ids
+
+    # Periodo com teto: so a NFE_44 ate 2024-04-18.
+    r = await api_client.get(
+        "/api/v1/fiscal/documentos",
+        params={"emitida_ate": "2024-04-18"},
+        headers=auth_headers,
+    )
+    ids = [d["id"] for d in r.json()]
+    assert id1 in ids and id2 not in ids
+
+    # Valor minimo: so a detalhada passa de 20000.
+    r = await api_client.get(
+        "/api/v1/fiscal/documentos",
+        params={"valor_min": "20000"},
+        headers=auth_headers,
+    )
+    ids = [d["id"] for d in r.json()]
+    assert id2 in ids and id1 not in ids
+
+    # Obra: cria uma obra, vincula so a detalhada, filtra por ela.
+    obra = Obra(codigo="OB-100", nome="Rodovia Teste")
+    db_session.add(obra)
+    await db_session.commit()
+
+    patch = await api_client.patch(
+        f"/api/v1/fiscal/documentos/{id2}",
+        json={"obra_id": obra.id},
+        headers=auth_headers,
+    )
+    assert patch.status_code == 200
+    assert patch.json()["obra_id"] == obra.id
+
+    r = await api_client.get(
+        "/api/v1/fiscal/documentos",
+        params={"obra_id": obra.id},
+        headers=auth_headers,
+    )
+    ids = [d["id"] for d in r.json()]
+    assert ids == [id2]
+
+
+@pytest.mark.asyncio
+async def test_filtro_periodo_usa_fuso_local_nao_utc(
+    api_client: AsyncClient,
+    auth_headers: dict[str, str],
+):
+    """Nota emitida 2024-04-30T22:00:00-03:00 (=2024-05-01T01:00:00 UTC).
+    Com boundary em UTC ela vazaria para o mes seguinte; com boundary em
+    America/Sao_Paulo ela tem que ficar em abril."""
+    r = await api_client.post(
+        "/api/v1/fiscal/documentos",
+        files=_upload_payload(NFE_BOUNDARY_22H_XML, "boundary.xml"),
+        headers=auth_headers,
+    )
+    assert r.status_code == 201
+    doc_id = r.json()["id"]
+
+    r_ate = await api_client.get(
+        "/api/v1/fiscal/documentos",
+        params={"emitida_ate": "2024-04-30"},
+        headers=auth_headers,
+    )
+    assert doc_id in [d["id"] for d in r_ate.json()]
+
+    r_de = await api_client.get(
+        "/api/v1/fiscal/documentos",
+        params={"emitida_de": "2024-05-01"},
+        headers=auth_headers,
+    )
+    assert doc_id not in [d["id"] for d in r_de.json()]
+
+
+@pytest.mark.asyncio
+async def test_patch_obra_inexistente_retorna_422(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+):
+    r1 = await api_client.post(
+        "/api/v1/fiscal/documentos",
+        files=_upload_payload(NFE_44_XML, "a.xml"),
+        headers=auth_headers,
+    )
+    r = await api_client.patch(
+        f"/api/v1/fiscal/documentos/{r1.json()['id']}",
+        json={"obra_id": 999999},
+        headers=auth_headers,
+    )
+    assert r.status_code == 422
+    assert "obra" in r.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_patch_obra_null_desvincula(
+    api_client: AsyncClient,
+    auth_headers: dict[str, str],
+    db_session: AsyncSession,
+):
+    obra = Obra(codigo="OB-101", nome="Ponte Teste")
+    db_session.add(obra)
+    await db_session.commit()
+    r1 = await api_client.post(
+        "/api/v1/fiscal/documentos",
+        files=_upload_payload(NFE_44_XML, "a.xml"),
+        headers=auth_headers,
+    )
+    doc_id = r1.json()["id"]
+    await api_client.patch(
+        f"/api/v1/fiscal/documentos/{doc_id}",
+        json={"obra_id": obra.id},
+        headers=auth_headers,
+    )
+    r = await api_client.patch(
+        f"/api/v1/fiscal/documentos/{doc_id}",
+        json={"obra_id": None},
+        headers=auth_headers,
+    )
+    assert r.status_code == 200
+    assert r.json()["obra_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_reprocessar_preenche_detalhes_e_e_idempotente(
+    api_client: AsyncClient,
+    auth_headers: dict[str, str],
+    db_session: AsyncSession,
+):
+    """Simula documento importado ANTES da feature: zera os campos novos
+    direto no banco e reprocessa -- os detalhes voltam do XML no storage.
+    Segunda chamada nao duplica itens (delete + re-insert)."""
+    r = await api_client.post(
+        "/api/v1/fiscal/documentos",
+        files=_upload_payload(NFE_DETALHADA_XML, "nfe.xml"),
+        headers=auth_headers,
+    )
+    doc_id = r.json()["id"]
+
+    # "Documento legado": apaga o resultado do 2o passe.
+    doc = await db_session.get(DocumentoFiscal, doc_id)
+    doc.uf = None
+    doc.valor_icms = None
+    doc.chave_dv_valida = None
+    await db_session.execute(
+        delete(DocumentoFiscalItem).where(
+            DocumentoFiscalItem.documento_id == doc_id
+        )
+    )
+    await db_session.commit()
+
+    r = await api_client.post(
+        f"/api/v1/fiscal/documentos/{doc_id}/reprocessar",
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["uf"] == "SP"
+    assert body["valor_icms"] == "3000.00"
+    assert len(body["itens"]) == 2
+
+    # Idempotencia: reprocessar de novo mantem 2 itens (nao 4).
+    r = await api_client.post(
+        f"/api/v1/fiscal/documentos/{doc_id}/reprocessar",
+        headers=auth_headers,
+    )
+    assert len(r.json()["itens"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_reprocessar_tipo_nao_suportado_retorna_422(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+):
+    r = await api_client.post(
+        "/api/v1/fiscal/documentos",
+        files=_upload_payload(CTE_XML, "cte.xml"),
+        headers=auth_headers,
+    )
+    doc_id = r.json()["id"]
+    r = await api_client.post(
+        f"/api/v1/fiscal/documentos/{doc_id}/reprocessar",
+        headers=auth_headers,
+    )
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_reprocessar_documento_inexistente_retorna_404(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+):
+    r = await api_client.post(
+        "/api/v1/fiscal/documentos/999999/reprocessar",
+        headers=auth_headers,
+    )
+    assert r.status_code == 404

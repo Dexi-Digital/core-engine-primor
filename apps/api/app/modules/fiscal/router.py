@@ -7,10 +7,13 @@ Endpoints:
   - PATCH  /documentos/{id}             update parcial (observacoes/status)
   - DELETE /documentos/{id}             remove
   - POST   /documentos/{id}/enviar-dominio   dispara envio sincrono
+  - POST   /documentos/{id}/reprocessar      reprocessa XML de docs legados
 """
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -33,7 +36,9 @@ from app.modules.auth.models import User
 from app.modules.dp_sesmt.schemas import ModuleStatus
 from app.modules.fiscal.parser import FiscalParseError
 from app.modules.fiscal.schemas import (
+    DocumentoFiscalDetail,
     DocumentoFiscalEnvioResponse,
+    DocumentoFiscalItemRead,
     DocumentoFiscalRead,
     DocumentoFiscalUpdate,
 )
@@ -45,6 +50,8 @@ from app.modules.fiscal.service import (
     get_dominio_singleton,
     import_xml,
     list_documentos,
+    list_itens,
+    reprocessar_documento,
     update_documento,
 )
 from app.modules.licitacoes.storage import EditaisStorage, LocalStorage
@@ -156,6 +163,11 @@ async def list_endpoint(
     emitente_cnpj: str | None = Query(default=None, max_length=20),
     destinatario_cnpj: str | None = Query(default=None, max_length=20),
     search: str | None = Query(default=None, max_length=200),
+    emitida_de: date | None = Query(default=None),
+    emitida_ate: date | None = Query(default=None),
+    obra_id: int | None = Query(default=None, ge=1),
+    valor_min: Decimal | None = Query(default=None, ge=0),
+    valor_max: Decimal | None = Query(default=None, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -167,21 +179,31 @@ async def list_endpoint(
         emitente_cnpj=emitente_cnpj,
         destinatario_cnpj=destinatario_cnpj,
         search=search,
+        emitida_de=emitida_de,
+        emitida_ate=emitida_ate,
+        obra_id=obra_id,
+        valor_min=valor_min,
+        valor_max=valor_max,
         limit=limit,
         offset=offset,
     )
     return [DocumentoFiscalRead.model_validate(i) for i in items]
 
 
-@router.get("/documentos/{doc_id}", response_model=DocumentoFiscalRead)
+@router.get("/documentos/{doc_id}", response_model=DocumentoFiscalDetail)
 async def get_endpoint(
     doc_id: int,
     db: AsyncSession = Depends(get_db),
-) -> DocumentoFiscalRead:
+) -> DocumentoFiscalDetail:
     doc = await get_documento(db, doc_id)
     if doc is None:
         raise HTTPException(status_code=404, detail="documento nao encontrado")
-    return DocumentoFiscalRead.model_validate(doc)
+    itens = await list_itens(db, doc_id)
+    base = DocumentoFiscalRead.model_validate(doc).model_dump()
+    return DocumentoFiscalDetail(
+        **base,
+        itens=[DocumentoFiscalItemRead.model_validate(i) for i in itens],
+    )
 
 
 @router.patch("/documentos/{doc_id}", response_model=DocumentoFiscalRead)
@@ -192,18 +214,54 @@ async def update_endpoint(
     current_user: User = Depends(get_current_user),
 ) -> DocumentoFiscalRead:
     try:
+        kwargs: dict[str, Any] = {}
+        if "obra_id" in payload.model_fields_set:
+            kwargs["obra_id"] = payload.obra_id
         doc = await update_documento(
             db,
             doc_id,
             observacoes=payload.observacoes,
             status_envio=payload.status_envio,
             actor=current_user.email,
+            **kwargs,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if doc is None:
         raise HTTPException(status_code=404, detail="documento nao encontrado")
     return DocumentoFiscalRead.model_validate(doc)
+
+
+@router.post(
+    "/documentos/{doc_id}/reprocessar",
+    response_model=DocumentoFiscalDetail,
+)
+async def reprocessar_endpoint(
+    doc_id: int,
+    db: AsyncSession = Depends(get_db),
+    storage: EditaisStorage = Depends(get_fiscal_storage),
+    current_user: User = Depends(get_current_user),
+) -> DocumentoFiscalDetail:
+    """Re-extrai impostos/UF/itens do XML bruto (docs pre-feature)."""
+    try:
+        doc = await reprocessar_documento(
+            db, doc_id, storage=storage, actor=current_user.email
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except (FileNotFoundError, OSError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"XML nao encontrado no storage: {exc}",
+        ) from exc
+    if doc is None:
+        raise HTTPException(status_code=404, detail="documento nao encontrado")
+    itens = await list_itens(db, doc_id)
+    base = DocumentoFiscalRead.model_validate(doc).model_dump()
+    return DocumentoFiscalDetail(
+        **base,
+        itens=[DocumentoFiscalItemRead.model_validate(i) for i in itens],
+    )
 
 
 @router.delete("/documentos/{doc_id}", status_code=204)

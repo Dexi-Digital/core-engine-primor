@@ -163,6 +163,31 @@ class Settings(BaseSettings):
     # obra->projeto fica para quando o Modulo A tiver obras na OnSafety.
     onsafety_projeto_id: str | None = Field(default=None)
 
+    # Tangerino/Solides (ponto eletronico -- apropriacao de mao de obra
+    # e onboarding, Modulo A/B). Sem api key o adapter cai em mock
+    # deterministico -- mesmo padrao OnSafety/Dominio. Auth e apiKey
+    # crua no header Authorization (spec v2/api-docs, 2026-08-04).
+    tangerino_api_key: str | None = Field(default=None)
+    tangerino_base_url: str = Field(
+        default="https://employer.tangerino.com.br"
+    )
+
+    # Onvio (Dominio/Thomson Reuters -- envio de NF-e ao contador,
+    # Modulo C). Sem qualquer uma das 3 credenciais o adapter cai em
+    # mock deterministico. `onvio_audience` e fixo da Thomson Reuters
+    # (script de referencia da comunidade).
+    onvio_client_id: str | None = Field(default=None)
+    onvio_client_secret: str | None = Field(default=None)
+    onvio_integration_key: str | None = Field(default=None)
+    onvio_audience: str = Field(
+        default="409f91f6-dc17-44c8-a5d8-e0a1bafd8b67"
+    )
+    # Guard-rail: enviar NF-e e ESCRITA no sistema contabil de producao
+    # do escritorio parceiro (nao ha sandbox conhecido). Envio real so
+    # com opt-in explicito; mock nao e afetado. Mesmo espirito do
+    # ONSAFETY_ALLOW_PROD_WRITE.
+    onvio_allow_send: bool = Field(default=False)
+
 
 @lru_cache
 def get_settings() -> Settings:
