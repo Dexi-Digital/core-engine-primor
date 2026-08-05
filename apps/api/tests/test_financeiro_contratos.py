@@ -289,3 +289,48 @@ async def test_status_endpoint_implemented(api_client: AsyncClient) -> None:
     resp = await api_client.get("/api/v1/financeiro/status")
     assert resp.status_code == 200
     assert resp.json()["implemented"] is True
+
+
+@pytest.mark.asyncio
+async def test_upload_arquivo_contrato(
+    api_client: AsyncClient,
+    auth_headers: dict[str, str],
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Forca LocalStorage numa raiz temporaria
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
+    monkeypatch.setenv("EDITAIS_STORAGE_PATH", str(tmp_path / "editais"))
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+
+    resp = await api_client.post(
+        "/api/v1/financeiro/contratos",
+        json={
+            "titulo": "Com anexo", "contraparte_nome": "Z", "tipo": "cliente",
+            "data_inicio": "2026-01-01",
+        },
+        headers=auth_headers,
+    )
+    contrato_id = resp.json()["id"]
+
+    resp = await api_client.post(
+        f"/api/v1/financeiro/contratos/{contrato_id}/arquivo",
+        files={"arquivo": ("contrato.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["arquivo_path"] is not None
+    assert "contratos" in body["arquivo_path"]
+
+    # 404 para contrato inexistente
+    resp = await api_client.post(
+        "/api/v1/financeiro/contratos/99999/arquivo",
+        files={"arquivo": ("x.pdf", b"%PDF-1.4", "application/pdf")},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 404
+
+    get_settings.cache_clear()

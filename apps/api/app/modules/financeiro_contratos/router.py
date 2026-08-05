@@ -9,12 +9,18 @@ de `/contratos/{contrato_id}` -- mesmo racional do D.6.
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import date as _date
+from pathlib import Path
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.db import get_db
+from app.integrations.onedrive.client import build_onedrive_client
+from app.integrations.onedrive.storage import OneDriveStorage
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.dp_sesmt.schemas import ModuleStatus
@@ -29,10 +35,38 @@ from app.modules.financeiro_contratos.service import (
     delete_contrato,
     get_contrato,
     list_contratos,
+    set_arquivo_contrato,
     update_contrato,
 )
+from app.modules.licitacoes.storage import EditaisStorage, LocalStorage
 
 router = APIRouter()
+
+
+async def get_contratos_storage() -> AsyncIterator[EditaisStorage]:
+    """Storage dedicado para PDFs de contrato.
+
+    Mesmo backend do storage de editais, raiz `contratos_storage_subdir`
+    separada. Async generator para garantir aclose() do client OneDrive
+    no fim da request (padrao get_fiscal_storage).
+    """
+    settings = get_settings()
+    backend = (settings.storage_backend or "local").lower()
+    if backend == "onedrive":
+        client = build_onedrive_client(
+            tenant_id=settings.ms_graph_tenant_id,
+            client_id=settings.ms_graph_client_id,
+            client_secret=settings.ms_graph_client_secret,
+            drive_id=settings.ms_graph_drive_id,
+            root_folder=settings.contratos_storage_subdir,
+        )
+        try:
+            yield OneDriveStorage(client)
+        finally:
+            await client.aclose()
+        return
+    base = Path(settings.editais_storage_path).parent
+    yield LocalStorage(base / settings.contratos_storage_subdir)
 
 
 def _contrato_to_read(contrato, *, today: _date | None = None) -> ContratoRead:
@@ -127,12 +161,42 @@ async def update_contrato_endpoint(
     return _contrato_to_read(row)
 
 
+@router.post("/contratos/{contrato_id}/arquivo", response_model=ContratoRead)
+async def upload_arquivo_contrato_endpoint(
+    contrato_id: int,
+    arquivo: Annotated[UploadFile, File(description="PDF do contrato")],
+    db: AsyncSession = Depends(get_db),
+    storage: EditaisStorage = Depends(get_contratos_storage),
+    current_user: User = Depends(get_current_user),
+) -> ContratoRead:
+    """Anexa/substitui o PDF do contrato. Substituicao nao apaga o
+    arquivo antigo do storage (historico barato; limpeza so no delete
+    do contrato)."""
+    content = await arquivo.read()
+    if not content:
+        raise HTTPException(status_code=422, detail="arquivo vazio")
+    row = await set_arquivo_contrato(
+        db,
+        contrato_id,
+        storage=storage,
+        filename=arquivo.filename or "contrato.pdf",
+        content=content,
+        actor=current_user.email,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="Contrato nao encontrado")
+    return _contrato_to_read(row)
+
+
 @router.delete("/contratos/{contrato_id}", status_code=204)
 async def delete_contrato_endpoint(
     contrato_id: int,
     db: AsyncSession = Depends(get_db),
+    storage: EditaisStorage = Depends(get_contratos_storage),
     current_user: User = Depends(get_current_user),
 ) -> None:
-    ok = await delete_contrato(db, contrato_id, actor=current_user.email)
+    ok = await delete_contrato(
+        db, contrato_id, storage=storage, actor=current_user.email
+    )
     if not ok:
         raise HTTPException(status_code=404, detail="Contrato nao encontrado")

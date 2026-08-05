@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import AsyncIterator
 from datetime import date as _date
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
@@ -234,3 +235,42 @@ async def delete_contrato(
         db, action="delete", resource_id=contrato_id, actor=actor, metadata=snapshot
     )
     return True
+
+
+async def set_arquivo_contrato(
+    db: AsyncSession,
+    contrato_id: int,
+    *,
+    storage: EditaisStorage,
+    filename: str,
+    content: bytes,
+    actor: str = _AUDIT_ACTOR_SYSTEM,
+) -> Contrato | None:
+    """Anexa/substitui o PDF do contrato via storage plugavel.
+
+    Substituicao nao apaga o arquivo antigo do storage -- historico
+    barato, limpeza so acontece no delete do contrato (`delete_contrato`).
+    """
+    row = await db.get(Contrato, contrato_id)
+    if row is None:
+        return None
+
+    async def _chunks() -> AsyncIterator[bytes]:
+        yield content
+
+    # `licitacao_id` no protocolo e so o bucket/subdir numerico -- aqui
+    # usamos o id do contrato (raiz separada evita colisao com editais).
+    storage_path, size = await storage.save(
+        licitacao_id=row.id, filename=filename, content=_chunks()
+    )
+    row.arquivo_path = storage_path
+    await db.commit()
+    await db.refresh(row)
+    await _record_audit(
+        db,
+        action="upload_arquivo",
+        resource_id=row.id,
+        actor=actor,
+        metadata={"filename": filename, "size_bytes": size},
+    )
+    return row
