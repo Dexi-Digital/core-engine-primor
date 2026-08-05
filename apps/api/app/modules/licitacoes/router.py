@@ -152,6 +152,8 @@ async def list_endpoint(
     uf: str | None = Query(None, max_length=2),
     modalidade: str | None = None,
     orgao_cnpj: str | None = None,
+    status_triagem: str | None = Query(None, max_length=32),
+    municipio: str | None = Query(None, max_length=128),
     search: str | None = Query(
         None,
         description="Busca textual no objeto da compra (trigram no Postgres, ilike no SQLite).",
@@ -166,6 +168,8 @@ async def list_endpoint(
         uf=uf,
         modalidade=modalidade,
         orgao_cnpj=orgao_cnpj,
+        status_triagem=status_triagem,
+        municipio=municipio,
         search=search,
         page=page,
         page_size=page_size,

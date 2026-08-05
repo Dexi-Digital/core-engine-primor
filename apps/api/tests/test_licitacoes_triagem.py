@@ -363,3 +363,26 @@ async def test_endpoint_404(api_client, auth_headers) -> None:
     assert r.status_code == 404
     r2 = await api_client.get("/api/v1/licitacoes/99999/triagem")
     assert r2.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_list_filtra_por_status_triagem_e_municipio(
+    api_client, db_session
+) -> None:
+    a = _mk_licitacao("trg-f1")  # BH / novo_captado
+    b = _mk_licitacao("trg-f2")
+    b.municipio_nome = "Uberlandia"
+    b.status_triagem = "aprovado"
+    db_session.add_all([a, b])
+    await db_session.commit()
+
+    r = await api_client.get("/api/v1/licitacoes?status_triagem=aprovado")
+    assert [x["external_id"] for x in r.json()["data"]] == ["trg-f2"]
+
+    r2 = await api_client.get("/api/v1/licitacoes?municipio=belo")
+    assert [x["external_id"] for x in r2.json()["data"]] == ["trg-f1"]
+
+    r3 = await api_client.get(
+        "/api/v1/licitacoes?status_triagem=aprovado&municipio=uberl"
+    )
+    assert r3.json()["total"] == 1
