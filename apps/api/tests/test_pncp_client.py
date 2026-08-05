@@ -193,3 +193,46 @@ async def test_list_item_resultados_maps_fields() -> None:
     assert rows[0].valor_total_homologado == 1450000.0
     assert rows[0].sequencial_resultado == 1
     await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_iter_atas_paginates() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        params = dict(request.url.params)
+        assert request.url.path == "/v1/atas"
+        assert params["dataInicial"] == "20260101"
+        pagina = int(params["pagina"])
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "numeroControlePNCPAta": f"ata-{pagina}",
+                        "numeroAtaRegistroPreco": f"00{pagina}/2026",
+                        "anoAta": 2026,
+                        "numeroControlePNCPCompra": "00394460000141-1-000156/2024",
+                        "cancelado": False,
+                        "vigenciaInicio": "2026-01-01",
+                        "vigenciaFim": "2026-12-31",
+                        "objetoContratacao": "Registro de precos de pavimentacao",
+                        "cnpjOrgao": "00394460000141",
+                        "nomeOrgao": "Prefeitura X",
+                        "possibilidadeAdesao": True,
+                    }
+                ],
+                "totalRegistros": 2,
+                "totalPaginas": 2,
+                "numeroPagina": pagina,
+                "paginasRestantes": 2 - pagina,
+                "empty": False,
+            },
+        )
+
+    http = httpx.AsyncClient(base_url="https://mock.test", transport=httpx.MockTransport(handler))
+    client = PncpClient(base_url="https://mock.test", client=http)
+    atas = [a async for a in client.iter_atas(data_inicial="2026-01-01", data_final="2026-03-01")]
+    assert len(atas) == 2
+    assert atas[0].numero_controle_pncp_ata == "ata-1"
+    assert atas[1].numero_controle_pncp_ata == "ata-2"
+    assert atas[0].possibilidade_adesao is True
+    await client.aclose()

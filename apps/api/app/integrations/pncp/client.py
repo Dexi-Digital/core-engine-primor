@@ -223,6 +223,43 @@ class PncpItemResultado:
         )
 
 
+@dataclass(slots=True)
+class PncpAta:
+    """Ata de Registro de Preco (consulta API /v1/atas)."""
+
+    numero_controle_pncp_ata: str | None
+    numero_ata: str | None
+    ano_ata: int | None
+    numero_controle_pncp_compra: str | None
+    cancelado: bool
+    data_assinatura: str | None
+    vigencia_inicio: str | None
+    vigencia_fim: str | None
+    objeto_contratacao: str | None
+    cnpj_orgao: str | None
+    nome_orgao: str | None
+    possibilidade_adesao: bool | None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> PncpAta:
+        return cls(
+            numero_controle_pncp_ata=data.get("numeroControlePNCPAta"),
+            numero_ata=data.get("numeroAtaRegistroPreco"),
+            ano_ata=data.get("anoAta"),
+            numero_controle_pncp_compra=data.get("numeroControlePNCPCompra"),
+            cancelado=bool(data.get("cancelado", False)),
+            data_assinatura=data.get("dataAssinatura"),
+            vigencia_inicio=data.get("vigenciaInicio"),
+            vigencia_fim=data.get("vigenciaFim"),
+            objeto_contratacao=data.get("objetoContratacao"),
+            cnpj_orgao=data.get("cnpjOrgao"),
+            nome_orgao=data.get("nomeOrgao"),
+            possibilidade_adesao=data.get("possibilidadeAdesao"),
+            raw=data,
+        )
+
+
 def _as_float(value: Any) -> float | None:
     if value is None:
         return None
@@ -434,6 +471,65 @@ class PncpClient(IntegrationClient):
         resp.raise_for_status()
         body = resp.json() or []
         return [PncpItemResultado.from_api(d) for d in body if d]
+
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, max=15),
+        reraise=True,
+    )
+    async def list_atas(
+        self,
+        *,
+        data_inicial: date | str,
+        data_final: date | str,
+        cnpj: str | None = None,
+        pagina: int = 1,
+        tamanho_pagina: int = 50,
+    ) -> tuple[list[PncpAta], int]:
+        """Fetch one page of /v1/atas. Returns (atas, paginas_restantes)."""
+        params: dict[str, Any] = {
+            "dataInicial": _fmt_date(data_inicial),
+            "dataFinal": _fmt_date(data_final),
+            "pagina": pagina,
+            "tamanhoPagina": tamanho_pagina,
+        }
+        if cnpj:
+            params["cnpj"] = cnpj
+        client = await self._get_client()
+        resp = await client.get("/v1/atas", params=params)
+        if resp.status_code == 204:
+            return [], 0
+        resp.raise_for_status()
+        body = resp.json()
+        atas = [PncpAta.from_api(d) for d in body.get("data", [])]
+        if body.get("empty", not atas):
+            return atas, 0
+        return atas, body.get("paginasRestantes", 0)
+
+    async def iter_atas(
+        self,
+        *,
+        data_inicial: date | str,
+        data_final: date | str,
+        cnpj: str | None = None,
+        tamanho_pagina: int = 50,
+        max_paginas: int | None = None,
+    ) -> AsyncIterator[PncpAta]:
+        """Async generator over every ata page in the window."""
+        pagina = 1
+        while True:
+            atas, restantes = await self.list_atas(
+                data_inicial=data_inicial,
+                data_final=data_final,
+                cnpj=cnpj,
+                pagina=pagina,
+                tamanho_pagina=tamanho_pagina,
+            )
+            for ata in atas:
+                yield ata
+            if restantes <= 0 or (max_paginas and pagina >= max_paginas):
+                return
+            pagina += 1
 
     async def stream_arquivo(self, url: str) -> tuple[AsyncIterator[bytes], str, str | None]:
         """Stream one arquivo; returns `(iterator, filename, content_type)`.
