@@ -281,3 +281,85 @@ async def test_aprovar_nao_dispara_celery_por_default(
         db_session, licitacao_id=lic.id, usuario_email="a@primor.com"
     )
     assert chamado == []
+
+
+@pytest.mark.asyncio
+async def test_endpoint_aprovar_e_historico(
+    api_client, db_session, auth_headers
+) -> None:
+    lic = _mk_licitacao("trg-api-aprovar")
+    db_session.add(lic)
+    await db_session.commit()
+
+    r = await api_client.post(
+        f"/api/v1/licitacoes/{lic.id}/triagem/aprovar",
+        json={"observacao": "perfil ok"},
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["decisao"] == "aprovado"
+    assert body["usuario_email"] == "test-admin@primor.com"
+
+    r2 = await api_client.get(f"/api/v1/licitacoes/{lic.id}/triagem")
+    assert r2.status_code == 200
+    assert [d["decisao"] for d in r2.json()] == ["aprovado"]
+
+    # status aparece no read da licitacao
+    r3 = await api_client.get(f"/api/v1/licitacoes/{lic.id}")
+    assert r3.json()["status_triagem"] == "aprovado"
+
+
+@pytest.mark.asyncio
+async def test_endpoint_aprovar_exige_jwt(api_client, db_session) -> None:
+    lic = _mk_licitacao("trg-api-401")
+    db_session.add(lic)
+    await db_session.commit()
+    r = await api_client.post(
+        f"/api/v1/licitacoes/{lic.id}/triagem/aprovar", json={}
+    )
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_endpoint_rejeitar_sem_motivo_422(
+    api_client, db_session, auth_headers
+) -> None:
+    lic = _mk_licitacao("trg-api-422")
+    db_session.add(lic)
+    await db_session.commit()
+    r = await api_client.post(
+        f"/api/v1/licitacoes/{lic.id}/triagem/rejeitar",
+        json={"observacao": "ok"},  # < 5 chars
+        headers=auth_headers,
+    )
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_endpoint_transicao_invalida_409(
+    api_client, db_session, auth_headers
+) -> None:
+    lic = _mk_licitacao("trg-api-409")
+    lic.status_triagem = "rejeitado"
+    db_session.add(lic)
+    await db_session.commit()
+    r = await api_client.post(
+        f"/api/v1/licitacoes/{lic.id}/triagem/aprovar",
+        json={},
+        headers=auth_headers,
+    )
+    assert r.status_code == 409
+    assert "rejeitado" in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_endpoint_404(api_client, auth_headers) -> None:
+    r = await api_client.post(
+        "/api/v1/licitacoes/99999/triagem/aprovar",
+        json={},
+        headers=auth_headers,
+    )
+    assert r.status_code == 404
+    r2 = await api_client.get("/api/v1/licitacoes/99999/triagem")
+    assert r2.status_code == 404

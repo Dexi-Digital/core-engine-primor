@@ -13,6 +13,7 @@ class LicitacaoRead(BaseModel):
     id: int
     external_id: str
     source: str
+    status_triagem: str
     numero_compra: str | None
     ano_compra: int | None
     sequencial_compra: int | None
@@ -287,3 +288,30 @@ class CreaImportarArtResponse(BaseModel):
 
     consulta: CreaConsultaRead
     certidao: CertidaoRead | None  # None quando ART nao e importavel
+
+
+# --- Captador Squad 1: triagem ---------------------------------------------
+
+
+class TriagemAprovarPayload(BaseModel):
+    observacao: str | None = Field(default=None, max_length=2000)
+
+
+class TriagemRejeitarPayload(BaseModel):
+    # Motivo obrigatorio -- espelha MOTIVO_REJEICAO_MIN_CHARS do servico.
+    observacao: str = Field(min_length=5, max_length=2000)
+
+
+class TriagemObservacaoPayload(BaseModel):
+    observacao: str = Field(min_length=1, max_length=2000)
+
+
+class DecisaoTriagemRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    licitacao_id: int
+    decisao: str
+    observacao: str | None
+    usuario_email: str
+    created_at: datetime

@@ -27,6 +27,7 @@ from app.integrations.resend.client import ResendClient
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.dp_sesmt.schemas import ModuleStatus
+from app.modules.licitacoes import triagem
 from app.modules.licitacoes.analise import (
     analyze_edital_for_licitacao,
     get_analise,
@@ -45,6 +46,7 @@ from app.modules.licitacoes.editais import (
 from app.modules.licitacoes.schemas import (
     AnexoEditalRead,
     BoletimDispatchSummary,
+    DecisaoTriagemRead,
     EditalAnaliseRead,
     EditalDownloadResult,
     EditalRead,
@@ -53,6 +55,9 @@ from app.modules.licitacoes.schemas import (
     LicitacaoRead,
     SavedQueryCreate,
     SavedQueryRead,
+    TriagemAprovarPayload,
+    TriagemObservacaoPayload,
+    TriagemRejeitarPayload,
 )
 from app.modules.licitacoes.service import (
     get_licitacao,
@@ -386,3 +391,99 @@ async def run_edital_analise_endpoint(
         await llm.aclose()
 
     return EditalAnaliseRead.model_validate(analise)
+
+
+# --- Captador Squad 1: triagem ---
+
+
+@router.post(
+    "/{licitacao_id}/triagem/aprovar", response_model=DecisaoTriagemRead
+)
+async def triagem_aprovar_endpoint(
+    licitacao_id: int,
+    payload: TriagemAprovarPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> DecisaoTriagemRead:
+    """Aprova o edital na triagem (Tela de Captacao).
+
+    Se `CAPTADOR_AUTO_PROCESS=1`, dispara o processamento da Squad 2
+    (pasta + anexos + planilha) em background -- best-effort.
+    """
+    try:
+        row = await triagem.aprovar(
+            db,
+            licitacao_id=licitacao_id,
+            usuario_email=current_user.email,
+            observacao=payload.observacao,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except triagem.TransicaoInvalidaError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return DecisaoTriagemRead.model_validate(row)
+
+
+@router.post(
+    "/{licitacao_id}/triagem/rejeitar", response_model=DecisaoTriagemRead
+)
+async def triagem_rejeitar_endpoint(
+    licitacao_id: int,
+    payload: TriagemRejeitarPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> DecisaoTriagemRead:
+    """Rejeita o edital com motivo obrigatorio (fica registrado na trilha)."""
+    try:
+        row = await triagem.rejeitar(
+            db,
+            licitacao_id=licitacao_id,
+            usuario_email=current_user.email,
+            observacao=payload.observacao,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except triagem.TransicaoInvalidaError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return DecisaoTriagemRead.model_validate(row)
+
+
+@router.post(
+    "/{licitacao_id}/triagem/observacao", response_model=DecisaoTriagemRead
+)
+async def triagem_observacao_endpoint(
+    licitacao_id: int,
+    payload: TriagemObservacaoPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> DecisaoTriagemRead:
+    """Registra observacao sem decidir; `novo_captado` passa a `em_analise`."""
+    try:
+        row = await triagem.registrar_observacao(
+            db,
+            licitacao_id=licitacao_id,
+            usuario_email=current_user.email,
+            observacao=payload.observacao,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return DecisaoTriagemRead.model_validate(row)
+
+
+@router.get(
+    "/{licitacao_id}/triagem", response_model=list[DecisaoTriagemRead]
+)
+async def triagem_historico_endpoint(
+    licitacao_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> list[DecisaoTriagemRead]:
+    """Historico de decisoes da triagem, mais recente primeiro."""
+    try:
+        rows = await triagem.listar_decisoes(db, licitacao_id=licitacao_id)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return [DecisaoTriagemRead.model_validate(r) for r in rows]
