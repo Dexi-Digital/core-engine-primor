@@ -573,9 +573,9 @@ plano standard, abr/2025). Quotas de API: 600 requests/min por projeto.
 
 ---
 
-## Tangerino (ponto eletrônico — Sólides)
+## Tangerino (ponto eletronico — Solides)
 
-**Adapter:** `app/integrations/tangerino/` (`TangyrinoClient` com modo
+**Adapter:** `app/integrations/tangerino/` (`TangerinoClient` com modo
 mock determinístico embutido — padrão Infosimples).
 
 Sem `TANGERINO_API_KEY`, mock determinístico (3 funcionários, 2 obras).
@@ -591,7 +591,7 @@ funcionários (`/employee/find-all`), batidas
   timestamps) nem em nenhum modelo do spec público. O vínculo
   funcionário→obra confiável é o **workplace** (local de trabalho)
   associado ao funcionário. A hipótese "localização da batida" do
-  documento de mão de obra precisa ser confirmada com o suporte Sólides
+  documento de mão de obra precisa ser confirmada com o suporte Solides
   — pode existir em outra superfície de API.
 - Não há endpoint de afastamentos no spec público.
 - Unidade dos timestamps (epoch ms assumido) e formato de
@@ -604,7 +604,7 @@ Env vars:
 | `TANGERINO_API_KEY`   | opcional    | API key (vazio = mock determinístico)        |
 | `TANGERINO_BASE_URL`  | não         | Default: `https://employer.tangerino.com.br` |
 
-## Onvio (Domínio/Thomson Reuters — NF-e para o contador)
+## Onvio (Dominio/Thomson Reuters — NF-e para o contador)
 
 **Adapter:** `app/integrations/onvio/` (`OnvioClient` com OAuth2
 client_credentials real + `OnvioMockClient` determinístico).
