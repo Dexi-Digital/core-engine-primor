@@ -42,6 +42,7 @@ class TestMaquinaDeStatus:
             ("erro_portal", "processando_anexos"),
             ("erro_sharepoint", "processando_anexos"),
             ("sem_planilha", "processando_anexos"),
+            ("completo", "processando_anexos"),  # reprocesso/re-identificacao manual
         ],
     )
     def test_transicoes_permitidas(self, atual: str, novo: str) -> None:
@@ -52,7 +53,8 @@ class TestMaquinaDeStatus:
         [
             ("aprovado", "rejeitado"),  # aprovado nao pode ser rejeitado depois
             ("rejeitado", "aprovado"),  # rejeitado e terminal
-            ("completo", "novo_captado"),  # completo e terminal
+            ("rejeitado", "processando_anexos"),  # rejeitado e terminal
+            ("completo", "novo_captado"),  # completo nao volta pra novo_captado
             ("novo_captado", "completo"),  # nao pula a aprovacao
             ("novo_captado", "processando_anexos"),
         ],

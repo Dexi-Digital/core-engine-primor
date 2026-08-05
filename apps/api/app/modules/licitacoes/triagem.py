@@ -53,8 +53,10 @@ DECISAO_APROVADO = "aprovado"
 DECISAO_REJEITADO = "rejeitado"
 DECISAO_OBSERVACAO = "observacao"
 
-# De onde se pode ir para onde. `rejeitado` e `completo` sao terminais;
-# os `erro_*` e `sem_planilha` permitem reprocessar (Squad 2 re-dispara).
+# De onde se pode ir para onde. So `rejeitado` e terminal; os `erro_*`
+# e `sem_planilha` permitem reprocessar (Squad 2 re-dispara), e `completo`
+# tambem permite reprocesso (re-identificacao de planilha apos marcacao
+# manual da analista).
 TRANSICOES_VALIDAS: dict[str, frozenset[str]] = {
     STATUS_NOVO_CAPTADO: frozenset(
         {STATUS_EM_ANALISE, STATUS_APROVADO, STATUS_REJEITADO}
@@ -77,7 +79,7 @@ TRANSICOES_VALIDAS: dict[str, frozenset[str]] = {
     STATUS_ERRO_SHAREPOINT: frozenset({STATUS_PROCESSANDO_ANEXOS}),
     STATUS_SEM_PLANILHA: frozenset({STATUS_PROCESSANDO_ANEXOS}),
     STATUS_REJEITADO: frozenset(),
-    STATUS_COMPLETO: frozenset(),
+    STATUS_COMPLETO: frozenset({STATUS_PROCESSANDO_ANEXOS}),
 }
 
 
