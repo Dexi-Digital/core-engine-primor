@@ -160,6 +160,110 @@ async def test_ingest_resultados_isola_falha_por_licitacao(db_session: AsyncSess
     await client.aclose()
 
 
+def _itens_handler_situacao_atualizada(request: httpx.Request) -> httpx.Response:
+    url = str(request.url)
+    if url.endswith("/itens"):
+        return httpx.Response(
+            200,
+            json=[
+                {"numeroItem": 1, "descricao": "Recapeamento", "temResultado": True},
+                {"numeroItem": 2, "descricao": "Sinalizacao", "temResultado": False},
+            ],
+        )
+    assert url.endswith("/itens/1/resultados")
+    return httpx.Response(
+        200,
+        json=[
+            {
+                "sequencialResultado": 1,
+                "niFornecedor": "11222333000144",
+                "nomeRazaoSocialFornecedor": "Construtora Alfa LTDA",
+                "valorTotalHomologado": 1600000.0,
+                "dataResultado": "2026-07-10",
+                "situacaoCompraItemResultadoNome": "Homologado",
+            }
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_ingest_resultados_atualiza_situacao_em_reprocessamento(
+    db_session: AsyncSession,
+) -> None:
+    """Upsert de verdade: a situacao evolui no PNCP (Informado -> Homologado)
+    e o reprocessamento precisa refletir o estado mais recente, nao
+    congelar o primeiro valor gravado."""
+    await _make_licitacao(db_session)
+    await db_session.commit()
+
+    client = _pncp_portal_client(_itens_handler)
+    await ingest_resultados(db_session, client)
+    await client.aclose()
+
+    client2 = _pncp_portal_client(_itens_handler_situacao_atualizada)
+    summary2 = await ingest_resultados(db_session, client2)
+    await client2.aclose()
+
+    assert summary2.resultados_gravados == 1
+
+    rows = (await db_session.execute(select(ResultadoLicitacao))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].valor_homologado == Decimal("1600000.00")
+    assert rows[0].situacao == "Homologado"
+
+
+def _itens_handler_dois_itens_com_resultado(request: httpx.Request) -> httpx.Response:
+    url = str(request.url)
+    if url.endswith("/itens"):
+        return httpx.Response(
+            200,
+            json=[
+                {"numeroItem": 1, "descricao": "Recapeamento", "temResultado": True},
+                {"numeroItem": 2, "descricao": "Sinalizacao", "temResultado": True},
+            ],
+        )
+    if url.endswith("/itens/1/resultados"):
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "sequencialResultado": 1,
+                    "niFornecedor": "11222333000144",
+                    "nomeRazaoSocialFornecedor": "Construtora Alfa LTDA",
+                    "valorTotalHomologado": 1450000.0,
+                    "dataResultado": "2026-07-10",
+                    "situacaoCompraItemResultadoNome": "Informado",
+                }
+            ],
+        )
+    assert url.endswith("/itens/2/resultados")
+    return httpx.Response(500)
+
+
+@pytest.mark.asyncio
+async def test_ingest_resultados_conta_com_resultado_e_falha_em_falha_parcial(
+    db_session: AsyncSession,
+) -> None:
+    """Item 1 grava com sucesso; item 2 falha na rede -- a licitacao deve
+    aparecer em `com_resultado` (dado parcial persistido) E em `falhas`
+    (overlap intencional -- ver docstring de `ResultadoIngestSummary`)."""
+    await _make_licitacao(db_session)
+    await db_session.commit()
+
+    client = _pncp_portal_client(_itens_handler_dois_itens_com_resultado)
+    summary = await ingest_resultados(db_session, client)
+    await client.aclose()
+
+    assert summary.licitacoes_processadas == 1
+    assert summary.resultados_gravados == 1
+    assert summary.com_resultado == 1
+    assert summary.falhas == 1
+
+    rows = (await db_session.execute(select(ResultadoLicitacao))).scalars().all()
+    assert len(rows) == 1
+    assert rows[0].item_numero == 1
+
+
 @pytest.mark.asyncio
 async def test_ingest_resultados_endpoint_requires_auth(api_client) -> None:
     resp = await api_client.post("/api/v1/licitacoes/ingest/resultados")

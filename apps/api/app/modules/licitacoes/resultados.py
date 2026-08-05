@@ -2,8 +2,12 @@
 
 Para cada licitacao ja captada (janela recente), consulta os itens na
 API portal; itens com `temResultado=True` tem seus resultados baixados
-e upsertados em `licitacoes_resultados`. Falha em uma licitacao nao
-aborta as demais (mesmo espirito do ingest de publicacoes).
+e upsertados em `licitacoes_resultados` (upsert de verdade -- reprocessar
+atualiza `situacao`/valores se mudaram no PNCP, nao so insere se inedito).
+Falha em uma licitacao nao aborta as demais (mesmo espirito do ingest de
+publicacoes); se a falha ocorre depois de gravar parte dos itens de uma
+licitacao, ela conta em `com_resultado` E em `falhas` (overlap
+intencional -- ver `ResultadoIngestSummary`).
 """
 from __future__ import annotations
 
@@ -56,11 +60,11 @@ async def ingest_resultados(
     falhas = 0
 
     for lic in licitacoes:
+        contada = False
         try:
             itens = await client.list_itens(
                 cnpj=lic.orgao_cnpj, ano=lic.ano_compra, sequencial=lic.sequencial_compra
             )
-            achou = False
             for item in itens:
                 if not item.tem_resultado:
                     continue
@@ -71,10 +75,15 @@ async def ingest_resultados(
                     numero_item=item.numero_item,
                 )
                 for res in resultados:
-                    achou = True
+                    # Conta assim que o primeiro resultado aparece -- nao no
+                    # fim do loop de itens -- para que uma falha num item
+                    # *seguinte* (rede/HTTP) nao apague o credito de uma
+                    # licitacao parcialmente ingerida (ver `falhas` abaixo:
+                    # os dois contadores podem se sobrepor nesse caso).
+                    if not contada:
+                        com_resultado += 1
+                        contada = True
                     gravados += await _upsert_resultado(db, lic.id, item.numero_item, res)
-            if achou:
-                com_resultado += 1
         except (httpx.HTTPError, RetryError) as exc:
             logger.warning(
                 "resultados: licitacao %s falhou: %s", lic.external_id, exc, exc_info=False
@@ -91,7 +100,27 @@ async def ingest_resultados(
 
 
 async def _upsert_resultado(db, licitacao_id, item_numero, res) -> int:
-    """Insere se (licitacao, item, sequencial) inedito; retorna 1 se gravou."""
+    """Upsert por (licitacao, item, sequencial_resultado) -- mesma convencao
+    do sibling `service.py::_upsert`: no conflito, atualiza todas as colunas
+    de dados (nao so insere se inedito). Necessario porque a `situacao` de
+    um resultado evolui no PNCP (ex.: Informado -> Homologado) e reprocessar
+    a mesma licitacao precisa refletir o estado mais recente, nao congelar
+    o primeiro valor gravado.
+
+    Retorna 1 se gravou (insercao nova ou algum campo mudou), 0 se o
+    resultado ja existia identico (idempotente de verdade).
+    """
+    fields = {
+        "cnpj_vencedor": res.ni_fornecedor,
+        "razao_social": res.nome_razao_social_fornecedor,
+        "valor_homologado": _as_decimal(res.valor_total_homologado),
+        "valor_unitario": _as_decimal(res.valor_unitario_homologado),
+        "quantidade": _as_decimal(res.quantidade_homologada),
+        "data_resultado": _parse_dt(res.data_resultado),
+        "situacao": res.situacao_nome,
+        "porte_fornecedor": res.porte_fornecedor_nome,
+        "raw": res.raw or None,
+    }
     existing = await db.scalar(
         select(ResultadoLicitacao).where(
             ResultadoLicitacao.licitacao_id == licitacao_id,
@@ -99,23 +128,24 @@ async def _upsert_resultado(db, licitacao_id, item_numero, res) -> int:
             ResultadoLicitacao.sequencial_resultado == res.sequencial_resultado,
         )
     )
-    if existing is not None:
-        return 0
-    db.add(
-        ResultadoLicitacao(
-            licitacao_id=licitacao_id,
-            item_numero=item_numero,
-            sequencial_resultado=res.sequencial_resultado,
-            cnpj_vencedor=res.ni_fornecedor,
-            razao_social=res.nome_razao_social_fornecedor,
-            valor_homologado=_as_decimal(res.valor_total_homologado),
-            valor_unitario=_as_decimal(res.valor_unitario_homologado),
-            quantidade=_as_decimal(res.quantidade_homologada),
-            data_resultado=_parse_dt(res.data_resultado),
-            situacao=res.situacao_nome,
-            porte_fornecedor=res.porte_fornecedor_nome,
-            raw=res.raw or None,
+    if existing is None:
+        db.add(
+            ResultadoLicitacao(
+                licitacao_id=licitacao_id,
+                item_numero=item_numero,
+                sequencial_resultado=res.sequencial_resultado,
+                **fields,
+            )
         )
-    )
+        await db.flush()
+        return 1
+
+    changed = False
+    for key, value in fields.items():
+        if getattr(existing, key) != value:
+            setattr(existing, key, value)
+            changed = True
+    if not changed:
+        return 0
     await db.flush()
     return 1

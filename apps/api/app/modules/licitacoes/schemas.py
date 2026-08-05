@@ -396,6 +396,15 @@ class TriagemListResponse(BaseModel):
 
 
 class ResultadoIngestSummary(BaseModel):
+    """Resumo de uma rodada de `ingest_resultados`.
+
+    `com_resultado` e `falhas` podem se sobrepor: se uma licitacao tem
+    parte dos itens gravados com sucesso e um item *seguinte* falha
+    (rede/HTTP), ela e contada nos dois -- reflete o estado real (dados
+    parciais persistidos) em vez de esconder a falha ou descartar o que
+    ja foi gravado.
+    """
+
     licitacoes_processadas: int
     com_resultado: int
     resultados_gravados: int
