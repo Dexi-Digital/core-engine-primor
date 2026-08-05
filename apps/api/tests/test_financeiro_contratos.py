@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
@@ -15,6 +15,14 @@ from app.modules.financeiro_contratos.models import (
     TIPOS_CONTRATO,
     Contrato,
     ContratoAlertaLog,
+)
+from app.modules.financeiro_contratos.service import (
+    compute_vencimento_status,
+    create_contrato,
+    delete_contrato,
+    get_contrato,
+    list_contratos,
+    update_contrato,
 )
 
 
@@ -77,3 +85,94 @@ def test_tipos_e_status_canonicos() -> None:
     assert {"rascunho", "vigente", "encerrado", "judicializado"} == set(
         dict(STATUS_CONTRATO)
     )
+
+
+def test_compute_vencimento_status_buckets() -> None:
+    today = date(2026, 8, 4)
+    assert compute_vencimento_status(date(2026, 12, 1), today=today) == "vigente"
+    assert compute_vencimento_status(date(2026, 8, 20), today=today) == "vencendo"
+    assert compute_vencimento_status(date(2026, 8, 1), today=today) == "vencido"
+    assert compute_vencimento_status(None, today=today) == "sem_validade"
+
+
+@pytest.mark.asyncio
+async def test_create_e_get_contrato_com_audit(db_session: AsyncSession) -> None:
+    row = await create_contrato(
+        db_session,
+        titulo="Obra BR-040 lote 2",
+        contraparte_nome="DER-MG",
+        tipo="cliente",
+        data_inicio=date(2026, 1, 10),
+        data_fim=date(2027, 1, 10),
+        valor=250000000,
+        status="vigente",
+        actor="teste@primor.com",
+    )
+    assert row.id is not None
+    fetched = await get_contrato(db_session, row.id)
+    assert fetched is not None and fetched.titulo == "Obra BR-040 lote 2"
+    # audit_log gravado com actor real
+    from app.audit.models import AuditLog
+
+    logs = (
+        (await db_session.execute(select(AuditLog).where(
+            AuditLog.resource == "financeiro.contrato"
+        ))).scalars().all()
+    )
+    assert any(
+        log.action == "create" and log.actor == "teste@primor.com" for log in logs
+    )
+
+
+@pytest.mark.asyncio
+async def test_create_contrato_tipo_invalido(db_session: AsyncSession) -> None:
+    with pytest.raises(ValueError):
+        await create_contrato(
+            db_session,
+            titulo="X",
+            contraparte_nome="Y",
+            tipo="permuta",  # nao esta em TIPOS_CONTRATO_VALIDOS
+            data_inicio=date(2026, 1, 1),
+        )
+
+
+@pytest.mark.asyncio
+async def test_list_contratos_filtros(db_session: AsyncSession) -> None:
+    today = date(2026, 8, 4)
+    await create_contrato(
+        db_session, titulo="A", contraparte_nome="F1", tipo="fornecedor",
+        data_inicio=today, data_fim=today + timedelta(days=10), status="vigente",
+    )
+    await create_contrato(
+        db_session, titulo="B", contraparte_nome="F2", tipo="locacao",
+        data_inicio=today, data_fim=today + timedelta(days=90), status="vigente",
+    )
+    await create_contrato(
+        db_session, titulo="C", contraparte_nome="F3", tipo="cliente",
+        data_inicio=today, status="encerrado",
+    )
+    assert len(await list_contratos(db_session)) == 3
+    assert [c.titulo for c in await list_contratos(db_session, tipo="locacao")] == ["B"]
+    assert [c.titulo for c in await list_contratos(db_session, status="encerrado")] == ["C"]
+    # vence_em_dias=30: somente A (10 dias); B vence em 90; C sem data_fim
+    vencendo = await list_contratos(db_session, vence_em_dias=30, today=today)
+    assert [c.titulo for c in vencendo] == ["A"]
+
+
+@pytest.mark.asyncio
+async def test_update_e_delete_contrato(db_session: AsyncSession) -> None:
+    row = await create_contrato(
+        db_session, titulo="Antigo", contraparte_nome="Z", tipo="cliente",
+        data_inicio=date(2026, 1, 1),
+    )
+    updated = await update_contrato(
+        db_session, row.id, titulo="Novo", status="judicializado",
+        easyjur_ref="EJ-2026-0042", actor="teste@primor.com",
+    )
+    assert updated is not None
+    assert updated.titulo == "Novo"
+    assert updated.easyjur_ref == "EJ-2026-0042"
+    assert await update_contrato(db_session, 99999, titulo="x") is None
+    assert await delete_contrato(db_session, row.id) is True
+    assert await get_contrato(db_session, row.id) is None
+    assert await delete_contrato(db_session, 99999) is False
