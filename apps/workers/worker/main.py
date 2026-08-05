@@ -102,6 +102,13 @@ celery_app.conf.beat_schedule = {
         "task": "worker.tasks.dp_sesmt.dispatch_afastamento_alerts",
         "schedule": crontab(hour="8", minute="10"),
     },
+    # Squad 5: alertas de vencimento de contratos 1x/dia (08h15).
+    # 5min apos afastamentos (08h10) para escalonar o burst no Resend.
+    # Idempotente via `contratos_alertas_log` (uniq contrato_id + janela).
+    "contrato-alerts-daily": {
+        "task": "worker.tasks.financeiro.dispatch_contrato_alerts",
+        "schedule": crontab(hour="8", minute="15"),
+    },
     # onedrive_diagnostico (POC): roda segunda 05h America/Sao_Paulo.
     # Compara conteudo do SharePoint com docs obrigatorios por entidade.
     "onedrive-diagnostico-weekly": {

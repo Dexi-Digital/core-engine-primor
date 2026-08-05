@@ -16,7 +16,7 @@ def test_module_status_endpoints() -> None:
     for prefix, module, implemented in [
         ("dp-sesmt", "dp_sesmt", True),
         ("manutencao-frota", "manutencao_frota", True),
-        ("financeiro", "financeiro_contratos", False),
+        ("financeiro", "financeiro_contratos", True),
         ("licitacoes", "licitacoes", True),
         ("ia", "ia_tools", False),
     ]:

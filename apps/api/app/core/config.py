@@ -115,6 +115,11 @@ class Settings(BaseSettings):
     # dedicada para isolar por modulo.
     fiscal_storage_subdir: str = Field(default="MotorCentral/fiscal")
 
+    # Subpasta do storage para PDFs de contrato (Squad 5). Mesmo backend
+    # do storage de editais (`STORAGE_BACKEND=local|onedrive`), raiz
+    # separada para nao colidir com o namespace numerico dos editais.
+    contratos_storage_subdir: str = Field(default="MotorCentral/contratos")
+
     # Infosimples (Modulo B.3 -- consulta Detran SP/MG/GO por placa).
     # Cobre multas, IPVA, licenciamento, restricoes. Sem token o
     # adapter cai no `InfosimplesMockClient` deterministico para nao
