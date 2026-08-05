@@ -29,6 +29,8 @@ type DocumentoFiscal = {
   created_at: string;
 };
 
+type Obra = { id: number; codigo: string; nome: string };
+
 const TIPOS: Array<[string, string]> = [
   ["nfe", "NF-e"],
   ["nfce", "NFC-e"],
@@ -95,6 +97,8 @@ async function fetchDocumentos(params: {
   emitida_de?: string;
   emitida_ate?: string;
   obra_id?: string;
+  valor_min?: string;
+  valor_max?: string;
 }): Promise<DocumentoFiscal[]> {
   const qs = new URLSearchParams();
   if (params.tipo) qs.set("tipo", params.tipo);
@@ -103,9 +107,19 @@ async function fetchDocumentos(params: {
   if (params.emitida_de) qs.set("emitida_de", params.emitida_de);
   if (params.emitida_ate) qs.set("emitida_ate", params.emitida_ate);
   if (params.obra_id) qs.set("obra_id", params.obra_id);
+  if (params.valor_min) qs.set("valor_min", params.valor_min);
+  if (params.valor_max) qs.set("valor_max", params.valor_max);
   const path = `/api/v1/fiscal/documentos${qs.toString() ? `?${qs}` : ""}`;
   try {
     return await apiFetch<DocumentoFiscal[]>(path);
+  } catch {
+    return [];
+  }
+}
+
+async function fetchObras(): Promise<Obra[]> {
+  try {
+    return await apiFetch<Obra[]>(`/api/v1/obras`);
   } catch {
     return [];
   }
@@ -144,6 +158,8 @@ type SearchParams = Promise<{
   emitida_de?: string;
   emitida_ate?: string;
   obra_id?: string;
+  valor_min?: string;
+  valor_max?: string;
 }>;
 
 export default async function FiscalDocumentosPage({
@@ -159,8 +175,13 @@ export default async function FiscalDocumentosPage({
     emitida_de: sp.emitida_de ?? "",
     emitida_ate: sp.emitida_ate ?? "",
     obra_id: sp.obra_id ?? "",
+    valor_min: sp.valor_min ?? "",
+    valor_max: sp.valor_max ?? "",
   };
-  const documentos = await fetchDocumentos(filtros);
+  const [documentos, obras] = await Promise.all([
+    fetchDocumentos(filtros),
+    fetchObras(),
+  ]);
 
   return (
     <div className="space-y-8">
@@ -267,6 +288,45 @@ export default async function FiscalDocumentosPage({
             defaultValue={filtros.emitida_ate ?? ""}
             className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
           />
+          <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
+            Valor mín.
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              name="valor_min"
+              defaultValue={filtros.valor_min}
+              placeholder="0,00"
+              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
+            Valor máx.
+            <input
+              type="number"
+              step="0.01"
+              min="0"
+              name="valor_max"
+              defaultValue={filtros.valor_max}
+              placeholder="0,00"
+              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
+            Obra
+            <select
+              name="obra_id"
+              defaultValue={filtros.obra_id}
+              className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm"
+            >
+              <option value="">Todas</option>
+              {obras.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.codigo} · {o.nome}
+                </option>
+              ))}
+            </select>
+          </label>
           <button
             type="submit"
             className="rounded-md bg-slate-200 px-4 py-2 text-sm font-medium hover:bg-slate-300"

@@ -66,10 +66,14 @@ export default async function DocumentoFiscalDetalhePage({
     "use server";
     const raw = formData.get("obra_id");
     const obra_id = raw ? Number(raw) : null;
-    await apiFetch(`/api/v1/fiscal/documentos/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ obra_id }),
-    });
+    try {
+      await apiFetch(`/api/v1/fiscal/documentos/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ obra_id }),
+      });
+    } catch (err) {
+      console.error("[fiscal-documento-detail] vincular obra failed", err);
+    }
     revalidatePath(`/fiscal/documentos/${id}`);
   }
 
@@ -96,7 +100,7 @@ export default async function DocumentoFiscalDetalhePage({
         <p className="mt-1 font-mono text-xs text-slate-500">
           {doc.chave_acesso ?? "sem chave de acesso"}
           {doc.chave_dv_valida === false && (
-            <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-amber-700">
+            <span className="ml-2 rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-700">
               DV inválido
             </span>
           )}
