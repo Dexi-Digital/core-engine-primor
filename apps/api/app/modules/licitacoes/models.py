@@ -597,3 +597,92 @@ class PlanilhaOrcamentaria(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+# --- Squad 3: resultados/homologacoes (secao 9 do Projeto Tecnico) ---------
+
+
+class ResultadoLicitacao(Base):
+    """Resultado homologado de um item de licitacao (fornecedor vencedor).
+
+    Fonte: API portal do PNCP (`/itens/{n}/resultados`). Um item pode ter
+    mais de um resultado (ordem de classificacao em SRP), por isso o
+    unique inclui `sequencial_resultado`. Alimenta os dashboards de
+    concorrentes e geotargeting.
+    """
+
+    __tablename__ = "licitacoes_resultados"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    licitacao_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("licitacoes.id", ondelete="CASCADE"),
+        index=True,
+    )
+    item_numero: Mapped[int] = mapped_column(Integer)
+    sequencial_resultado: Mapped[int] = mapped_column(Integer, default=1)
+    cnpj_vencedor: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    razao_social: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    valor_homologado: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    valor_unitario: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)
+    quantidade: Mapped[Decimal | None] = mapped_column(Numeric(20, 4), nullable=True)
+    data_resultado: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, index=True
+    )
+    situacao: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    porte_fornecedor: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "licitacao_id", "item_numero", "sequencial_resultado",
+            name="uq_resultado_item_seq",
+        ),
+        Index("ix_resultados_cnpj_data", "cnpj_vencedor", "data_resultado"),
+    )
+
+
+class AtaRegistroPreco(Base):
+    """Ata de Registro de Preco captada do PNCP (D.9 do roadmap).
+
+    `numero_controle_pncp_ata` e a chave natural do PNCP (upsert
+    idempotente). `licitacao_id` e preenchido quando o
+    `numeroControlePNCPCompra` bate com uma licitacao ja captada.
+    `valor` nao vem na API de atas -- fica NULL ate cruzarmos com a
+    licitacao vinculada.
+    """
+
+    __tablename__ = "licitacoes_atas_rp"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    numero_controle_pncp_ata: Mapped[str] = mapped_column(
+        String(128), unique=True, index=True
+    )
+    numero_ata: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    ano_ata: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    licitacao_id: Mapped[int | None] = mapped_column(
+        Integer,
+        ForeignKey("licitacoes.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    orgao_cnpj: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    orgao_nome: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    objeto: Mapped[str | None] = mapped_column(Text, nullable=True)
+    vigencia_inicio: Mapped[date | None] = mapped_column(Date, nullable=True)
+    vigencia_fim: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
+    valor: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    cancelado: Mapped[bool] = mapped_column(Boolean, default=False)
+    possibilidade_adesao: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
