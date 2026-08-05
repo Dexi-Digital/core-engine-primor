@@ -362,7 +362,10 @@ async def montar_triagem(
     licitacoes = list(
         (
             await db.execute(
-                base.order_by(Licitacao.data_publicacao_pncp.desc().nullslast())
+                base.order_by(
+                    Licitacao.data_publicacao_pncp.desc().nullslast(),
+                    Licitacao.id.desc(),
+                )
                 .offset((page - 1) * page_size)
                 .limit(page_size)
             )

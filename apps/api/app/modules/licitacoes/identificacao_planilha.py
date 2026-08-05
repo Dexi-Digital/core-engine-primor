@@ -65,6 +65,11 @@ _MAX_ABAS = 3
 _MAX_LINHAS = 30
 _MAX_COLUNAS = 20
 
+# Guard antes de instanciar openpyxl/odfpy: ambos carregam o arquivo inteiro
+# na memoria para fazer o parse, o que e caro (e um vetor de DoS) para
+# anexos anormalmente grandes num pipeline serverless.
+_MAX_BYTES = 30 * 1024 * 1024
+
 
 def normalizar(texto: str) -> str:
     """Minusculas, sem acento; `_`, `-` e quebras viram espaco unico."""
@@ -114,6 +119,14 @@ def _texto_celulas_ods(data: bytes) -> str:
 
 def score_conteudo(filename: str, data: bytes) -> int:
     """Pontua cabecalhos tipicos nas primeiras celulas. 0 se ilegivel."""
+    if len(data) > _MAX_BYTES:
+        logger.warning(
+            "planilha grande demais (%s): %d bytes > limite de %d",
+            filename,
+            len(data),
+            _MAX_BYTES,
+        )
+        return 0
     ext = PurePosixPath(filename).suffix.lower()
     try:
         if ext == ".xlsx":

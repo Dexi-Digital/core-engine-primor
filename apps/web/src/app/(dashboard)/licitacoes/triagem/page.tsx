@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 
-import { apiFetch } from "@/lib/api";
+import { ApiError, apiFetch } from "@/lib/api";
 
 type TriagemRow = {
   licitacao_id: number;
@@ -66,14 +67,27 @@ async function reprocessar(formData: FormData): Promise<void> {
   "use server";
   const id = formData.get("licitacao_id");
   if (!id) return;
+  const status = formData.get("status");
+  const uf = formData.get("uf");
+  const page = formData.get("page");
+  let erro: string | null = null;
   try {
     await apiFetch(`/api/v1/licitacoes/${id}/processar-anexos`, {
       method: "POST",
     });
   } catch (err) {
     console.error("[triagem] reprocessamento falhou", err);
+    erro = err instanceof ApiError ? String(err.status) : "falha";
   }
   revalidatePath("/licitacoes/triagem");
+  if (erro) {
+    const params = new URLSearchParams();
+    if (typeof status === "string" && status) params.set("status", status);
+    if (typeof uf === "string" && uf) params.set("uf", uf);
+    if (typeof page === "string" && page) params.set("page", page);
+    params.set("erro", erro);
+    redirect(`/licitacoes/triagem?${params.toString()}`);
+  }
 }
 
 function formatCurrency(value: string | null): string {
@@ -96,6 +110,7 @@ export default async function TriagemPage(props: {
   const status = typeof searchParams.status === "string" ? searchParams.status : "";
   const uf = typeof searchParams.uf === "string" ? searchParams.uf : "";
   const page = typeof searchParams.page === "string" ? searchParams.page : "1";
+  const erro = typeof searchParams.erro === "string" ? searchParams.erro : "";
   if (status) params.set("status", status);
   if (uf) params.set("uf", uf);
   params.set("page", page);
@@ -105,6 +120,11 @@ export default async function TriagemPage(props: {
 
   return (
     <div className="space-y-4">
+      {erro ? (
+        <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          Falha ao processar (HTTP {erro}). Tente novamente.
+        </div>
+      ) : null}
       <div className="flex items-center justify-between">
         <div>
           <Link href="/licitacoes" className="text-sm text-slate-500 hover:underline">
@@ -179,10 +199,9 @@ export default async function TriagemPage(props: {
                     label: row.status_triagem,
                     className: "bg-slate-100 text-slate-700",
                   };
-                const canReprocess =
-                  row.status_triagem === "aprovado" ||
-                  row.status_triagem.startsWith("erro") ||
-                  row.status_triagem === "sem_planilha";
+                const canReprocess = !["novo_captado", "em_analise", "rejeitado"].includes(
+                  row.status_triagem,
+                );
                 return (
                   <tr key={row.licitacao_id} className="border-t border-slate-100">
                     <td className="px-3 py-2">
@@ -219,7 +238,7 @@ export default async function TriagemPage(props: {
                             Edital
                           </a>
                         ) : null}
-                        <Link
+                        <a
                           href={
                             row.link_pasta ?? `/licitacoes/${row.licitacao_id}`
                           }
@@ -228,7 +247,7 @@ export default async function TriagemPage(props: {
                           className="text-blue-700 hover:underline"
                         >
                           Pasta ({row.anexos_count})
-                        </Link>
+                        </a>
                         {row.link_planilha ? (
                           <a
                             href={row.link_planilha}
@@ -257,6 +276,9 @@ export default async function TriagemPage(props: {
                             name="licitacao_id"
                             value={row.licitacao_id}
                           />
+                          <input type="hidden" name="status" value={status} />
+                          <input type="hidden" name="uf" value={uf} />
+                          <input type="hidden" name="page" value={page} />
                           <button
                             type="submit"
                             className="rounded border border-slate-300 px-2 py-1 text-xs hover:bg-slate-50"

@@ -445,3 +445,138 @@ async def test_marcar_planilha_principal_e_sticky(
     )
     await db_session.refresh(escolhida)
     assert escolhida.principal is True
+
+
+@pytest.mark.asyncio
+async def test_processar_aprovado_sem_triplet_pncp_vira_erro_portal(
+    db_session: AsyncSession, tmp_path
+) -> None:
+    """Licitacao sem cnpj/ano/sequencial: `download_edital_for_licitacao`
+    levanta ValueError, que deve virar erro_portal e nao vazar como 500."""
+    from app.modules.licitacoes.processamento import (
+        STATUS_APROVADO,
+        STATUS_ERRO_PORTAL,
+        processar_aprovado,
+    )
+    from app.modules.licitacoes.storage import LocalStorage
+
+    lic = await _mk_licitacao(
+        db_session,
+        external_id="x-2026-16",
+        orgao_cnpj=None,
+        ano_compra=None,
+        sequencial_compra=None,
+    )
+    lic.status_triagem = STATUS_APROVADO
+    await db_session.commit()
+
+    result = await processar_aprovado(
+        db_session,
+        licitacao_id=lic.id,
+        pncp=FakePncp(),
+        storage=LocalStorage(tmp_path),
+    )
+    assert result.status_triagem == STATUS_ERRO_PORTAL
+    assert result.error_message
+
+    await db_session.refresh(lic)
+    assert lic.status_triagem == STATUS_ERRO_PORTAL
+
+
+@pytest.mark.asyncio
+async def test_reprocessar_storage_falha_preserva_score_e_principal(
+    db_session: AsyncSession, tmp_path
+) -> None:
+    """Se o arquivo sumiu do storage (nao e extensao inelegivel), o
+    re-score nao pode rebaixar uma classificacao ja feita com o conteudo
+    em maos -- senao a planilha principal e limpa por acidente."""
+    import shutil
+
+    from app.modules.licitacoes.identificacao_planilha import LIMIAR_PRINCIPAL
+    from app.modules.licitacoes.processamento import (
+        STATUS_APROVADO,
+        STATUS_COMPLETO,
+        processar_aprovado,
+    )
+    from app.modules.licitacoes.storage import LocalStorage
+
+    lic = await _mk_licitacao(db_session, external_id="x-2026-17", sequencial_compra=17)
+    lic.status_triagem = STATUS_APROVADO
+    await db_session.commit()
+
+    storage = LocalStorage(tmp_path)
+    await processar_aprovado(
+        db_session, licitacao_id=lic.id, pncp=FakePncp(), storage=storage
+    )
+    planilha = (
+        await db_session.execute(
+            select(PlanilhaOrcamentaria).where(PlanilhaOrcamentaria.principal)
+        )
+    ).scalar_one()
+    score_original = planilha.score_classificacao
+    assert score_original >= LIMIAR_PRINCIPAL
+
+    # Simula arquivo sumido do storage: a pasta fisica some, entao a
+    # leitura do anexo ja baixado passa a falhar com FileNotFoundError.
+    shutil.rmtree(tmp_path / str(lic.id))
+
+    result = await processar_aprovado(
+        db_session, licitacao_id=lic.id, pncp=FakePncp(), storage=storage
+    )
+    assert result.status_triagem == STATUS_COMPLETO
+
+    await db_session.refresh(planilha)
+    assert planilha.score_classificacao == score_original
+    assert planilha.principal is True
+
+
+class FakeStorageSharePointFalha:
+    """Duble de `EditaisStorage`: download funciona normalmente (delega
+    a uma `LocalStorage` real), mas `ensure_project_folder` explode como
+    se o SharePoint estivesse fora do ar."""
+
+    def __init__(self, tmp_path) -> None:
+        from app.modules.licitacoes.storage import LocalStorage
+
+        self._inner = LocalStorage(tmp_path)
+
+    async def save(self, *, licitacao_id, filename, content):
+        return await self._inner.save(
+            licitacao_id=licitacao_id, filename=filename, content=content
+        )
+
+    async def read(self, storage_path):
+        return await self._inner.read(storage_path)
+
+    async def delete(self, storage_path):
+        return await self._inner.delete(storage_path)
+
+    async def ensure_project_folder(self, *, licitacao_id, nome_pasta):
+        raise OSError("sharepoint indisponivel")
+
+
+@pytest.mark.asyncio
+async def test_processar_aprovado_pasta_falha_vira_erro_sharepoint(
+    db_session: AsyncSession, tmp_path
+) -> None:
+    from app.modules.licitacoes.processamento import (
+        STATUS_APROVADO,
+        STATUS_ERRO_SHAREPOINT,
+        processar_aprovado,
+    )
+
+    lic = await _mk_licitacao(db_session, external_id="x-2026-18", sequencial_compra=18)
+    lic.status_triagem = STATUS_APROVADO
+    await db_session.commit()
+
+    result = await processar_aprovado(
+        db_session,
+        licitacao_id=lic.id,
+        pncp=FakePncp(),
+        storage=FakeStorageSharePointFalha(tmp_path),
+    )
+    assert result.status_triagem == STATUS_ERRO_SHAREPOINT
+    assert result.error_message
+
+    await db_session.refresh(lic)
+    assert lic.status_triagem == STATUS_ERRO_SHAREPOINT

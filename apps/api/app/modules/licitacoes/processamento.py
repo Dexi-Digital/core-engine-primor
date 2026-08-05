@@ -101,9 +101,25 @@ async def processar_aprovado(
     await db.commit()
 
     # 1. Anexos (reusa D.4, idempotente).
-    download = await download_edital_for_licitacao(
-        db, licitacao_id=licitacao_id, pncp=pncp, storage=storage
-    )
+    try:
+        download = await download_edital_for_licitacao(
+            db, licitacao_id=licitacao_id, pncp=pncp, storage=storage
+        )
+    except ValueError as exc:
+        # Triplet PNCP (cnpj/ano/sequencial) ausente ou invalido: nao e um
+        # erro de programacao, e a licitacao que nao pode ser processada
+        # neste portal -- vira erro_portal em vez de vazar 500/404.
+        logger.warning(
+            "triplet PNCP ausente/invalido para licitacao %s: %s", licitacao_id, exc
+        )
+        licitacao.status_triagem = STATUS_ERRO_PORTAL
+        await db.commit()
+        return ProcessamentoResult(
+            licitacao_id=licitacao_id,
+            status_triagem=STATUS_ERRO_PORTAL,
+            anexos_count=0,
+            error_message=str(exc),
+        )
     if download.status == "failed":
         licitacao.status_triagem = STATUS_ERRO_PORTAL
         await db.commit()
@@ -205,10 +221,12 @@ async def _classificar_planilhas(
     for anexo in anexos:
         extensao = PurePosixPath(anexo.filename).suffix.lower()
         conteudo: bytes | None = None
+        leitura_falhou = False
         if extensao in {".xlsx", ".ods"}:
             try:
                 conteudo = await storage.read(anexo.storage_path)
             except (OSError, FileNotFoundError) as exc:
+                leitura_falhou = True
                 logger.warning(
                     "leitura do anexo %s falhou, score so por nome: %s",
                     anexo.id,
@@ -229,7 +247,12 @@ async def _classificar_planilhas(
             )
             db.add(row)
         else:
-            row.score_classificacao = score
+            if leitura_falhou:
+                # Arquivo sumiu do storage (nao e extensao inelegivel): nao
+                # rebaixa uma classificacao ja feita com o conteudo em maos.
+                row.score_classificacao = max(score, row.score_classificacao or 0)
+            else:
+                row.score_classificacao = score
             row.link = anexo.source_url
         candidatas.append(row)
     await db.flush()

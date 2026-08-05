@@ -72,6 +72,20 @@ def test_score_conteudo_bytes_corrompidos_retorna_zero() -> None:
     assert score_conteudo("x.xlsx", b"nao sou um zip") == 0
 
 
+def test_score_conteudo_acima_do_limite_de_bytes_retorna_zero_sem_parsear(
+    monkeypatch,
+) -> None:
+    """Guard antes de instanciar openpyxl/odfpy: nao paga o custo de
+    parsear (nem arrisca DoS) num anexo anormalmente grande. Monkeypatcha
+    o limite para nao precisar alocar 30MB reais no teste."""
+    import app.modules.licitacoes.identificacao_planilha as mod
+
+    monkeypatch.setattr(mod, "_MAX_BYTES", 10)
+    dados_grandes = _xlsx_bytes(["Item", "Total"])
+    assert len(dados_grandes) > 10
+    assert score_conteudo("orcamento.xlsx", dados_grandes) == 0
+
+
 def test_classificar_anexo_pdf_e_inelegivel() -> None:
     assert classificar_anexo("edital.pdf", b"%PDF") is None
 

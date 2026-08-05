@@ -102,12 +102,12 @@ def upgrade() -> None:
         ),
     )
     op.create_index(
-        "ix_licitacoes_planilhas_licitacao_id",
+        "ix_licitacoes_planilhas_orcamentarias_licitacao_id",
         "licitacoes_planilhas_orcamentarias",
         ["licitacao_id"],
     )
     op.create_index(
-        "ix_licitacoes_planilhas_anexo_id",
+        "ix_licitacoes_planilhas_orcamentarias_anexo_id",
         "licitacoes_planilhas_orcamentarias",
         ["anexo_id"],
         unique=True,
@@ -115,5 +115,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    op.drop_index(
+        "ix_licitacoes_planilhas_orcamentarias_anexo_id",
+        table_name="licitacoes_planilhas_orcamentarias",
+    )
+    op.drop_index(
+        "ix_licitacoes_planilhas_orcamentarias_licitacao_id",
+        table_name="licitacoes_planilhas_orcamentarias",
+    )
     op.drop_table("licitacoes_planilhas_orcamentarias")
     op.drop_table("licitacoes_pastas_projeto")

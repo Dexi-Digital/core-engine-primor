@@ -708,3 +708,26 @@ async def test_triagem_inclui_observacao_da_ultima_decisao(
         r for r in resp.json()["data"] if r["licitacao_id"] == lic.id
     )
     assert row["observacao"] == "verificar atestado de capacidade"
+
+
+@pytest.mark.asyncio
+async def test_montar_triagem_paginacao_estavel_com_data_empatada(
+    db_session: AsyncSession,
+) -> None:
+    """Sem tiebreaker por id, linhas com `data_publicacao_pncp` empatada
+    (aqui, todas nulas) podem repetir/pular entre paginas -- o `id.desc()`
+    garante ordenacao deterministica."""
+    licitacoes = [
+        await _mk_licitacao_processamento(
+            db_session, external_id=f"tiebreak-{i}", sequencial_compra=200 + i
+        )
+        for i in range(3)
+    ]
+    ids_desc = sorted((lic.id for lic in licitacoes), reverse=True)
+
+    pagina1, _ = await triagem.montar_triagem(db_session, page=1, page_size=2)
+    pagina2, _ = await triagem.montar_triagem(db_session, page=2, page_size=2)
+
+    todos_ids = [r.licitacao_id for r in pagina1] + [r.licitacao_id for r in pagina2]
+    assert len(todos_ids) == len(set(todos_ids)), "paginacao nao pode repetir linhas"
+    assert [i for i in todos_ids if i in ids_desc] == ids_desc
