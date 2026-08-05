@@ -33,7 +33,9 @@ from app.modules.auth.models import User
 from app.modules.dp_sesmt.schemas import ModuleStatus
 from app.modules.fiscal.parser import FiscalParseError
 from app.modules.fiscal.schemas import (
+    DocumentoFiscalDetail,
     DocumentoFiscalEnvioResponse,
+    DocumentoFiscalItemRead,
     DocumentoFiscalRead,
     DocumentoFiscalUpdate,
 )
@@ -45,6 +47,7 @@ from app.modules.fiscal.service import (
     get_dominio_singleton,
     import_xml,
     list_documentos,
+    list_itens,
     update_documento,
 )
 from app.modules.licitacoes.storage import EditaisStorage, LocalStorage
@@ -173,15 +176,20 @@ async def list_endpoint(
     return [DocumentoFiscalRead.model_validate(i) for i in items]
 
 
-@router.get("/documentos/{doc_id}", response_model=DocumentoFiscalRead)
+@router.get("/documentos/{doc_id}", response_model=DocumentoFiscalDetail)
 async def get_endpoint(
     doc_id: int,
     db: AsyncSession = Depends(get_db),
-) -> DocumentoFiscalRead:
+) -> DocumentoFiscalDetail:
     doc = await get_documento(db, doc_id)
     if doc is None:
         raise HTTPException(status_code=404, detail="documento nao encontrado")
-    return DocumentoFiscalRead.model_validate(doc)
+    itens = await list_itens(db, doc_id)
+    base = DocumentoFiscalRead.model_validate(doc).model_dump()
+    return DocumentoFiscalDetail(
+        **base,
+        itens=[DocumentoFiscalItemRead.model_validate(i) for i in itens],
+    )
 
 
 @router.patch("/documentos/{doc_id}", response_model=DocumentoFiscalRead)

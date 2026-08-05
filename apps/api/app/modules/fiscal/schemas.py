@@ -25,6 +25,13 @@ class DocumentoFiscalRead(BaseModel):
     destinatario_nome: str | None = None
     valor_total: Decimal | None = None
     data_emissao: datetime | None = None
+    uf: str | None = None
+    chave_dv_valida: bool | None = None
+    valor_icms: Decimal | None = None
+    valor_ipi: Decimal | None = None
+    valor_pis: Decimal | None = None
+    valor_cofins: Decimal | None = None
+    obra_id: int | None = None
     xml_path: str
     xml_hash: str | None = None
     status_envio: str
@@ -100,3 +107,26 @@ class DocumentoFiscalListFilter(BaseModel):
                 f"Validos: {sorted(STATUS_ENVIO_VALIDOS)}"
             )
         return v
+
+
+class DocumentoFiscalItemRead(BaseModel):
+    """Item (<det>) da NF-e no detalhe do documento."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    ordem: int
+    codigo: str | None = None
+    descricao: str | None = None
+    ncm: str | None = None
+    cfop: str | None = None
+    unidade: str | None = None
+    quantidade: Decimal | None = None
+    valor_unitario: Decimal | None = None
+    valor_total: Decimal | None = None
+
+
+class DocumentoFiscalDetail(DocumentoFiscalRead):
+    """Detalhe = metadados + itens (so NF-e/NFC-e tem itens)."""
+
+    itens: list[DocumentoFiscalItemRead] = []

@@ -21,6 +21,7 @@ from tests.fixtures.fiscal.samples import (
     CTE_XML,
     NFCE_65_XML,
     NFE_44_XML,
+    NFE_DETALHADA_XML,
 )
 
 
@@ -421,3 +422,50 @@ async def test_modelo_persiste_detalhes_e_itens(db_session: AsyncSession):
     assert doc.uf == "SP"
     assert doc.chave_dv_valida is True
     assert doc.obra_id is None
+
+
+@pytest.mark.asyncio
+async def test_upload_nfe_detalhada_persiste_impostos_e_itens(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+):
+    r = await api_client.post(
+        "/api/v1/fiscal/documentos",
+        files=_upload_payload(NFE_DETALHADA_XML, "nfe-detalhada.xml"),
+        headers=auth_headers,
+    )
+    assert r.status_code == 201, r.text
+    data = r.json()
+    assert data["uf"] == "SP"
+    assert data["chave_dv_valida"] is True
+    assert data["valor_icms"] == "3000.00"
+    assert data["valor_cofins"] == "760.00"
+
+    detail = await api_client.get(
+        f"/api/v1/fiscal/documentos/{data['id']}", headers=auth_headers
+    )
+    assert detail.status_code == 200
+    body = detail.json()
+    assert len(body["itens"]) == 2
+    assert body["itens"][0]["ncm"] == "25232910"
+    assert body["itens"][0]["cfop"] == "5102"
+    assert body["itens"][1]["codigo"] == "ACO-CA50"
+
+
+@pytest.mark.asyncio
+async def test_upload_cte_nao_gera_itens_nem_detalhes(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+):
+    """Tipos != nfe/nfce seguem exatamente como antes (2o passe e no-op)."""
+    r = await api_client.post(
+        "/api/v1/fiscal/documentos",
+        files=_upload_payload(CTE_XML, "cte.xml"),
+        headers=auth_headers,
+    )
+    assert r.status_code == 201
+    data = r.json()
+    assert data["uf"] is None
+    assert data["valor_icms"] is None
+    detail = await api_client.get(
+        f"/api/v1/fiscal/documentos/{data['id']}", headers=auth_headers
+    )
+    assert detail.json()["itens"] == []

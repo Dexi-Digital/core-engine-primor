@@ -21,8 +21,13 @@ from app.integrations.dominio.client import (
 from app.modules.fiscal.models import (
     STATUS_ENVIO_VALIDOS,
     DocumentoFiscal,
+    DocumentoFiscalItem,
 )
-from app.modules.fiscal.parser import FiscalParseError, parse_xml
+from app.modules.fiscal.parser import (
+    FiscalParseError,
+    parse_nfe_detalhes,
+    parse_xml,
+)
 from app.modules.licitacoes.storage import EditaisStorage
 
 logger = logging.getLogger(__name__)
@@ -89,6 +94,13 @@ async def import_xml(
     """
     parsed = parse_xml(xml_bytes)
 
+    # 2o passe: impostos/UF/itens (so NF-e/NFC-e; None para os demais).
+    detalhes = (
+        parse_nfe_detalhes(xml_bytes)
+        if parsed.tipo in {"nfe", "nfce"}
+        else None
+    )
+
     # Idempotencia ANTES de gravar no storage. Evita arquivo orfao.
     existing = await _find_duplicate(
         db,
@@ -136,6 +148,12 @@ async def import_xml(
         destinatario_nome=parsed.destinatario_nome,
         valor_total=parsed.valor_total,
         data_emissao=parsed.data_emissao,
+        uf=detalhes.uf if detalhes else None,
+        chave_dv_valida=detalhes.chave_dv_valida if detalhes else None,
+        valor_icms=detalhes.valor_icms if detalhes else None,
+        valor_ipi=detalhes.valor_ipi if detalhes else None,
+        valor_pis=detalhes.valor_pis if detalhes else None,
+        valor_cofins=detalhes.valor_cofins if detalhes else None,
         xml_path=storage_path,
         xml_hash=parsed.xml_hash,
         status_envio="pendente",
@@ -144,6 +162,23 @@ async def import_xml(
     )
     db.add(doc)
     try:
+        await db.flush()  # materializa doc.id para os itens
+        if detalhes:
+            for item in detalhes.itens:
+                db.add(
+                    DocumentoFiscalItem(
+                        documento_id=doc.id,
+                        ordem=item.ordem,
+                        codigo=item.codigo,
+                        descricao=item.descricao,
+                        ncm=item.ncm,
+                        cfop=item.cfop,
+                        unidade=item.unidade,
+                        quantidade=item.quantidade,
+                        valor_unitario=item.valor_unitario,
+                        valor_total=item.valor_total,
+                    )
+                )
         await db.commit()
     except IntegrityError as exc:
         # Race entre verificacao e commit -- duplicado paralelo. Limpa
@@ -175,6 +210,7 @@ async def import_xml(
             "emitente_cnpj": doc.emitente_cnpj,
             "valor_total": doc.valor_total,
             "source": doc.source,
+            "itens_count": len(detalhes.itens) if detalhes else 0,
         },
     )
     return doc
@@ -203,6 +239,18 @@ async def get_documento(
     db: AsyncSession, doc_id: int
 ) -> DocumentoFiscal | None:
     return await db.get(DocumentoFiscal, doc_id)
+
+
+async def list_itens(
+    db: AsyncSession, documento_id: int
+) -> Sequence[DocumentoFiscalItem]:
+    stmt = (
+        select(DocumentoFiscalItem)
+        .where(DocumentoFiscalItem.documento_id == documento_id)
+        .order_by(DocumentoFiscalItem.ordem)
+    )
+    result = await db.scalars(stmt)
+    return result.all()
 
 
 async def list_documentos(
@@ -499,6 +547,7 @@ __all__ = [
     "get_dominio_singleton",
     "import_xml",
     "list_documentos",
+    "list_itens",
     "reset_dominio_singleton",
     "update_documento",
 ]
