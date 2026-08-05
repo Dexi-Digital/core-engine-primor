@@ -413,3 +413,22 @@ def parse_xml(content: bytes) -> ParsedDocumento:
     parsed = _PARSERS[tipo](root)
     parsed.xml_hash = hashlib.sha256(content).hexdigest()
     return parsed
+
+
+def validar_chave_acesso(chave: str) -> bool:
+    """Valida o digito verificador (modulo-11) da chave de acesso NF-e.
+
+    Informativa: chave com DV errado indica XML adulterado ou gerado a
+    mao, mas NAO bloqueia importacao -- o dado ainda tem valor contabil
+    e a rejeicao seria falso-positivo em XMLs de homologacao/sinteticos.
+    """
+    if not re.fullmatch(r"\d{44}", chave or ""):
+        return False
+    pesos = (2, 3, 4, 5, 6, 7, 8, 9)
+    soma = sum(
+        int(digito) * pesos[i % 8]
+        for i, digito in enumerate(reversed(chave[:43]))
+    )
+    resto = soma % 11
+    dv = 0 if resto in (0, 1) else 11 - resto
+    return dv == int(chave[43])

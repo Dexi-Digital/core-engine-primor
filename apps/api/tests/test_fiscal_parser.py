@@ -5,7 +5,11 @@ from decimal import Decimal
 
 import pytest
 
-from app.modules.fiscal.parser import FiscalParseError, parse_xml
+from app.modules.fiscal.parser import (
+    FiscalParseError,
+    parse_xml,
+    validar_chave_acesso,
+)
 from tests.fixtures.fiscal.samples import (
     ALL_SAMPLES,
     BAIXA_XML,
@@ -128,3 +132,31 @@ def test_parse_todos_os_6_tipos_dominio(tipo: str, xml: bytes):
     parsed = parse_xml(xml)
     assert parsed.tipo == tipo
     assert parsed.xml_hash
+
+
+# ---------------------------------------------------------------------------
+# validar_chave_acesso (DV modulo-11 do leiaute NF-e 4.00)
+# ---------------------------------------------------------------------------
+
+
+def test_validar_chave_acesso_dv_correto():
+    # DV 8 calculado pelo algoritmo oficial (pesos 2..9 da direita p/ esquerda)
+    assert validar_chave_acesso("35240414200166000187550010000543211000000008") is True
+
+
+def test_validar_chave_acesso_dv_errado():
+    # Mesma chave com DV trocado -> invalida
+    assert validar_chave_acesso("35240414200166000187550010000543211000000001") is False
+
+
+def test_validar_chave_acesso_fixture_legada_tem_dv_invalido():
+    """A chave da NFE_44_XML e sintetica com DV errado -- documenta que
+    a validacao e informativa e NAO pode rejeitar upload (Global
+    Constraint: 565 testes legados nao quebram)."""
+    assert validar_chave_acesso("35240414200166000187550010000123451000000001") is False
+
+
+def test_validar_chave_acesso_formato_invalido():
+    assert validar_chave_acesso("") is False
+    assert validar_chave_acesso("123") is False
+    assert validar_chave_acesso("A" * 44) is False
