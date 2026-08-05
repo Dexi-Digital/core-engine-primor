@@ -85,6 +85,10 @@ class Settings(BaseSettings):
     # `storage_backend` controla qual backend `EditaisStorage` o
     # router monta: "local" (default) ou "onedrive".
     storage_backend: str = Field(default="local")
+    # Captador Squad 1: quando True, aprovar um edital na triagem despacha
+    # a task Celery `worker.tasks.licitacoes.processar_edital_aprovado` (Squad 2).
+    # Default False ate a Squad 2 registrar a task no worker.
+    captador_auto_process: bool = Field(default=False)
     ms_graph_tenant_id: str | None = Field(default=None)
     ms_graph_client_id: str | None = Field(default=None)
     ms_graph_client_secret: str | None = Field(default=None)
