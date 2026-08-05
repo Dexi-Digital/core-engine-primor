@@ -62,6 +62,7 @@ from app.modules.licitacoes.schemas import (
     SavedQueryCreate,
     SavedQueryRead,
     TriagemAprovarPayload,
+    TriagemListResponse,
     TriagemObservacaoPayload,
     TriagemRejeitarPayload,
 )
@@ -163,6 +164,28 @@ async def list_endpoint(
         page=page,
         page_size=page_size,
         data=[LicitacaoRead.model_validate(i) for i in items],
+    )
+
+
+@router.get("/triagem", response_model=TriagemListResponse)
+async def triagem_endpoint(
+    status_triagem: str | None = Query(None, alias="status", max_length=32),
+    uf: str | None = Query(None, max_length=2),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> TriagemListResponse:
+    """Aba de Triagem consolidada: status + links diretos (pasta, planilha).
+
+    ATENCAO: declarada ANTES de `/{licitacao_id}` -- rota estatica de um
+    segmento so, senao Starlette tenta parsear "triagem" como int e
+    devolve 422.
+    """
+    rows, total = await triagem.montar_triagem(
+        db, status=status_triagem, uf=uf, page=page, page_size=page_size
+    )
+    return TriagemListResponse(
+        total=total, page=page, page_size=page_size, data=rows
     )
 
 

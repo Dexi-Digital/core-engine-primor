@@ -624,3 +624,87 @@ async def test_run_processamento_fecha_pncp_e_storage_no_context_exit(
     assert result == {"ok": True}
     assert pncp_closed == [True]
     assert storage_closed == [True]
+
+
+# --- GET /licitacoes/triagem ----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_triagem_lista_com_links(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    tmp_path,
+    auth_headers: dict[str, str],
+) -> None:
+    lic = await _mk_licitacao_processamento(
+        db_session, external_id="y-3", sequencial_compra=23
+    )
+    lic.status_triagem = STATUS_APROVADO
+    await db_session.commit()
+
+    _override_deps(tmp_path)
+    try:
+        resp = await api_client.post(
+            f"/api/v1/licitacoes/{lic.id}/processar-anexos", headers=auth_headers
+        )
+        assert resp.status_code == 200
+        resp = await api_client.get("/api/v1/licitacoes/triagem")
+    finally:
+        _clear_deps()
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["total"] >= 1
+    row = next(r for r in body["data"] if r["licitacao_id"] == lic.id)
+    assert row["status_triagem"] == "completo"
+    assert row["link_portal"] == (
+        "https://pncp.gov.br/app/editais/12345678000100/2026/23"
+    )
+    assert row["link_planilha"] == "https://pncp.gov.br/arquivos/2"
+    assert row["planilha_nome"] is not None
+    assert row["anexos_count"] == 2
+
+
+@pytest.mark.asyncio
+async def test_triagem_filtra_por_status(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    lic = await _mk_licitacao_processamento(
+        db_session, external_id="y-4", sequencial_compra=24
+    )
+    assert lic.status_triagem == STATUS_NOVO_CAPTADO
+
+    resp = await api_client.get(
+        "/api/v1/licitacoes/triagem", params={"status": "novo_captado"}
+    )
+    assert resp.status_code == 200
+    assert all(
+        r["status_triagem"] == "novo_captado" for r in resp.json()["data"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_triagem_inclui_observacao_da_ultima_decisao(
+    api_client: AsyncClient, db_session: AsyncSession
+) -> None:
+    from app.modules.licitacoes.models import DecisaoTriagem
+
+    lic = await _mk_licitacao_processamento(
+        db_session, external_id="y-5", sequencial_compra=25
+    )
+    db_session.add(
+        DecisaoTriagem(
+            licitacao_id=lic.id,
+            decisao="em_analise",
+            observacao="verificar atestado de capacidade",
+            usuario_email="analista@primor.com",
+        )
+    )
+    await db_session.commit()
+
+    resp = await api_client.get("/api/v1/licitacoes/triagem")
+    assert resp.status_code == 200
+    row = next(
+        r for r in resp.json()["data"] if r["licitacao_id"] == lic.id
+    )
+    assert row["observacao"] == "verificar atestado de capacidade"

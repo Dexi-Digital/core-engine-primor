@@ -360,3 +360,33 @@ class ProcessamentoResult(BaseModel):
 
 class PlanilhaPrincipalUpdate(BaseModel):
     principal: bool = True
+
+
+# --- Captador Squad 2: Aba de Triagem consolidada --------------------------
+
+
+class TriagemRow(BaseModel):
+    """Uma linha da Aba de Triagem (Projeto Tecnico, secao 7.2)."""
+
+    licitacao_id: int
+    status_triagem: str
+    uf_sigla: str | None
+    municipio_nome: str | None
+    orgao_razao_social: str | None
+    objeto_compra: str | None
+    modalidade_nome: str | None
+    valor_total_estimado: Decimal | None
+    data_publicacao_pncp: datetime | None
+    link_portal: str | None
+    link_pasta: str | None
+    link_planilha: str | None
+    planilha_nome: str | None
+    anexos_count: int = 0
+    observacao: str | None = None
+
+
+class TriagemListResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    data: list[TriagemRow]
