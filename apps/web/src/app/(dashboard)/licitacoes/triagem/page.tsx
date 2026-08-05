@@ -32,14 +32,16 @@ export const dynamic = "force-dynamic";
 
 // Critério de UAT do cliente: alerta VERMELHO quando a planilha
 // orçamentária não foi localizada (status sem_planilha) e nos erros.
+// Cores alinhadas com o STATUS_BADGE de /licitacoes/captacao (mesma
+// informação, mesmas cores entre páginas irmãs).
 const STATUS_BADGE: Record<string, { label: string; className: string }> = {
-  novo_captado: { label: "Novo Captado", className: "bg-slate-100 text-slate-700" },
+  novo_captado: { label: "Novo Captado", className: "bg-sky-100 text-sky-800" },
   em_analise: { label: "Em Análise", className: "bg-amber-100 text-amber-800" },
-  aprovado: { label: "Aprovado", className: "bg-blue-100 text-blue-800" },
-  rejeitado: { label: "Rejeitado", className: "bg-slate-200 text-slate-500" },
+  aprovado: { label: "Aprovado", className: "bg-emerald-100 text-emerald-800" },
+  rejeitado: { label: "Rejeitado", className: "bg-slate-200 text-slate-600" },
   processando_anexos: {
     label: "Processando Anexos",
-    className: "bg-blue-100 text-blue-800",
+    className: "bg-indigo-100 text-indigo-800",
   },
   completo: { label: "Completo", className: "bg-emerald-100 text-emerald-800" },
   sem_planilha: { label: "Sem Planilha", className: "bg-red-100 text-red-800" },
@@ -271,6 +273,59 @@ export default async function TriagemPage(props: {
           </table>
         </div>
       )}
+
+      {triagem && triagem.data.length > 0 ? (
+        <Pagination
+          page={triagem.page}
+          pageSize={triagem.page_size}
+          total={triagem.total}
+          status={status}
+          uf={uf}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function Pagination({
+  page,
+  pageSize,
+  total,
+  status,
+  uf,
+}: {
+  page: number;
+  pageSize: number;
+  total: number;
+  status: string;
+  uf: string;
+}) {
+  const lastPage = Math.max(1, Math.ceil(total / pageSize));
+  if (lastPage <= 1) return null;
+
+  const mkHref = (p: number) => {
+    const params = new URLSearchParams();
+    if (status) params.set("status", status);
+    if (uf) params.set("uf", uf);
+    params.set("page", String(p));
+    return `?${params.toString()}`;
+  };
+
+  return (
+    <nav className="flex items-center justify-between text-sm">
+      {page > 1 ? (
+        <Link href={mkHref(page - 1)} className="text-slate-700 hover:underline">
+          ← Anterior
+        </Link>
+      ) : <span />}
+      <span className="text-xs text-slate-500">
+        Página {page} de {lastPage}
+      </span>
+      {page < lastPage ? (
+        <Link href={mkHref(page + 1)} className="text-slate-700 hover:underline">
+          Próxima →
+        </Link>
+      ) : <span />}
+    </nav>
   );
 }
