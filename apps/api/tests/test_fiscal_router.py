@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
@@ -11,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.models import AuditLog
 from app.main import app
-from app.modules.fiscal.models import DocumentoFiscal
+from app.modules.fiscal.models import DocumentoFiscal, DocumentoFiscalItem
 from app.modules.fiscal.router import get_dominio_dep
 from app.modules.fiscal.service import reset_dominio_singleton
 from tests.fixtures.fiscal.samples import (
@@ -369,3 +370,54 @@ async def test_fiscal_storage_isolado_do_editais_storage(
     # O subdir fiscal precisa aparecer no path final; sem o fix o path
     # seria so `{editais_storage_path}/{bucket}/...`.
     assert settings.fiscal_storage_subdir in doc.xml_path
+
+
+# ---------------------------------------------------------------------------
+# Task 3 -- persistencia de detalhes NF-e (colunas novas + tabela de itens)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_modelo_persiste_detalhes_e_itens(db_session: AsyncSession):
+    doc = DocumentoFiscal(
+        tipo="nfe",
+        chave_acesso="35240414200166000187550010000543211000000008",
+        xml_path="fiscal/1/teste.xml",
+        xml_hash="deadbeef" * 8,
+        status_envio="pendente",
+        retry_count=0,
+        uf="SP",
+        chave_dv_valida=True,
+        valor_icms=Decimal("3000.00"),
+        valor_ipi=Decimal("250.00"),
+        valor_pis=Decimal("165.00"),
+        valor_cofins=Decimal("760.00"),
+    )
+    db_session.add(doc)
+    await db_session.flush()
+    db_session.add(
+        DocumentoFiscalItem(
+            documento_id=doc.id,
+            ordem=1,
+            codigo="CIM-CP2",
+            descricao="Cimento CP-II 50kg",
+            ncm="25232910",
+            cfop="5102",
+            unidade="SC",
+            quantidade=Decimal("100.0000"),
+            valor_unitario=Decimal("200.00"),
+            valor_total=Decimal("20000.00"),
+        )
+    )
+    await db_session.commit()
+
+    row = await db_session.scalar(
+        select(DocumentoFiscalItem).where(
+            DocumentoFiscalItem.documento_id == doc.id
+        )
+    )
+    assert row is not None
+    assert row.ncm == "25232910"
+    assert doc.uf == "SP"
+    assert doc.chave_dv_valida is True
+    assert doc.obra_id is None
