@@ -126,8 +126,16 @@ max 8s) e levanta `ResendError` em 4xx não-recuperáveis (ex: domínio não
 verificado). Chamada feita dentro de `ResendClient.send_email(...)`.
 
 Cadência: `worker/main.py` configura `celery_app.conf.beat_schedule` para
-disparar `worker.tasks.licitacoes.dispatch_boletins` às **07h, 13h, 19h**
-(America/Sao_Paulo).
+disparar os jobs abaixo via Resend (America/Sao_Paulo). Horários
+escalonados de propósito para distribuir o burst no provedor:
+
+| Job                          | Task Celery                                          | Horário            |
+|-------------------------------|-------------------------------------------------------|---------------------|
+| Boletins de licitação          | `worker.tasks.licitacoes.dispatch_boletins`            | 07h, 13h, 19h        |
+| Alertas de vencimento de certidões (D.6) | `worker.tasks.licitacoes.dispatch_certidao_alerts` | 08h00               |
+| Alertas de vencimento de ASO (A.2) | `worker.tasks.dp_sesmt.dispatch_aso_alerts`         | 08h05               |
+| Alertas de DCB/perícia de afastamentos (D.4) | `worker.tasks.dp_sesmt.dispatch_afastamento_alerts` | 08h10          |
+| Alertas de vencimento de contratos (Squad 5) | `worker.tasks.financeiro.dispatch_contrato_alerts` | 08h15          |
 
 ## LLM providers — análise de edital (D.5)
 

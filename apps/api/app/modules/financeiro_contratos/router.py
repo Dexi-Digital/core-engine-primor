@@ -46,6 +46,13 @@ from app.modules.licitacoes.storage import EditaisStorage, LocalStorage
 
 router = APIRouter()
 
+# Cap de tamanho do PDF de contrato (module-level para permitir
+# monkeypatch em teste). O `arquivo.read()` ainda bufferiza o corpo
+# inteiro em memoria antes da checagem -- o cap evita persistir no
+# storage, nao evita o buffer em si (proteção real de tamanho de
+# request fica a cargo do proxy/gateway em producao).
+MAX_CONTRATO_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MiB
+
 
 async def get_contratos_storage() -> AsyncIterator[EditaisStorage]:
     """Storage dedicado para PDFs de contrato.
@@ -144,6 +151,19 @@ async def dispatch_contrato_alerts_endpoint(
     """Disparo manual dos alertas (a demo Vercel nao tem worker/beat).
     Requires RESEND_API_KEY; 503 se ausente -- paridade com o D.6.
 
+    ATENCAO -- colisao com o beat: o dispatch manual grava as MESMAS
+    janelas em `contratos_alertas_log` que o job diario do Celery Beat
+    (`contrato-alerts-daily`, 08h15). Chamar este endpoint marca a
+    janela como enviada e SUPRIME o alerta do beat para os mesmos
+    contratos/janelas naquele dia (idempotencia por
+    `uq_contrato_alerta_janela`, sem distincao de origem/`source`).
+    NAO e uma ferramenta de teste/dry-run -- qualquer chamada dispara
+    email de verdade para os `recipients` informados. Use apenas
+    emails reais de producao; disparos de teste vao "queimar" a janela
+    e o contrato correspondente nao recebera o alerta automatico do
+    beat. (Separar por `source` na unique key para permitir reenvio
+    manual sem suprimir o beat fica em ticket a parte.)
+
     ROUTE-ORDERING: precisa estar registrada ANTES de
     `/contratos/{contrato_id}` (abaixo) -- senao FastAPI tentaria
     converter "dispatch-alerts" para int e devolveria 422.
@@ -221,9 +241,26 @@ async def upload_arquivo_contrato_endpoint(
     """Anexa/substitui o PDF do contrato. Substituicao nao apaga o
     arquivo antigo do storage (historico barato; limpeza so no delete
     do contrato)."""
+    content_type = (arquivo.content_type or "").lower()
+    if content_type != "application/pdf":
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "arquivo deve ser PDF (content-type application/pdf); "
+                f"recebido '{arquivo.content_type or 'desconhecido'}'"
+            ),
+        )
     content = await arquivo.read()
     if not content:
         raise HTTPException(status_code=422, detail="arquivo vazio")
+    if len(content) > MAX_CONTRATO_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"arquivo excede o limite de {MAX_CONTRATO_UPLOAD_BYTES} "
+                "bytes"
+            ),
+        )
     row = await set_arquivo_contrato(
         db,
         contrato_id,

@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 
 class ContratoCreate(BaseModel):
@@ -80,4 +80,4 @@ class ContratoAlertaSummary(BaseModel):
 class ContratoAlertaDispatchPayload(BaseModel):
     """Payload do POST /contratos/dispatch-alerts (paridade com D.6)."""
 
-    recipients: list[str] = Field(min_length=1)
+    recipients: list[EmailStr] = Field(min_length=1, max_length=20)

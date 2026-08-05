@@ -73,8 +73,10 @@ async function createContrato(formData: FormData): Promise<void> {
     contraparte_documento:
       String(formData.get("contraparte_documento") ?? "").trim() || null,
     // Decimal no backend (Numeric(20,2)) -- envia string em reais com
-    // ponto decimal; o input aceita "," (pt-BR) e normalizamos aqui.
-    valor: valorReais ? valorReais.replace(",", ".") : null,
+    // ponto decimal. Input eh type="number" (o browser sempre entrega
+    // decimal com ponto, independente do locale), entao nao precisa
+    // normalizar separador aqui.
+    valor: valorReais || null,
     data_fim: String(formData.get("data_fim") ?? "").trim() || null,
     status: String(formData.get("status") ?? "rascunho").trim(),
     easyjur_ref: String(formData.get("easyjur_ref") ?? "").trim() || null,
@@ -274,8 +276,10 @@ export default async function ContratosPage(props: {
             Valor (R$)
             <input
               name="valor"
-              inputMode="decimal"
-              placeholder="15000,00"
+              type="number"
+              step="0.01"
+              min="0"
+              placeholder="15000.00"
               className="mt-1 rounded-md border border-slate-300 px-2 py-1 text-sm"
             />
           </label>

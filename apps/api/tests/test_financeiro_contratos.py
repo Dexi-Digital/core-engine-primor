@@ -557,3 +557,90 @@ async def test_dispatch_alerts_rota_estatica_resolve_antes_do_dinamico(
     # 422 indicaria que a rota dinamica `/contratos/{contrato_id}` capturou
     # "dispatch-alerts" tentando converte-lo para int.
     assert resp.status_code == 503, resp.text
+
+
+@pytest.mark.asyncio
+async def test_dispatch_alerts_recipients_email_invalido_da_422(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """Review final: `recipients` agora eh `list[EmailStr]` (paridade
+    D.6) -- email mal formado deve ser rejeitado antes de qualquer
+    chamada ao Resend, independente de RESEND_API_KEY estar setada."""
+    resp = await api_client.post(
+        "/api/v1/financeiro/contratos/dispatch-alerts",
+        json={"recipients": ["nao-e-um-email"]},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422, resp.text
+
+
+@pytest.mark.asyncio
+async def test_dispatch_alerts_recipients_acima_do_cap_da_422(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """Review final: cap de `max_length=20` em `recipients` (paridade D.6)."""
+    resp = await api_client.post(
+        "/api/v1/financeiro/contratos/dispatch-alerts",
+        json={"recipients": [f"user{i}@primor.com" for i in range(21)]},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422, resp.text
+
+
+@pytest.mark.asyncio
+async def test_upload_arquivo_contrato_rejeita_nao_pdf(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """Review final: content-type != application/pdf -> 422 claro."""
+    resp = await api_client.post(
+        "/api/v1/financeiro/contratos",
+        json={
+            "titulo": "Guard nao-pdf", "contraparte_nome": "Z",
+            "tipo": "cliente", "data_inicio": "2026-01-01",
+        },
+        headers=auth_headers,
+    )
+    contrato_id = resp.json()["id"]
+
+    resp = await api_client.post(
+        f"/api/v1/financeiro/contratos/{contrato_id}/arquivo",
+        files={"arquivo": ("contrato.txt", b"nao e pdf", "text/plain")},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422, resp.text
+    assert "pdf" in resp.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_upload_arquivo_contrato_rejeita_acima_do_cap(
+    api_client: AsyncClient,
+    auth_headers: dict[str, str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Review final: cap de tamanho do PDF -- monkeypatch do limite p/
+    um valor pequeno para nao precisar gerar um arquivo de 10MB real."""
+    import app.modules.financeiro_contratos.router as contratos_router
+
+    monkeypatch.setattr(contratos_router, "MAX_CONTRATO_UPLOAD_BYTES", 10)
+
+    resp = await api_client.post(
+        "/api/v1/financeiro/contratos",
+        json={
+            "titulo": "Guard cap", "contraparte_nome": "Z",
+            "tipo": "cliente", "data_inicio": "2026-01-01",
+        },
+        headers=auth_headers,
+    )
+    contrato_id = resp.json()["id"]
+
+    resp = await api_client.post(
+        f"/api/v1/financeiro/contratos/{contrato_id}/arquivo",
+        files={
+            "arquivo": (
+                "contrato.pdf", b"%PDF-1.4 " + b"x" * 20, "application/pdf"
+            )
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422, resp.text
+    assert "limite" in resp.json()["detail"].lower()
