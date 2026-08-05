@@ -67,6 +67,17 @@ class Licitacao(Base):
 
     raw: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
+    # --- Captador Squad 1: triagem humana (ver triagem.py) -----------------
+    # Valores validos em `triagem.STATUS_VALIDOS`; string livre no schema
+    # para permitir novos status sem migracao (mesmo racional de
+    # `CertidaoEmpresa.tipo`).
+    status_triagem: Mapped[str] = mapped_column(
+        String(32),
+        default="novo_captado",
+        server_default="novo_captado",
+        index=True,
+    )
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -199,6 +210,34 @@ class AnexoEdital(Base):
 
     __table_args__ = (
         UniqueConstraint("edital_id", "sequencial_documento", name="uq_anexo_seq"),
+    )
+
+
+class DecisaoTriagem(Base):
+    """Trilha de decisoes da triagem humana do Captador (Squad 1).
+
+    Uma row por acao da analista (aprovar / rejeitar / observacao).
+    O motivo de rejeicao e obrigatorio na camada de servico; aqui a
+    coluna e nullable porque aprovacao/observacao podem vir sem texto.
+    """
+
+    __tablename__ = "licitacoes_decisoes_triagem"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    licitacao_id: Mapped[int] = mapped_column(
+        Integer,
+        ForeignKey("licitacoes.id", ondelete="CASCADE"),
+    )
+    # 'aprovado' | 'rejeitado' | 'observacao' (triagem.DECISAO_*)
+    decisao: Mapped[str] = mapped_column(String(16))
+    observacao: Mapped[str | None] = mapped_column(Text, nullable=True)
+    usuario_email: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("ix_decisoes_triagem_lic_criado", "licitacao_id", "created_at"),
     )
 
 

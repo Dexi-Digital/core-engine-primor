@@ -163,6 +163,8 @@ async def list_licitacoes(
     uf: str | None = None,
     modalidade: str | None = None,
     orgao_cnpj: str | None = None,
+    status_triagem: str | None = None,
+    municipio: str | None = None,
     search: str | None = None,
     page: int = 1,
     page_size: int = 20,
@@ -179,6 +181,12 @@ async def list_licitacoes(
     if orgao_cnpj:
         stmt = stmt.where(Licitacao.orgao_cnpj == orgao_cnpj)
         count_stmt = count_stmt.where(Licitacao.orgao_cnpj == orgao_cnpj)
+    if status_triagem:
+        stmt = stmt.where(Licitacao.status_triagem == status_triagem)
+        count_stmt = count_stmt.where(Licitacao.status_triagem == status_triagem)
+    if municipio:
+        stmt = stmt.where(Licitacao.municipio_nome.ilike(f"%{municipio}%"))
+        count_stmt = count_stmt.where(Licitacao.municipio_nome.ilike(f"%{municipio}%"))
 
     search_term = (search or "").strip()
     if search_term:
