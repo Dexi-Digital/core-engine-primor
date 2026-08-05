@@ -356,3 +356,7 @@ class ProcessamentoResult(BaseModel):
     planilha_anexo_id: int | None = None
     pasta_link: str | None = None
     error_message: str | None = None
+
+
+class PlanilhaPrincipalUpdate(BaseModel):
+    principal: bool = True

@@ -41,6 +41,11 @@ from app.modules.licitacoes.editais import (
     get_edital,
     list_anexos,
 )
+from app.modules.licitacoes.processamento import (
+    ProcessamentoNaoPermitido,
+    marcar_planilha_principal,
+    processar_aprovado,
+)
 from app.modules.licitacoes.schemas import (
     AnexoEditalRead,
     BoletimDispatchSummary,
@@ -51,6 +56,9 @@ from app.modules.licitacoes.schemas import (
     IngestResult,
     LicitacaoListResponse,
     LicitacaoRead,
+    PlanilhaOrcamentariaRead,
+    PlanilhaPrincipalUpdate,
+    ProcessamentoResult,
     SavedQueryCreate,
     SavedQueryRead,
     TriagemAprovarPayload,
@@ -467,3 +475,58 @@ async def triagem_historico_endpoint(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return [DecisaoTriagemRead.model_validate(r) for r in rows]
+
+
+# --- Captador Squad 2: processamento pos-aprovacao ---
+
+
+@router.post(
+    "/{licitacao_id}/processar-anexos", response_model=ProcessamentoResult
+)
+async def processar_anexos_endpoint(
+    licitacao_id: int,
+    db: AsyncSession = Depends(get_db),
+    pncp: PncpClient = Depends(get_pncp_client),
+    storage: EditaisStorage = Depends(get_editais_storage),
+    _: User = Depends(get_current_user),
+) -> ProcessamentoResult:
+    """Disparo manual do processamento (a demo Vercel nao tem worker).
+
+    O caminho normal e a task Celery
+    `worker.tasks.licitacoes.processar_edital_aprovado`, despachada
+    pela Tela de Captacao ao aprovar.
+    """
+    try:
+        return await processar_aprovado(
+            db, licitacao_id=licitacao_id, pncp=pncp, storage=storage
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ProcessamentoNaoPermitido as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    finally:
+        await pncp.aclose()
+
+
+@router.patch(
+    "/{licitacao_id}/planilhas/{planilha_id}",
+    response_model=PlanilhaOrcamentariaRead,
+)
+async def marcar_planilha_principal_endpoint(
+    licitacao_id: int,
+    planilha_id: int,
+    payload: PlanilhaPrincipalUpdate,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> PlanilhaOrcamentariaRead:
+    if not payload.principal:
+        raise HTTPException(
+            status_code=400, detail="apenas principal=true e suportado"
+        )
+    try:
+        row = await marcar_planilha_principal(
+            db, licitacao_id=licitacao_id, planilha_id=planilha_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return PlanilhaOrcamentariaRead.model_validate(row)

@@ -1,12 +1,30 @@
-"""Tests do workflow de triagem do Captador (Squad 1)."""
+"""Tests do workflow de triagem do Captador (Squad 1) e do processamento
+pos-aprovacao (Squad 2: processar-anexos, planilhas, task Celery)."""
 from __future__ import annotations
 
 import pytest
+from httpx import AsyncClient
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.models import AuditLog
+from app.main import app
 from app.modules.licitacoes import triagem
 from app.modules.licitacoes.models import DecisaoTriagem, Licitacao
+from app.modules.licitacoes.processamento import (
+    STATUS_APROVADO,
+    STATUS_NOVO_CAPTADO,
+)
+from app.modules.licitacoes.router import (
+    get_editais_storage,
+    get_pncp_client,
+)
+from tests.test_licitacoes_processamento import (
+    FakePncp,
+)
+from tests.test_licitacoes_processamento import (
+    _mk_licitacao as _mk_licitacao_processamento,
+)
 
 
 class TestMaquinaDeStatus:
@@ -388,3 +406,221 @@ async def test_list_filtra_por_status_triagem_e_municipio(
         "/api/v1/licitacoes?status_triagem=aprovado&municipio=uberl"
     )
     assert r3.json()["total"] == 1
+
+
+# --- Captador Squad 2: processar-anexos, planilhas, task Celery ------------
+
+
+def _override_deps(tmp_path, pncp=None):
+    from app.modules.licitacoes.storage import LocalStorage
+
+    async def _storage():
+        yield LocalStorage(tmp_path)
+
+    def _pncp():
+        return pncp or FakePncp()
+
+    app.dependency_overrides[get_editais_storage] = _storage
+    app.dependency_overrides[get_pncp_client] = _pncp
+
+
+def _clear_deps():
+    app.dependency_overrides.pop(get_editais_storage, None)
+    app.dependency_overrides.pop(get_pncp_client, None)
+
+
+@pytest.mark.asyncio
+async def test_processar_anexos_endpoint_exige_auth(
+    api_client: AsyncClient, db_session: AsyncSession, tmp_path
+) -> None:
+    lic = await _mk_licitacao_processamento(db_session)
+    resp = await api_client.post(f"/api/v1/licitacoes/{lic.id}/processar-anexos")
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_processar_anexos_endpoint_completo(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    tmp_path,
+    auth_headers: dict[str, str],
+) -> None:
+    lic = await _mk_licitacao_processamento(db_session)
+    lic.status_triagem = STATUS_APROVADO
+    await db_session.commit()
+
+    _override_deps(tmp_path)
+    try:
+        resp = await api_client.post(
+            f"/api/v1/licitacoes/{lic.id}/processar-anexos", headers=auth_headers
+        )
+    finally:
+        _clear_deps()
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status_triagem"] == "completo"
+    assert body["planilha_encontrada"] is True
+
+
+@pytest.mark.asyncio
+async def test_processar_anexos_status_invalido_da_409(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    tmp_path,
+    auth_headers: dict[str, str],
+) -> None:
+    lic = await _mk_licitacao_processamento(
+        db_session, external_id="y-1", sequencial_compra=21
+    )
+    assert lic.status_triagem == STATUS_NOVO_CAPTADO
+    _override_deps(tmp_path)
+    try:
+        resp = await api_client.post(
+            f"/api/v1/licitacoes/{lic.id}/processar-anexos", headers=auth_headers
+        )
+    finally:
+        _clear_deps()
+    assert resp.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_processar_anexos_licitacao_inexistente_da_404(
+    api_client: AsyncClient, tmp_path, auth_headers: dict[str, str]
+) -> None:
+    _override_deps(tmp_path)
+    try:
+        resp = await api_client.post(
+            "/api/v1/licitacoes/999999/processar-anexos", headers=auth_headers
+        )
+    finally:
+        _clear_deps()
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_patch_planilha_principal(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    tmp_path,
+    auth_headers: dict[str, str],
+) -> None:
+    from app.modules.licitacoes.models import PlanilhaOrcamentaria
+
+    lic = await _mk_licitacao_processamento(
+        db_session, external_id="y-2", sequencial_compra=22
+    )
+    lic.status_triagem = STATUS_APROVADO
+    await db_session.commit()
+
+    _override_deps(tmp_path)
+    try:
+        resp = await api_client.post(
+            f"/api/v1/licitacoes/{lic.id}/processar-anexos", headers=auth_headers
+        )
+        assert resp.status_code == 200
+        planilha = (
+            await db_session.execute(
+                select(PlanilhaOrcamentaria).where(
+                    PlanilhaOrcamentaria.licitacao_id == lic.id
+                )
+            )
+        ).scalars().first()
+        resp2 = await api_client.patch(
+            f"/api/v1/licitacoes/{lic.id}/planilhas/{planilha.id}",
+            json={"principal": True},
+            headers=auth_headers,
+        )
+    finally:
+        _clear_deps()
+    assert resp2.status_code == 200, resp2.text
+    assert resp2.json()["status_validacao"] == "principal_manual"
+
+
+def test_worker_task_processar_edital_aprovado_registrada() -> None:
+    import sys
+    from pathlib import Path
+
+    workers_dir = Path(__file__).resolve().parents[2] / "workers"
+    sys.path.insert(0, str(workers_dir))
+    try:
+        import worker.tasks.licitacoes  # noqa: F401
+        from worker.main import celery_app  # noqa: F401
+
+        assert (
+            "worker.tasks.licitacoes.processar_edital_aprovado"
+            in celery_app.tasks
+        )
+    finally:
+        sys.path.remove(str(workers_dir))
+
+
+@pytest.mark.asyncio
+async def test_run_processamento_fecha_pncp_e_storage_no_context_exit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nota do review da Task 4: garante que o worker fecha os clients.
+
+    `_run_processamento` abre um `PncpClient` e um `EditaisStorage` (via
+    `editais_storage`) por chamada -- sem fechar, cada task Celery vaza
+    um pool de conexoes httpx.
+    """
+    import sys
+    from contextlib import asynccontextmanager
+    from pathlib import Path
+
+    workers_dir = Path(__file__).resolve().parents[2] / "workers"
+    sys.path.insert(0, str(workers_dir))
+    try:
+        import worker.tasks.licitacoes as worker_tasks
+
+        pncp_closed: list[bool] = []
+        storage_closed: list[bool] = []
+
+        class FakePncpClient:
+            def __init__(self, base_url: str | None = None) -> None:
+                self.base_url = base_url
+
+            async def aclose(self) -> None:
+                pncp_closed.append(True)
+
+        @asynccontextmanager
+        async def fake_editais_storage(settings):
+            try:
+                yield object()
+            finally:
+                storage_closed.append(True)
+
+        class FakeResult:
+            def model_dump(self) -> dict[str, object]:
+                return {"ok": True}
+
+        async def fake_processar_aprovado(db, *, licitacao_id, pncp, storage):
+            return FakeResult()
+
+        class FakeSessionCtx:
+            async def __aenter__(self):
+                return object()
+
+            async def __aexit__(self, *exc_info: object) -> bool:
+                return False
+
+        monkeypatch.setattr("app.core.db.SessionLocal", lambda: FakeSessionCtx())
+        monkeypatch.setattr(
+            "app.integrations.pncp.client.PncpClient", FakePncpClient
+        )
+        monkeypatch.setattr(
+            "app.modules.licitacoes.storage_factory.editais_storage",
+            fake_editais_storage,
+        )
+        monkeypatch.setattr(
+            "app.modules.licitacoes.processamento.processar_aprovado",
+            fake_processar_aprovado,
+        )
+
+        result = await worker_tasks._run_processamento(123)
+    finally:
+        sys.path.remove(str(workers_dir))
+
+    assert result == {"ok": True}
+    assert pncp_closed == [True]
+    assert storage_closed == [True]
