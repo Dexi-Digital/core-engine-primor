@@ -315,3 +315,32 @@ class DecisaoTriagemRead(BaseModel):
     observacao: str | None
     usuario_email: str
     created_at: datetime
+
+
+# --- Captador Squad 2 ------------------------------------------------------
+
+
+class PastaProjetoRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    licitacao_id: int
+    nome_pasta: str
+    caminho: str
+    link_pasta: str | None
+    storage_backend: str
+    status: str
+
+
+class PlanilhaOrcamentariaRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    licitacao_id: int
+    anexo_id: int
+    nome_arquivo: str
+    extensao: str
+    score_classificacao: int
+    link: str | None
+    status_validacao: str
+    principal: bool
