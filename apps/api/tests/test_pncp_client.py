@@ -127,3 +127,69 @@ async def test_204_returns_empty_page() -> None:
     assert page.empty is True
     assert page.data == []
     await client.aclose()
+
+
+def _portal_transport(handler):
+    return httpx.AsyncClient(base_url="https://mockportal.test", transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.asyncio
+async def test_list_itens_maps_fields_and_handles_404() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "/compras/2024/9/" in str(request.url) or str(request.url).endswith("/compras/2024/9/itens"):
+            return httpx.Response(404)
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "numeroItem": 1,
+                    "descricao": "Recapeamento asfaltico",
+                    "temResultado": True,
+                    "valorTotal": 1500000.5,
+                    "situacaoCompraItemNome": "Homologado",
+                },
+                {"numeroItem": 2, "descricao": "Sinalizacao", "temResultado": False},
+            ],
+        )
+
+    client = PncpClient(portal_base_url="https://mockportal.test", portal_client=_portal_transport(handler))
+    itens = await client.list_itens(cnpj="00394460000141", ano=2024, sequencial=156)
+    assert len(itens) == 2
+    assert itens[0].numero_item == 1
+    assert itens[0].tem_resultado is True
+    assert itens[0].valor_total == 1500000.5
+    assert itens[1].tem_resultado is False
+
+    vazio = await client.list_itens(cnpj="00394460000141", ano=2024, sequencial=9)
+    assert vazio == []
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_list_item_resultados_maps_fields() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url).endswith("/orgaos/00394460000141/compras/2024/156/itens/1/resultados")
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "sequencialResultado": 1,
+                    "niFornecedor": "11222333000144",
+                    "nomeRazaoSocialFornecedor": "Construtora Alfa LTDA",
+                    "valorTotalHomologado": 1450000.0,
+                    "valorUnitarioHomologado": 145.0,
+                    "quantidadeHomologada": 10000.0,
+                    "dataResultado": "2024-11-05",
+                    "situacaoCompraItemResultadoNome": "Informado",
+                    "porteFornecedorNome": "Demais",
+                }
+            ],
+        )
+
+    client = PncpClient(portal_base_url="https://mockportal.test", portal_client=_portal_transport(handler))
+    rows = await client.list_item_resultados(cnpj="00394460000141", ano=2024, sequencial=156, numero_item=1)
+    assert len(rows) == 1
+    assert rows[0].ni_fornecedor == "11222333000144"
+    assert rows[0].valor_total_homologado == 1450000.0
+    assert rows[0].sequencial_resultado == 1
+    await client.aclose()

@@ -169,6 +169,60 @@ class PncpArquivo:
         )
 
 
+@dataclass(slots=True)
+class PncpItem:
+    """One item of a contratacao (portal API /itens)."""
+
+    numero_item: int
+    descricao: str | None
+    tem_resultado: bool
+    valor_total: float | None
+    situacao_nome: str | None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> PncpItem:
+        return cls(
+            numero_item=int(data.get("numeroItem") or 0),
+            descricao=data.get("descricao"),
+            tem_resultado=bool(data.get("temResultado", False)),
+            valor_total=_as_float(data.get("valorTotal")),
+            situacao_nome=data.get("situacaoCompraItemNome"),
+            raw=data,
+        )
+
+
+@dataclass(slots=True)
+class PncpItemResultado:
+    """Winner/homologation record for one item (portal API /resultados)."""
+
+    sequencial_resultado: int
+    ni_fornecedor: str | None
+    nome_razao_social_fornecedor: str | None
+    valor_total_homologado: float | None
+    valor_unitario_homologado: float | None
+    quantidade_homologada: float | None
+    data_resultado: str | None
+    situacao_nome: str | None
+    porte_fornecedor_nome: str | None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> PncpItemResultado:
+        return cls(
+            sequencial_resultado=int(data.get("sequencialResultado") or 0),
+            ni_fornecedor=data.get("niFornecedor"),
+            nome_razao_social_fornecedor=data.get("nomeRazaoSocialFornecedor"),
+            valor_total_homologado=_as_float(data.get("valorTotalHomologado")),
+            valor_unitario_homologado=_as_float(data.get("valorUnitarioHomologado")),
+            quantidade_homologada=_as_float(data.get("quantidadeHomologada")),
+            data_resultado=data.get("dataResultado"),
+            situacao_nome=data.get("situacaoCompraItemResultadoNome"),
+            porte_fornecedor_nome=data.get("porteFornecedorNome"),
+            raw=data,
+        )
+
+
 def _as_float(value: Any) -> float | None:
     if value is None:
         return None
@@ -344,6 +398,42 @@ class PncpClient(IntegrationClient):
         resp.raise_for_status()
         body = resp.json() or []
         return [PncpArquivo.from_api(d) for d in body if d]
+
+    @retry(
+        stop=stop_after_attempt(4),
+        wait=wait_exponential(multiplier=1, max=10),
+        reraise=True,
+    )
+    async def list_itens(
+        self, *, cnpj: str, ano: int, sequencial: int
+    ) -> list[PncpItem]:
+        """List items of a contratacao. 204/404 -> empty list."""
+        client = await self._get_portal_client()
+        path = f"/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}/itens"
+        resp = await client.get(path)
+        if resp.status_code in (204, 404):
+            return []
+        resp.raise_for_status()
+        body = resp.json() or []
+        return [PncpItem.from_api(d) for d in body if d]
+
+    @retry(
+        stop=stop_after_attempt(4),
+        wait=wait_exponential(multiplier=1, max=10),
+        reraise=True,
+    )
+    async def list_item_resultados(
+        self, *, cnpj: str, ano: int, sequencial: int, numero_item: int
+    ) -> list[PncpItemResultado]:
+        """List homologation results of one item. 204/404 -> empty list."""
+        client = await self._get_portal_client()
+        path = f"/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}/itens/{numero_item}/resultados"
+        resp = await client.get(path)
+        if resp.status_code in (204, 404):
+            return []
+        resp.raise_for_status()
+        body = resp.json() or []
+        return [PncpItemResultado.from_api(d) for d in body if d]
 
     async def stream_arquivo(self, url: str) -> tuple[AsyncIterator[bytes], str, str | None]:
         """Stream one arquivo; returns `(iterator, filename, content_type)`.
