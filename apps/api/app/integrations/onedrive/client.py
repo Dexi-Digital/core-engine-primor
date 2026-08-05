@@ -324,7 +324,12 @@ class OneDriveClient(IntegrationClient):
             return r.json()
         if r.status_code == 409:
             # Corrida com outra criacao: a pasta passou a existir. Rele.
-            r = await self._client.get(get_url, headers=await self._auth_header())
+            try:
+                r = await self._client.get(
+                    get_url, headers=await self._auth_header()
+                )
+            except httpx.HTTPError as exc:
+                raise OneDriveError(f"get folder Graph falhou: {exc}") from exc
             if r.status_code == 200:
                 return r.json()
         raise OneDriveError(
@@ -548,6 +553,12 @@ class OneDriveMockClient(IntegrationClient):
         prefix = self._full_path(relative_path).rstrip("/")
         out: list[dict[str, Any]] = []
         for item_id, meta in self._meta.items():
+            if meta.get("folder"):
+                # Espelha o cliente real: `_list_recursive` nunca lista uma
+                # pasta como item de arquivo (so recursa nela). Sem este
+                # filtro, cada `create_folder`/`ensure_project_folder`
+                # criaria um "arquivo fantasma" (size 0) nas listagens.
+                continue
             path = meta["path"]
             # Pasta em path precisa casar com prefix ate o proximo /.
             if prefix:
