@@ -6,6 +6,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 
 import pytest
+from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -201,3 +202,90 @@ async def test_update_e_delete_contrato(db_session: AsyncSession) -> None:
     assert await delete_contrato(db_session, row.id) is True
     assert await get_contrato(db_session, row.id) is None
     assert await delete_contrato(db_session, 99999) is False
+
+
+@pytest.mark.asyncio
+async def test_crud_contratos_via_api(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    # create
+    resp = await api_client.post(
+        "/api/v1/financeiro/contratos",
+        json={
+            "titulo": "Locacao retroescavadeira",
+            "contraparte_nome": "TratorMax",
+            "contraparte_documento": "12345678000190",
+            "tipo": "locacao",
+            "valor": 900000,
+            "data_inicio": "2026-08-01",
+            "data_fim": "2026-08-20",
+            "status": "vigente",
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    contrato_id = body["id"]
+    assert body["vencimento_status"] in ("vencendo", "vigente")
+    assert body["dias_para_vencer"] is not None
+
+    # list + filtro
+    resp = await api_client.get("/api/v1/financeiro/contratos?tipo=locacao")
+    assert resp.status_code == 200
+    assert len(resp.json()) == 1
+
+    # get
+    resp = await api_client.get(f"/api/v1/financeiro/contratos/{contrato_id}")
+    assert resp.status_code == 200
+    assert resp.json()["titulo"] == "Locacao retroescavadeira"
+
+    # patch
+    resp = await api_client.patch(
+        f"/api/v1/financeiro/contratos/{contrato_id}",
+        json={"status": "judicializado", "easyjur_ref": "EJ-77"},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200
+    assert resp.json()["easyjur_ref"] == "EJ-77"
+
+    # delete
+    resp = await api_client.delete(
+        f"/api/v1/financeiro/contratos/{contrato_id}", headers=auth_headers
+    )
+    assert resp.status_code == 204
+    resp = await api_client.get(f"/api/v1/financeiro/contratos/{contrato_id}")
+    assert resp.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_mutacoes_exigem_auth(api_client: AsyncClient) -> None:
+    resp = await api_client.post(
+        "/api/v1/financeiro/contratos",
+        json={
+            "titulo": "X", "contraparte_nome": "Y", "tipo": "cliente",
+            "data_inicio": "2026-01-01",
+        },
+    )
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_tipo_invalido_da_422(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    resp = await api_client.post(
+        "/api/v1/financeiro/contratos",
+        json={
+            "titulo": "X", "contraparte_nome": "Y", "tipo": "permuta",
+            "data_inicio": "2026-01-01",
+        },
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_status_endpoint_implemented(api_client: AsyncClient) -> None:
+    resp = await api_client.get("/api/v1/financeiro/status")
+    assert resp.status_code == 200
+    assert resp.json()["implemented"] is True
