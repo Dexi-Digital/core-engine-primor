@@ -8,7 +8,7 @@ Escopo:
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -30,11 +30,18 @@ from app.modules.licitacoes.analise import (
     analyze_edital_for_licitacao,
     get_analise,
 )
+from app.modules.licitacoes.atas import ingest_atas
 from app.modules.licitacoes.boletins import (
     create_saved_query,
     delete_saved_query,
     dispatch_boletins,
     list_saved_queries,
+)
+from app.modules.licitacoes.dashboards import (
+    dashboard_concorrentes,
+    dashboard_eficiencia,
+    dashboard_geotargeting,
+    dashboard_nao_captados,
 )
 from app.modules.licitacoes.editais import (
     download_edital_for_licitacao,
@@ -46,19 +53,26 @@ from app.modules.licitacoes.processamento import (
     marcar_planilha_principal,
     processar_aprovado,
 )
+from app.modules.licitacoes.resultados import ingest_resultados
 from app.modules.licitacoes.schemas import (
     AnexoEditalRead,
+    AtaIngestSummary,
     BoletimDispatchSummary,
+    ConcorrenteRow,
     DecisaoTriagemRead,
     EditalAnaliseRead,
     EditalDownloadResult,
     EditalRead,
+    EficienciaResponse,
+    GeotargetingRow,
     IngestResult,
     LicitacaoListResponse,
     LicitacaoRead,
+    NaoCaptadosResponse,
     PlanilhaOrcamentariaRead,
     PlanilhaPrincipalUpdate,
     ProcessamentoResult,
+    ResultadoIngestSummary,
     SavedQueryCreate,
     SavedQueryRead,
     TriagemAprovarPayload,
@@ -189,6 +203,47 @@ async def triagem_endpoint(
     )
 
 
+# --- Squad 3: dashboards comerciais ---
+
+
+@router.get("/dashboards/concorrentes", response_model=list[ConcorrenteRow])
+async def dashboard_concorrentes_endpoint(
+    uf: str | None = Query(None, max_length=2),
+    data_inicial: datetime | None = Query(None),
+    data_final: datetime | None = Query(None),
+    limit: int = Query(50, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+) -> list[ConcorrenteRow]:
+    return await dashboard_concorrentes(
+        db, uf=uf, data_inicial=data_inicial, data_final=data_final, limit=limit
+    )
+
+
+@router.get("/dashboards/geotargeting", response_model=list[GeotargetingRow])
+async def dashboard_geotargeting_endpoint(
+    uf: str | None = Query("MG", max_length=2),
+    limit: int = Query(100, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+) -> list[GeotargetingRow]:
+    return await dashboard_geotargeting(db, uf=uf, limit=limit)
+
+
+@router.get("/dashboards/nao-captados", response_model=NaoCaptadosResponse)
+async def dashboard_nao_captados_endpoint(
+    uf: str | None = Query(None, max_length=2),
+    db: AsyncSession = Depends(get_db),
+) -> NaoCaptadosResponse:
+    return await dashboard_nao_captados(db, uf=uf)
+
+
+@router.get("/dashboards/eficiencia", response_model=EficienciaResponse)
+async def dashboard_eficiencia_endpoint(
+    uf: str | None = Query(None, max_length=2),
+    db: AsyncSession = Depends(get_db),
+) -> EficienciaResponse:
+    return await dashboard_eficiencia(db, uf=uf)
+
+
 @router.get("/{licitacao_id}", response_model=LicitacaoRead)
 async def get_endpoint(
     licitacao_id: int,
@@ -228,6 +283,56 @@ async def ingest_endpoint(
             data_inicial=data_inicial,
             data_final=data_final,
             uf=uf,
+            max_paginas=max_paginas,
+        )
+    finally:
+        await client.aclose()
+
+
+@router.post("/ingest/resultados", response_model=ResultadoIngestSummary)
+async def ingest_resultados_endpoint(
+    dias: int = Query(30, ge=1, le=365),
+    uf: str | None = Query(None, max_length=2),
+    max_licitacoes: int = Query(
+        25, ge=1, le=1000, description="Default baixo (25) p/ caber no timeout serverless."
+    ),
+    db: AsyncSession = Depends(get_db),
+    client: PncpClient = Depends(get_pncp_client),
+    _: User = Depends(get_current_user),
+) -> ResultadoIngestSummary:
+    """Baixa resultados homologados (vencedores) das licitacoes recentes.
+
+    Alimenta os dashboards de concorrentes e geotargeting. Disparo
+    manual (sem worker), igual ao /ingest/pncp.
+    """
+    try:
+        return await ingest_resultados(
+            db, client, dias=dias, uf=uf, max_licitacoes=max_licitacoes
+        )
+    finally:
+        await client.aclose()
+
+
+@router.post("/ingest/atas", response_model=AtaIngestSummary)
+async def ingest_atas_endpoint(
+    data_inicial: Annotated[date | None, Query(description="Default: 7 dias atras")] = None,
+    data_final: Annotated[date | None, Query(description="Default: hoje")] = None,
+    max_paginas: int | None = Query(
+        2, ge=1, le=100, description="Default baixo (2) p/ caber no timeout serverless."
+    ),
+    db: AsyncSession = Depends(get_db),
+    client: PncpClient = Depends(get_pncp_client),
+    _: User = Depends(get_current_user),
+) -> AtaIngestSummary:
+    """Ingestao de atas de RP vigentes no periodo (D.9 / adesoes)."""
+    today = date.today()
+    data_final = data_final or today
+    data_inicial = data_inicial or (data_final - timedelta(days=7))
+    if data_inicial > data_final:
+        raise HTTPException(status_code=400, detail="data_inicial > data_final")
+    try:
+        return await ingest_atas(
+            db, client, data_inicial=data_inicial, data_final=data_final,
             max_paginas=max_paginas,
         )
     finally:

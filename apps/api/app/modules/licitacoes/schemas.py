@@ -390,3 +390,78 @@ class TriagemListResponse(BaseModel):
     page: int
     page_size: int
     data: list[TriagemRow]
+
+
+# --- Captador Squad 3: ingestao de resultados homologados -----------------
+
+
+class ResultadoIngestSummary(BaseModel):
+    """Resumo de uma rodada de `ingest_resultados`.
+
+    `com_resultado` e `falhas` podem se sobrepor: se uma licitacao tem
+    parte dos itens gravados com sucesso e um item *seguinte* falha
+    (rede/HTTP), ela e contada nos dois -- reflete o estado real (dados
+    parciais persistidos) em vez de esconder a falha ou descartar o que
+    ja foi gravado.
+    """
+
+    licitacoes_processadas: int
+    com_resultado: int
+    resultados_gravados: int
+    falhas: int
+
+
+# --- Captador Squad 3: ingestao de atas de registro de preco (D.9) --------
+
+
+class AtaIngestSummary(BaseModel):
+    """Resumo de uma rodada de `ingest_atas`.
+
+    `falhas` conta paginacoes interrompidas por erro de rede/HTTP (apos
+    esgotar os retries do `PncpClient`) -- quando > 0, o resultado e
+    parcial: as atas das paginas ja buscadas ANTES da falha foram
+    persistidas normalmente (contadas em `total_fetched`/`gravadas`/
+    `atualizadas`/`vinculadas`), mas a janela pode nao ter sido coberta
+    por inteiro. Um novo disparo com a mesma janela e seguro (idempotente
+    via `numero_controle_pncp_ata`) e tende a completar o restante.
+    """
+
+    total_fetched: int
+    gravadas: int
+    atualizadas: int
+    vinculadas: int
+    falhas: int = 0
+
+
+# --- Captador Squad 3: dashboards comerciais (concorrentes, geotargeting) --
+
+
+class ConcorrenteRow(BaseModel):
+    cnpj: str
+    razao_social: str | None
+    licitacoes_vencidas: int
+    valor_total_homologado: Decimal | None
+    orgaos_distintos: int
+    ultima_vitoria: datetime | None
+
+
+class GeotargetingRow(BaseModel):
+    uf: str | None
+    municipio: str | None
+    licitacoes_com_resultado: int
+    valor_total_homologado: Decimal | None
+
+
+# --- Captador Squad 3: dashboards nao-captados / eficiencia (pos Squads 1/2) --
+
+
+class NaoCaptadosResponse(BaseModel):
+    total: int
+    por_status: dict[str, int]
+
+
+class EficienciaResponse(BaseModel):
+    total_triadas: int
+    tempo_medio_triagem_horas: float | None
+    pct_com_planilha: float | None
+    falhas_por_status: dict[str, int]

@@ -169,6 +169,97 @@ class PncpArquivo:
         )
 
 
+@dataclass(slots=True)
+class PncpItem:
+    """One item of a contratacao (portal API /itens)."""
+
+    numero_item: int
+    descricao: str | None
+    tem_resultado: bool
+    valor_total: float | None
+    situacao_nome: str | None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> PncpItem:
+        return cls(
+            numero_item=int(data.get("numeroItem") or 0),
+            descricao=data.get("descricao"),
+            tem_resultado=bool(data.get("temResultado", False)),
+            valor_total=_as_float(data.get("valorTotal")),
+            situacao_nome=data.get("situacaoCompraItemNome"),
+            raw=data,
+        )
+
+
+@dataclass(slots=True)
+class PncpItemResultado:
+    """Winner/homologation record for one item (portal API /resultados)."""
+
+    sequencial_resultado: int
+    ni_fornecedor: str | None
+    nome_razao_social_fornecedor: str | None
+    valor_total_homologado: float | None
+    valor_unitario_homologado: float | None
+    quantidade_homologada: float | None
+    data_resultado: str | None
+    situacao_nome: str | None
+    porte_fornecedor_nome: str | None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> PncpItemResultado:
+        return cls(
+            sequencial_resultado=int(data.get("sequencialResultado") or 0),
+            ni_fornecedor=data.get("niFornecedor"),
+            nome_razao_social_fornecedor=data.get("nomeRazaoSocialFornecedor"),
+            valor_total_homologado=_as_float(data.get("valorTotalHomologado")),
+            valor_unitario_homologado=_as_float(data.get("valorUnitarioHomologado")),
+            quantidade_homologada=_as_float(data.get("quantidadeHomologada")),
+            data_resultado=data.get("dataResultado"),
+            situacao_nome=data.get("situacaoCompraItemResultadoNome"),
+            porte_fornecedor_nome=data.get("porteFornecedorNome"),
+            raw=data,
+        )
+
+
+@dataclass(slots=True)
+class PncpAta:
+    """Ata de Registro de Preco (consulta API /v1/atas)."""
+
+    numero_controle_pncp_ata: str | None
+    numero_ata: str | None
+    ano_ata: int | None
+    numero_controle_pncp_compra: str | None
+    cancelado: bool
+    data_assinatura: str | None
+    vigencia_inicio: str | None
+    vigencia_fim: str | None
+    objeto_contratacao: str | None
+    cnpj_orgao: str | None
+    nome_orgao: str | None
+    possibilidade_adesao: bool | None
+    raw: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_api(cls, data: dict[str, Any]) -> PncpAta:
+        return cls(
+            numero_controle_pncp_ata=data.get("numeroControlePNCPAta"),
+            numero_ata=data.get("numeroAtaRegistroPreco"),
+            ano_ata=data.get("anoAta"),
+            numero_controle_pncp_compra=data.get("numeroControlePNCPCompra"),
+            cancelado=bool(data.get("cancelado", False)),
+            data_assinatura=data.get("dataAssinatura"),
+            vigencia_inicio=data.get("vigenciaInicio"),
+            vigencia_fim=data.get("vigenciaFim"),
+            objeto_contratacao=data.get("objetoContratacao"),
+            cnpj_orgao=data.get("cnpjOrgao"),
+            nome_orgao=data.get("nomeOrgao"),
+            possibilidade_adesao=data.get("possibilidadeAdesao"),
+            raw=data,
+        )
+
+
 def _as_float(value: Any) -> float | None:
     if value is None:
         return None
@@ -344,6 +435,101 @@ class PncpClient(IntegrationClient):
         resp.raise_for_status()
         body = resp.json() or []
         return [PncpArquivo.from_api(d) for d in body if d]
+
+    @retry(
+        stop=stop_after_attempt(4),
+        wait=wait_exponential(multiplier=1, max=10),
+        reraise=True,
+    )
+    async def list_itens(
+        self, *, cnpj: str, ano: int, sequencial: int
+    ) -> list[PncpItem]:
+        """List items of a contratacao. 204/404 -> empty list."""
+        client = await self._get_portal_client()
+        path = f"/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}/itens"
+        resp = await client.get(path)
+        if resp.status_code in (204, 404):
+            return []
+        resp.raise_for_status()
+        body = resp.json() or []
+        return [PncpItem.from_api(d) for d in body if d]
+
+    @retry(
+        stop=stop_after_attempt(4),
+        wait=wait_exponential(multiplier=1, max=10),
+        reraise=True,
+    )
+    async def list_item_resultados(
+        self, *, cnpj: str, ano: int, sequencial: int, numero_item: int
+    ) -> list[PncpItemResultado]:
+        """List homologation results of one item. 204/404 -> empty list."""
+        client = await self._get_portal_client()
+        path = f"/v1/orgaos/{cnpj}/compras/{ano}/{sequencial}/itens/{numero_item}/resultados"
+        resp = await client.get(path)
+        if resp.status_code in (204, 404):
+            return []
+        resp.raise_for_status()
+        body = resp.json() or []
+        return [PncpItemResultado.from_api(d) for d in body if d]
+
+    @retry(
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=1, max=15),
+        reraise=True,
+    )
+    async def list_atas(
+        self,
+        *,
+        data_inicial: date | str,
+        data_final: date | str,
+        cnpj: str | None = None,
+        pagina: int = 1,
+        tamanho_pagina: int = 50,
+    ) -> tuple[list[PncpAta], int]:
+        """Fetch one page of /v1/atas. Returns (atas, paginas_restantes)."""
+        params: dict[str, Any] = {
+            "dataInicial": _fmt_date(data_inicial),
+            "dataFinal": _fmt_date(data_final),
+            "pagina": pagina,
+            "tamanhoPagina": tamanho_pagina,
+        }
+        if cnpj:
+            params["cnpj"] = cnpj
+        client = await self._get_client()
+        resp = await client.get("/v1/atas", params=params)
+        if resp.status_code == 204:
+            return [], 0
+        resp.raise_for_status()
+        body = resp.json()
+        atas = [PncpAta.from_api(d) for d in body.get("data", [])]
+        if body.get("empty", not atas):
+            return atas, 0
+        return atas, body.get("paginasRestantes", 0)
+
+    async def iter_atas(
+        self,
+        *,
+        data_inicial: date | str,
+        data_final: date | str,
+        cnpj: str | None = None,
+        tamanho_pagina: int = 50,
+        max_paginas: int | None = None,
+    ) -> AsyncIterator[PncpAta]:
+        """Async generator over every ata page in the window."""
+        pagina = 1
+        while True:
+            atas, restantes = await self.list_atas(
+                data_inicial=data_inicial,
+                data_final=data_final,
+                cnpj=cnpj,
+                pagina=pagina,
+                tamanho_pagina=tamanho_pagina,
+            )
+            for ata in atas:
+                yield ata
+            if restantes <= 0 or (max_paginas and pagina >= max_paginas):
+                return
+            pagina += 1
 
     async def stream_arquivo(self, url: str) -> tuple[AsyncIterator[bytes], str, str | None]:
         """Stream one arquivo; returns `(iterator, filename, content_type)`.
