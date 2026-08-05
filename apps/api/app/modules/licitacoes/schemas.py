@@ -450,3 +450,18 @@ class GeotargetingRow(BaseModel):
     municipio: str | None
     licitacoes_com_resultado: int
     valor_total_homologado: Decimal | None
+
+
+# --- Captador Squad 3: dashboards nao-captados / eficiencia (pos Squads 1/2) --
+
+
+class NaoCaptadosResponse(BaseModel):
+    total: int
+    por_status: dict[str, int]
+
+
+class EficienciaResponse(BaseModel):
+    total_triadas: int
+    tempo_medio_triagem_horas: float | None
+    pct_com_planilha: float | None
+    falhas_por_status: dict[str, int]

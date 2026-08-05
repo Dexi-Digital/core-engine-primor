@@ -12,7 +12,14 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.licitacoes.models import Licitacao, ResultadoLicitacao
-from app.modules.licitacoes.schemas import ConcorrenteRow, GeotargetingRow
+from app.modules.licitacoes.schemas import (
+    ConcorrenteRow,
+    EficienciaResponse,
+    GeotargetingRow,
+    NaoCaptadosResponse,
+)
+
+NAO_CAPTADO_STATUSES = ("rejeitado", "sem_planilha", "erro_portal", "erro_sharepoint")
 
 
 async def dashboard_concorrentes(
@@ -80,3 +87,76 @@ async def dashboard_geotargeting(
     )
     rows = (await db.execute(stmt)).all()
     return [GeotargetingRow(**row._mapping) for row in rows]
+
+
+async def dashboard_nao_captados(db: AsyncSession) -> NaoCaptadosResponse:
+    """Contagem de licitacoes que nao avancaram na triagem/processamento.
+
+    Ver Task 7 (Squad 3, pos Squads 1/2): status considerados "nao
+    captados" sao rejeitado, sem_planilha, erro_portal, erro_sharepoint.
+    """
+    stmt = (
+        select(Licitacao.status_triagem, func.count(Licitacao.id))
+        .where(Licitacao.status_triagem.in_(NAO_CAPTADO_STATUSES))
+        .group_by(Licitacao.status_triagem)
+    )
+    rows = (await db.execute(stmt)).all()
+    por_status = {status: count for status, count in rows}
+    return NaoCaptadosResponse(total=sum(por_status.values()), por_status=por_status)
+
+
+async def dashboard_eficiencia(db: AsyncSession) -> EficienciaResponse:
+    """Eficiencia do funil de triagem (Squad 1) + processamento (Squad 2).
+
+    `tempo_medio_triagem_horas` e `pct_com_planilha` ficam `None` quando
+    nao ha dados suficientes (divisao por zero tratada).
+    """
+    from app.modules.licitacoes.models import DecisaoTriagem  # Squad 1
+
+    total_triadas = (
+        await db.execute(select(func.count(func.distinct(DecisaoTriagem.licitacao_id))))
+    ).scalar_one()
+
+    # tempo medio captacao -> primeira decisao (em horas)
+    tempos_stmt = (
+        select(
+            func.min(DecisaoTriagem.created_at).label("decidido_em"),
+            Licitacao.created_at.label("captado_em"),
+        )
+        .join(Licitacao, Licitacao.id == DecisaoTriagem.licitacao_id)
+        .group_by(DecisaoTriagem.licitacao_id, Licitacao.created_at)
+    )
+    pares = (await db.execute(tempos_stmt)).all()
+    deltas = [
+        (row.decidido_em - row.captado_em).total_seconds() / 3600
+        for row in pares
+        if row.decidido_em and row.captado_em
+    ]
+    tempo_medio = round(sum(deltas) / len(deltas), 2) if deltas else None
+
+    completo = (
+        await db.execute(
+            select(func.count()).where(Licitacao.status_triagem == "completo")
+        )
+    ).scalar_one()
+    sem_planilha = (
+        await db.execute(
+            select(func.count()).where(Licitacao.status_triagem == "sem_planilha")
+        )
+    ).scalar_one()
+    processadas = completo + sem_planilha
+    pct = round(100.0 * completo / processadas, 2) if processadas else None
+
+    falhas_stmt = (
+        select(Licitacao.status_triagem, func.count(Licitacao.id))
+        .where(Licitacao.status_triagem.in_(("erro_portal", "erro_sharepoint")))
+        .group_by(Licitacao.status_triagem)
+    )
+    falhas = {status: count for status, count in (await db.execute(falhas_stmt)).all()}
+
+    return EficienciaResponse(
+        total_triadas=total_triadas,
+        tempo_medio_triagem_horas=tempo_medio,
+        pct_com_planilha=pct,
+        falhas_por_status=falhas,
+    )

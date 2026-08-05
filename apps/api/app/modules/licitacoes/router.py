@@ -39,7 +39,9 @@ from app.modules.licitacoes.boletins import (
 )
 from app.modules.licitacoes.dashboards import (
     dashboard_concorrentes,
+    dashboard_eficiencia,
     dashboard_geotargeting,
+    dashboard_nao_captados,
 )
 from app.modules.licitacoes.editais import (
     download_edital_for_licitacao,
@@ -61,10 +63,12 @@ from app.modules.licitacoes.schemas import (
     EditalAnaliseRead,
     EditalDownloadResult,
     EditalRead,
+    EficienciaResponse,
     GeotargetingRow,
     IngestResult,
     LicitacaoListResponse,
     LicitacaoRead,
+    NaoCaptadosResponse,
     PlanilhaOrcamentariaRead,
     PlanilhaPrincipalUpdate,
     ProcessamentoResult,
@@ -222,6 +226,20 @@ async def dashboard_geotargeting_endpoint(
     db: AsyncSession = Depends(get_db),
 ) -> list[GeotargetingRow]:
     return await dashboard_geotargeting(db, uf=uf, limit=limit)
+
+
+@router.get("/dashboards/nao-captados", response_model=NaoCaptadosResponse)
+async def dashboard_nao_captados_endpoint(
+    db: AsyncSession = Depends(get_db),
+) -> NaoCaptadosResponse:
+    return await dashboard_nao_captados(db)
+
+
+@router.get("/dashboards/eficiencia", response_model=EficienciaResponse)
+async def dashboard_eficiencia_endpoint(
+    db: AsyncSession = Depends(get_db),
+) -> EficienciaResponse:
+    return await dashboard_eficiencia(db)
 
 
 @router.get("/{licitacao_id}", response_model=LicitacaoRead)
