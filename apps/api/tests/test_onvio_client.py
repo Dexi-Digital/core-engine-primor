@@ -1,4 +1,5 @@
 """Testes do adapter Onvio (Dominio/Thomson Reuters -- NF-e)."""
+
 from __future__ import annotations
 
 import pytest
@@ -77,20 +78,7 @@ async def test_mock_health_check_true():
     assert await OnvioClient().health_check() is True
 
 
-@pytest.mark.asyncio
-async def test_health_check_nao_mock_tolera_not_implemented():
-    # Ate as Tasks 5-6, o caminho real levanta NotImplementedError; o
-    # health_check deve tratar isso como indisponivel (False), nao propagar.
-    c = OnvioClient(
-        client_id="id", client_secret="secret", integration_key="key"
-    )
-    assert c.is_mock is False
-    assert await c.health_check() is False
-
-
-CREDS = dict(
-    client_id="cid", client_secret="csec", integration_key="ikey"
-)
+CREDS = dict(client_id="cid", client_secret="csec", integration_key="ikey")
 
 
 def _real_onvio(handler, **kwargs):
@@ -107,9 +95,7 @@ def _route(request: Request, *, token_calls: list) -> Response | None:
         assert "grant_type=client_credentials" in body
         assert "client_id=cid" in body
         assert f"audience={ONVIO_DEFAULT_AUDIENCE}" in body
-        return Response(
-            200, json={"access_token": "tok-abc", "expires_in": 86400}
-        )
+        return Response(200, json={"access_token": "tok-abc", "expires_in": 86400})
     if request.url.path.endswith("/activation/info"):
         assert request.headers["Authorization"] == "Bearer tok-abc"
         assert request.headers["x-integration-key"] == "ikey"
@@ -124,6 +110,28 @@ def _route(request: Request, *, token_calls: list) -> Response | None:
         assert request.headers["x-integration-key"] == "ikey"
         return Response(200, json={"integrationKey": "sess-key-1"})
     return None
+
+
+@pytest.mark.asyncio
+async def test_real_health_check_ok_quando_activation_funciona():
+    token_calls: list = []
+
+    def handler(request: Request) -> Response:
+        r = _route(request, token_calls=token_calls)
+        assert r is not None, f"rota inesperada: {request.url}"
+        return r
+
+    c = _real_onvio(handler)
+    assert await c.health_check() is True
+
+
+@pytest.mark.asyncio
+async def test_real_health_check_falha_quando_api_down():
+    def handler(request: Request) -> Response:
+        return Response(500, text="boom")
+
+    c = _real_onvio(handler)
+    assert await c.health_check() is False
 
 
 @pytest.mark.asyncio
@@ -156,6 +164,46 @@ async def test_real_token_rejeitado_vira_auth_error():
 
 
 @pytest.mark.asyncio
+async def test_real_401_em_chamada_autenticada_invalida_activation_key():
+    # Um 401 numa chamada ja autenticada (nao so no /oauth/token) deve
+    # invalidar token E activation key -- a proxima chamada precisa
+    # refazer todo o fluxo (token + /activation/enable), nao so o token.
+    token_calls: list = []
+    enable_calls: list = []
+    status_calls: list = []
+
+    def handler(request: Request) -> Response:
+        if request.url.host == "auth.thomsonreuters.com":
+            token_calls.append(1)
+            return Response(200, json={"access_token": "tok-abc", "expires_in": 86400})
+        if request.url.path.endswith("/activation/enable"):
+            enable_calls.append(1)
+            return Response(200, json={"integrationKey": "sess-key-1"})
+        if request.url.path == "/dominio/invoice/v3/batches/batch-77":
+            status_calls.append(1)
+            if len(status_calls) == 1:
+                return Response(401, json={"error": "expired"})
+            return Response(
+                200,
+                json={"filesExpanded": [{"apiStatus": {"message": "Arquivo armazenado na API"}}]},
+            )
+        raise AssertionError(f"rota inesperada: {request.url}")
+
+    c = _real_onvio(handler, allow_send=True)
+    with pytest.raises(OnvioAuthError):
+        await c.get_batch_status("batch-77")
+    assert len(token_calls) == 1
+    assert len(enable_calls) == 1
+
+    st = await c.get_batch_status("batch-77")
+    assert st["stored"] is True
+    # apos o 401, o cache foi limpo -- a chamada seguinte refaz token
+    # e activation key do zero.
+    assert len(token_calls) == 2
+    assert len(enable_calls) == 2
+
+
+@pytest.mark.asyncio
 async def test_real_send_bloqueado_sem_allow_send():
     def handler(request: Request) -> Response:
         raise AssertionError("nenhuma chamada HTTP deveria acontecer")
@@ -182,11 +230,7 @@ async def test_real_send_e_status():
         if request.url.path == "/dominio/invoice/v3/batches/batch-77":
             return Response(
                 200,
-                json={
-                    "filesExpanded": [
-                        {"apiStatus": {"message": "Arquivo armazenado na API"}}
-                    ]
-                },
+                json={"filesExpanded": [{"apiStatus": {"message": "Arquivo armazenado na API"}}]},
             )
         raise AssertionError(f"rota inesperada: {request.url}")
 
@@ -209,11 +253,7 @@ async def test_real_status_nao_armazenado():
             return shared
         return Response(
             200,
-            json={
-                "filesExpanded": [
-                    {"apiStatus": {"message": "Arquivo com schema invalido"}}
-                ]
-            },
+            json={"filesExpanded": [{"apiStatus": {"message": "Arquivo com schema invalido"}}]},
         )
 
     c = _real_onvio(handler, allow_send=True)

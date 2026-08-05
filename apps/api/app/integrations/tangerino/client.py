@@ -106,6 +106,11 @@ class TangerinoClient(IntegrationClient):
         self._api_token = api_token or ""
         self._own_client = client is None
         self._client = client or httpx.AsyncClient(base_url=base_url, timeout=timeout)
+        if not self._api_token:
+            logger.info(
+                "tangerino.mock_mode sem TANGERINO_API_KEY -- usando "
+                "dataset mock deterministico"
+            )
 
     @property
     def is_mock(self) -> bool:

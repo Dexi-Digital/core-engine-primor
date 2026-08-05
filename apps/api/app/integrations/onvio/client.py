@@ -22,6 +22,7 @@ Os dois coexistem; a escolha e da camada de servico do fiscal.
 Padrao do projeto: sem qualquer uma das 3 credenciais, o adapter cai
 num mock deterministico -- mesmo padrao OnSafety/Dominio/OneDrive.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -85,9 +86,7 @@ class OnvioClient(IntegrationClient):
 
     @property
     def is_mock(self) -> bool:
-        return not (
-            self._client_id and self._client_secret and self._integration_key
-        )
+        return not (self._client_id and self._client_secret and self._integration_key)
 
     async def aclose(self) -> None:
         if self._own_client:
@@ -98,7 +97,7 @@ class OnvioClient(IntegrationClient):
             return True
         try:
             await self.check_activation()
-        except (OnvioError, NotImplementedError):
+        except OnvioError:
             return False
         return True
 
@@ -112,13 +111,9 @@ class OnvioClient(IntegrationClient):
                 "cliente_cnpj": "99888777000162",
                 "source": "onvio_mock",
             }
-        data = await self._get_json(
-            f"{ONVIO_API_BASE}/dominio/integration/v1/activation/info"
-        )
+        data = await self._get_json(f"{ONVIO_API_BASE}/dominio/integration/v1/activation/info")
         return {
-            "escritorio_cnpj": str(
-                data.get("accountantOfficeNationalIdentity") or ""
-            ),
+            "escritorio_cnpj": str(data.get("accountantOfficeNationalIdentity") or ""),
             "cliente_cnpj": str(data.get("clientNationalIdentity") or ""),
             "source": "onvio",
         }
@@ -145,21 +140,16 @@ class OnvioClient(IntegrationClient):
                 raise OnvioError(f"token Onvio falhou: {exc}") from exc
             if r.status_code in (401, 403):
                 raise OnvioAuthError(
-                    f"credenciais Onvio rejeitadas ({r.status_code}): "
-                    f"{r.text[:200]}"
+                    f"credenciais Onvio rejeitadas ({r.status_code}): {r.text[:200]}"
                 )
             if r.status_code != 200:
-                raise OnvioError(
-                    f"token Onvio {r.status_code}: {r.text[:200]}"
-                )
+                raise OnvioError(f"token Onvio {r.status_code}: {r.text[:200]}")
             data = r.json()
             token = data.get("access_token")
             if not token:
                 raise OnvioError("resposta /oauth/token sem access_token")
             self._token = str(token)
-            self._token_expires_at = time.time() + int(
-                data.get("expires_in", 86400)
-            )
+            self._token_expires_at = time.time() + int(data.get("expires_in") or 86400)
             return self._token
 
     async def _api_headers(self) -> dict[str, str]:
@@ -183,9 +173,7 @@ class OnvioClient(IntegrationClient):
             )
             key = data.get("integrationKey")
             if not key:
-                raise OnvioError(
-                    "resposta /activation/enable sem integrationKey"
-                )
+                raise OnvioError("resposta /activation/enable sem integrationKey")
             self._activation_key = str(key)
             return self._activation_key
 
@@ -207,32 +195,24 @@ class OnvioClient(IntegrationClient):
 
     def _json_or_raise(self, r: httpx.Response, url: str) -> dict[str, Any]:
         if r.status_code in (401, 403):
-            # Token pode ter expirado entre cache e uso -- invalida para
-            # o proximo call renovar.
+            # Token e activation key podem ter expirado/sido revogados
+            # entre cache e uso -- invalida ambos para o proximo call
+            # renovar (a activation key de sessao depende do token).
             self._token = None
             self._token_expires_at = 0.0
-            raise OnvioAuthError(
-                f"Onvio {url} status {r.status_code}: {r.text[:200]}"
-            )
+            self._activation_key = None
+            raise OnvioAuthError(f"Onvio {url} status {r.status_code}: {r.text[:200]}")
         if r.status_code >= 300:
-            raise OnvioError(
-                f"Onvio {url} status {r.status_code}: {r.text[:200]}"
-            )
+            raise OnvioError(f"Onvio {url} status {r.status_code}: {r.text[:200]}")
         try:
             data = r.json()
         except ValueError as exc:
-            raise OnvioError(
-                f"resposta nao-JSON Onvio ({url}): {exc}"
-            ) from exc
+            raise OnvioError(f"resposta nao-JSON Onvio ({url}): {exc}") from exc
         if not isinstance(data, dict):
-            raise OnvioError(
-                f"Onvio {url}: objeto esperado, veio {type(data).__name__}"
-            )
+            raise OnvioError(f"Onvio {url}: objeto esperado, veio {type(data).__name__}")
         return data
 
-    async def send_nfe_xml(
-        self, *, filename: str, content: bytes
-    ) -> dict[str, Any]:
+    async def send_nfe_xml(self, *, filename: str, content: bytes) -> dict[str, Any]:
         """Envia um XML de NF-e para o Dominio do contador.
 
         Retorna {batch_id, source}. Envio REAL exige allow_send=True.
@@ -242,7 +222,8 @@ class OnvioClient(IntegrationClient):
         if self.is_mock:
             digest = hashlib.sha1(content).hexdigest()[:24]
             logger.info(
-                "onvio_mock.send_nfe_xml file=%s bytes=%d", filename,
+                "onvio_mock.send_nfe_xml file=%s bytes=%d",
+                filename,
                 len(content),
             )
             return {"batch_id": f"mock-{digest}", "source": "onvio_mock"}
@@ -301,9 +282,7 @@ class OnvioClient(IntegrationClient):
         expanded = data.get("filesExpanded") or []
         message = ""
         if expanded and isinstance(expanded[0], dict):
-            message = str(
-                (expanded[0].get("apiStatus") or {}).get("message") or ""
-            )
+            message = str((expanded[0].get("apiStatus") or {}).get("message") or "")
         return {
             "batch_id": batch_id,
             "stored": message == _STORED_MESSAGE,

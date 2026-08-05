@@ -607,7 +607,7 @@ Env vars:
 ## Onvio (Dominio/Thomson Reuters — NF-e para o contador)
 
 **Adapter:** `app/integrations/onvio/` (`OnvioClient` com OAuth2
-client_credentials real + `OnvioMockClient` determinístico).
+client_credentials real + modo mock determinístico embutido).
 
 Sem qualquer uma das 3 credenciais, mock determinístico. Fluxo: token
 OAuth2 (`auth.thomsonreuters.com`, cache 24h em memória) → activation
