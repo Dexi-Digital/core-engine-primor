@@ -5,7 +5,12 @@ from decimal import Decimal
 
 import pytest
 
-from app.modules.fiscal.parser import FiscalParseError, parse_xml
+from app.modules.fiscal.parser import (
+    FiscalParseError,
+    parse_nfe_detalhes,
+    parse_xml,
+    validar_chave_acesso,
+)
 from tests.fixtures.fiscal.samples import (
     ALL_SAMPLES,
     BAIXA_XML,
@@ -13,6 +18,9 @@ from tests.fixtures.fiscal.samples import (
     CTE_XML,
     NFCE_65_XML,
     NFE_44_XML,
+    NFE_DETALHADA_XML,
+    NFE_NITEM_DUPLICADO_XML,
+    NFE_UF_INVALIDA_XML,
     NFSE_ABRASF_XML,
 )
 
@@ -128,3 +136,111 @@ def test_parse_todos_os_6_tipos_dominio(tipo: str, xml: bytes):
     parsed = parse_xml(xml)
     assert parsed.tipo == tipo
     assert parsed.xml_hash
+
+
+# ---------------------------------------------------------------------------
+# validar_chave_acesso (DV modulo-11 do leiaute NF-e 4.00)
+# ---------------------------------------------------------------------------
+
+
+def test_validar_chave_acesso_dv_correto():
+    # DV 8 calculado pelo algoritmo oficial (pesos 2..9 da direita p/ esquerda)
+    assert validar_chave_acesso("35240414200166000187550010000543211000000008") is True
+
+
+def test_validar_chave_acesso_dv_errado():
+    # Mesma chave com DV trocado -> invalida
+    assert validar_chave_acesso("35240414200166000187550010000543211000000001") is False
+
+
+def test_validar_chave_acesso_fixture_legada_tem_dv_invalido():
+    """A chave da NFE_44_XML e sintetica com DV errado -- documenta que
+    a validacao e informativa e NAO pode rejeitar upload (Global
+    Constraint: 565 testes legados nao quebram)."""
+    assert validar_chave_acesso("35240414200166000187550010000123451000000001") is False
+
+
+def test_validar_chave_acesso_formato_invalido():
+    assert validar_chave_acesso("") is False
+    assert validar_chave_acesso("123") is False
+    assert validar_chave_acesso("A" * 44) is False
+
+
+# ---------------------------------------------------------------------------
+# parse_nfe_detalhes (UF + impostos + itens -- 2o passe, so NF-e/NFC-e)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_nfe_detalhes_extrai_impostos_uf_e_itens():
+    det = parse_nfe_detalhes(NFE_DETALHADA_XML)
+    assert det is not None
+    assert det.uf == "SP"
+    assert det.chave_dv_valida is True
+    assert det.valor_icms == Decimal("3000.00")
+    assert det.valor_ipi == Decimal("250.00")
+    assert det.valor_pis == Decimal("165.00")
+    assert det.valor_cofins == Decimal("760.00")
+
+    assert len(det.itens) == 2
+    item1 = det.itens[0]
+    assert item1.ordem == 1
+    assert item1.codigo == "CIM-CP2"
+    assert item1.descricao == "Cimento CP-II 50kg"
+    assert item1.ncm == "25232910"
+    assert item1.cfop == "5102"
+    assert item1.unidade == "SC"
+    assert item1.quantidade == Decimal("100.0000")
+    assert item1.valor_unitario == Decimal("200.0000000000")
+    assert item1.valor_total == Decimal("20000.00")
+    assert det.itens[1].ordem == 2
+    assert det.itens[1].codigo == "ACO-CA50"
+
+
+def test_parse_nfe_detalhes_sem_ender_emit_cai_no_cuf_da_chave():
+    """NFE_44_XML nao tem <enderEmit>; a UF vem do codigo cUF (35=SP)
+    embutido na chave de acesso. E o DV invalido da fixture legada vira
+    flag False -- nao erro."""
+    det = parse_nfe_detalhes(NFE_44_XML)
+    assert det is not None
+    assert det.uf == "SP"
+    assert det.chave_dv_valida is False
+    assert det.itens == []  # fixture minima nao tem <det>
+    assert det.valor_icms is None  # ICMSTot minimo so tem vNF
+
+
+def test_parse_nfe_detalhes_sanitiza_nitem_duplicado():
+    """Emissor malformado manda dois <det nItem="1">. O parser deve
+    reatribuir a ordem posicionalmente para nao violar o
+    UNIQUE(documento_id, ordem) no upload."""
+    det = parse_nfe_detalhes(NFE_NITEM_DUPLICADO_XML)
+    assert det is not None
+    assert len(det.itens) == 2
+    ordens = [item.ordem for item in det.itens]
+    assert len(set(ordens)) == 2
+    assert det.itens[0].ordem == 1
+    assert det.itens[1].ordem == 2
+
+
+def test_parse_nfe_detalhes_uf_invalida_cai_no_fallback_da_chave():
+    """<UF>INVALIDA</UF> nao esta no whitelist _CUF_UF.values(); o
+    parser deve descartar o texto arbitrario e manter o cUF da chave
+    (35 -> SP) em vez de gravar algo que estoura String(2) no Postgres."""
+    det = parse_nfe_detalhes(NFE_UF_INVALIDA_XML)
+    assert det is not None
+    assert det.uf == "SP"
+
+
+def test_parse_nfe_detalhes_tipo_nao_suportado_retorna_none():
+    assert parse_nfe_detalhes(CTE_XML) is None
+    assert parse_nfe_detalhes(NFSE_ABRASF_XML) is None
+    assert parse_nfe_detalhes(BAIXA_XML) is None
+
+
+def test_parse_nfe_detalhes_nfce_tambem_suportada():
+    det = parse_nfe_detalhes(NFCE_65_XML)
+    assert det is not None
+
+
+def test_parse_nfe_detalhes_xml_malformado_levanta_erro():
+    with pytest.raises(FiscalParseError):
+        parse_nfe_detalhes(b"<NFe><infNFe")

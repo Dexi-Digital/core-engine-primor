@@ -5,7 +5,9 @@ from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
+    Boolean,
     DateTime,
+    ForeignKey,
     Index,
     Integer,
     Numeric,
@@ -67,6 +69,33 @@ class DocumentoFiscal(Base):
         DateTime(timezone=True), nullable=True
     )
 
+    # --- 2o passe NF-e/NFC-e (parse_nfe_detalhes). Nulos para os demais
+    # tipos e para documentos importados antes da feature (use o
+    # endpoint /reprocessar para preencher retroativamente).
+    uf: Mapped[str | None] = mapped_column(String(2), nullable=True, index=True)
+    chave_dv_valida: Mapped[bool | None] = mapped_column(
+        Boolean, nullable=True
+    )
+    valor_icms: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 2), nullable=True
+    )
+    valor_ipi: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 2), nullable=True
+    )
+    valor_pis: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 2), nullable=True
+    )
+    valor_cofins: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 2), nullable=True
+    )
+    # Vinculo manual com obra (rastreabilidade de custo). SET NULL: a
+    # exclusao de uma obra nao pode apagar documento fiscal (auditoria).
+    obra_id: Mapped[int | None] = mapped_column(
+        ForeignKey("obras_obra.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
     xml_path: Mapped[str] = mapped_column(String(1024))
     xml_hash: Mapped[str | None] = mapped_column(
         String(64), nullable=True, index=True
@@ -98,4 +127,40 @@ class DocumentoFiscal(Base):
         UniqueConstraint("tipo", "chave_acesso", name="uq_fiscal_tipo_chave"),
         UniqueConstraint("xml_hash", name="uq_fiscal_xml_hash"),
         Index("ix_fiscal_documentos_emissao_tipo", "data_emissao", "tipo"),
+    )
+
+
+class DocumentoFiscalItem(Base):
+    """Um item (<det>) de NF-e/NFC-e. Filha de DocumentoFiscal.
+
+    CASCADE no delete: item nao existe sem a nota (o delete da nota ja
+    audita o snapshot; itens nao precisam de trilha propria).
+    """
+
+    __tablename__ = "fiscal_documento_itens"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    documento_id: Mapped[int] = mapped_column(
+        ForeignKey("fiscal_documentos.id", ondelete="CASCADE"), index=True
+    )
+    ordem: Mapped[int] = mapped_column(Integer)
+    codigo: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    descricao: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    ncm: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    cfop: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    unidade: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    quantidade: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 4), nullable=True
+    )
+    valor_unitario: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 10), nullable=True
+    )
+    valor_total: Mapped[Decimal | None] = mapped_column(
+        Numeric(20, 2), nullable=True
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "documento_id", "ordem", name="uq_fiscal_item_documento_ordem"
+        ),
     )
