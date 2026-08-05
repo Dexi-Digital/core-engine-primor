@@ -570,3 +570,64 @@ plano standard, abr/2025). Quotas de API: 600 requests/min por projeto.
 - Endpoints retornam 201 mesmo em caso de erro de OCR (com payload
   da parte com `ocr_status='erro'`); 422 só para arquivo vazio /
   404 para `parte_id` inexistente.
+
+---
+
+## Tangerino (ponto eletronico — Solides)
+
+**Adapter:** `app/integrations/tangerino/` (`TangerinoClient` com modo
+mock determinístico embutido — padrão Infosimples).
+
+Sem `TANGERINO_API_KEY`, mock determinístico (3 funcionários, 2 obras).
+Endpoints validados contra o spec público
+`https://employer.tangerino.com.br/v2/api-docs` (2026-08-04):
+funcionários (`/employee/find-all`), batidas
+(`/external/api/v1/payssego/punches/{id}`), locais de trabalho
+(`/workplace/find-all`). Auth: api key crua no header `Authorization`.
+
+**Limitações descobertas no spec (impactam a apropriação de mão de obra):**
+
+- **Não há geolocalização nas batidas** (`PunchSimpleDTO` só tem
+  timestamps) nem em nenhum modelo do spec público. O vínculo
+  funcionário→obra confiável é o **workplace** (local de trabalho)
+  associado ao funcionário. A hipótese "localização da batida" do
+  documento de mão de obra precisa ser confirmada com o suporte Solides
+  — pode existir em outra superfície de API.
+- Não há endpoint de afastamentos no spec público.
+- Unidade dos timestamps (epoch ms assumido) e formato de
+  `startDate`/`endDate` a confirmar com credencial real.
+
+Env vars:
+
+| Variável              | Obrigatória | Descrição                                    |
+|-----------------------|-------------|----------------------------------------------|
+| `TANGERINO_API_KEY`   | opcional    | API key (vazio = mock determinístico)        |
+| `TANGERINO_BASE_URL`  | não         | Default: `https://employer.tangerino.com.br` |
+
+## Onvio (Dominio/Thomson Reuters — NF-e para o contador)
+
+**Adapter:** `app/integrations/onvio/` (`OnvioClient` com OAuth2
+client_credentials real + modo mock determinístico embutido).
+
+Sem qualquer uma das 3 credenciais, mock determinístico. Fluxo: token
+OAuth2 (`auth.thomsonreuters.com`, cache 24h em memória) → activation
+(`/dominio/integration/v1/activation/*`) → envio (`POST
+/dominio/invoice/v3/batches`, multipart) → status (`GET /batches/{id}`;
+sucesso = mensagem "Arquivo armazenado na API").
+
+**Guard-rail:** envio real é escrita no Domínio de PRODUÇÃO do escritório
+contábil (sem sandbox conhecido). `ONVIO_ALLOW_SEND=false` (default)
+bloqueia `send_nfe_xml` real com `OnvioSendBlockedError`; mock não é
+afetado. Coexiste com `app/integrations/dominio` (Central do
+Desenvolvedor) — qual superfície o módulo fiscal usa é decisão de
+serviço, não do adapter.
+
+Env vars:
+
+| Variável                  | Obrigatória | Descrição                                    |
+|---------------------------|-------------|----------------------------------------------|
+| `ONVIO_CLIENT_ID`         | opcional    | Credencial OAuth Thomson Reuters             |
+| `ONVIO_CLIENT_SECRET`     | opcional    | Credencial OAuth Thomson Reuters             |
+| `ONVIO_INTEGRATION_KEY`   | opcional    | Chave de integração do vínculo contador↔cliente |
+| `ONVIO_AUDIENCE`          | não         | Default: `409f91f6-dc17-44c8-a5d8-e0a1bafd8b67` |
+| `ONVIO_ALLOW_SEND`        | não         | Default: `false` bloqueia envio real          |
