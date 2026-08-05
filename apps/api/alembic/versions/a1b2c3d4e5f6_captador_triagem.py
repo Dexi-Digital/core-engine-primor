@@ -55,11 +55,6 @@ def upgrade() -> None:
         ),
     )
     op.create_index(
-        "ix_licitacoes_decisoes_triagem_licitacao_id",
-        "licitacoes_decisoes_triagem",
-        ["licitacao_id"],
-    )
-    op.create_index(
         "ix_decisoes_triagem_lic_criado",
         "licitacoes_decisoes_triagem",
         ["licitacao_id", "created_at"],
@@ -69,10 +64,6 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_index(
         "ix_decisoes_triagem_lic_criado",
-        table_name="licitacoes_decisoes_triagem",
-    )
-    op.drop_index(
-        "ix_licitacoes_decisoes_triagem_licitacao_id",
         table_name="licitacoes_decisoes_triagem",
     )
     op.drop_table("licitacoes_decisoes_triagem")

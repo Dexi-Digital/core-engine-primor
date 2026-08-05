@@ -56,6 +56,7 @@ async def lifespan(app: FastAPI):
     # `reset_*_singleton()` retorna a instancia anterior (ou None se
     # nunca foi tocada), e o `aclose()` libera o pool httpx.
     from app.modules.fiscal.service import reset_dominio_singleton
+    from app.modules.licitacoes.triagem import reset_celery_dispatcher
     from app.modules.manutencao_frota.service import (
         reset_celery_dispatcher_singleton,
         reset_documentai_singleton,
@@ -79,6 +80,12 @@ async def lifespan(app: FastAPI):
     prev_celery = reset_celery_dispatcher_singleton()
     if prev_celery is not None:
         prev_celery.close()
+
+    # Idem para o dispatcher de triagem do Captador (Squad 1) -- singleton
+    # separado do de frota, mas mesmo racional de fechar o pool Redis/AMQP.
+    prev_triagem_celery = reset_celery_dispatcher()
+    if prev_triagem_celery is not None:
+        prev_triagem_celery.close()
 
 
 def create_app() -> FastAPI:

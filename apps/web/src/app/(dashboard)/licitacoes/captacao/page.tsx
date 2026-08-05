@@ -329,8 +329,70 @@ export default async function CaptacaoPage(props: {
               </tbody>
             </table>
           </div>
+          <Pagination
+            page={resp.page}
+            pageSize={resp.page_size}
+            total={resp.total}
+            uf={uf}
+            municipio={municipio}
+            status={status}
+            modalidade={modalidade}
+            search={search}
+          />
         </>
       )}
     </div>
+  );
+}
+
+function Pagination({
+  page,
+  pageSize,
+  total,
+  uf,
+  municipio,
+  status,
+  modalidade,
+  search,
+}: {
+  page: number;
+  pageSize: number;
+  total: number;
+  uf: string;
+  municipio: string;
+  status: string;
+  modalidade: string;
+  search: string;
+}) {
+  const lastPage = Math.max(1, Math.ceil(total / pageSize));
+  if (lastPage <= 1) return null;
+
+  const mkHref = (p: number) => {
+    const params = new URLSearchParams();
+    if (uf) params.set("uf", uf);
+    if (municipio) params.set("municipio", municipio);
+    if (status) params.set("status", status);
+    if (modalidade) params.set("modalidade", modalidade);
+    if (search) params.set("search", search);
+    params.set("page", String(p));
+    return `?${params.toString()}`;
+  };
+
+  return (
+    <nav className="flex items-center justify-between text-sm">
+      {page > 1 ? (
+        <Link href={mkHref(page - 1)} className="text-slate-700 hover:underline">
+          ← Anterior
+        </Link>
+      ) : <span />}
+      <span className="text-xs text-slate-500">
+        Página {page} de {lastPage}
+      </span>
+      {page < lastPage ? (
+        <Link href={mkHref(page + 1)} className="text-slate-700 hover:underline">
+          Próxima →
+        </Link>
+      ) : <span />}
+    </nav>
   );
 }

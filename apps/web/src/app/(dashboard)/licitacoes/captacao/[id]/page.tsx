@@ -38,6 +38,7 @@ async function observacaoAction(formData: FormData): Promise<void> {
     console.error("[captacao] observacao falhou", err);
   }
   revalidatePath(`/licitacoes/captacao/${id}`);
+  revalidatePath("/licitacoes/captacao");
 }
 
 const DECISAO_LABELS: Record<string, string> = {

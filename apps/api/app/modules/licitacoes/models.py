@@ -227,7 +227,6 @@ class DecisaoTriagem(Base):
     licitacao_id: Mapped[int] = mapped_column(
         Integer,
         ForeignKey("licitacoes.id", ondelete="CASCADE"),
-        index=True,
     )
     # 'aprovado' | 'rejeitado' | 'observacao' (triagem.DECISAO_*)
     decisao: Mapped[str] = mapped_column(String(16))
