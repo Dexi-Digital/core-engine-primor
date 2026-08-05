@@ -19,6 +19,8 @@ from tests.fixtures.fiscal.samples import (
     NFCE_65_XML,
     NFE_44_XML,
     NFE_DETALHADA_XML,
+    NFE_NITEM_DUPLICADO_XML,
+    NFE_UF_INVALIDA_XML,
     NFSE_ABRASF_XML,
 )
 
@@ -204,6 +206,28 @@ def test_parse_nfe_detalhes_sem_ender_emit_cai_no_cuf_da_chave():
     assert det.chave_dv_valida is False
     assert det.itens == []  # fixture minima nao tem <det>
     assert det.valor_icms is None  # ICMSTot minimo so tem vNF
+
+
+def test_parse_nfe_detalhes_sanitiza_nitem_duplicado():
+    """Emissor malformado manda dois <det nItem="1">. O parser deve
+    reatribuir a ordem posicionalmente para nao violar o
+    UNIQUE(documento_id, ordem) no upload."""
+    det = parse_nfe_detalhes(NFE_NITEM_DUPLICADO_XML)
+    assert det is not None
+    assert len(det.itens) == 2
+    ordens = [item.ordem for item in det.itens]
+    assert len(set(ordens)) == 2
+    assert det.itens[0].ordem == 1
+    assert det.itens[1].ordem == 2
+
+
+def test_parse_nfe_detalhes_uf_invalida_cai_no_fallback_da_chave():
+    """<UF>INVALIDA</UF> nao esta no whitelist _CUF_UF.values(); o
+    parser deve descartar o texto arbitrario e manter o cUF da chave
+    (35 -> SP) em vez de gravar algo que estoura String(2) no Postgres."""
+    det = parse_nfe_detalhes(NFE_UF_INVALIDA_XML)
+    assert det is not None
+    assert det.uf == "SP"
 
 
 def test_parse_nfe_detalhes_tipo_nao_suportado_retorna_none():

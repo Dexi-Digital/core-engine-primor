@@ -182,6 +182,7 @@ export default async function FiscalDocumentosPage({
     fetchDocumentos(filtros),
     fetchObras(),
   ]);
+  const obrasPorId = new Map<number, Obra>(obras.map((o) => [o.id, o]));
 
   return (
     <div className="space-y-8">
@@ -276,18 +277,24 @@ export default async function FiscalDocumentosPage({
               className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
             />
           </label>
-          <input
-            type="date"
-            name="emitida_de"
-            defaultValue={filtros.emitida_de ?? ""}
-            className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
-          />
-          <input
-            type="date"
-            name="emitida_ate"
-            defaultValue={filtros.emitida_ate ?? ""}
-            className="rounded-lg border border-slate-200 px-3 py-2 text-sm"
-          />
+          <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
+            Emitida de
+            <input
+              type="date"
+              name="emitida_de"
+              defaultValue={filtros.emitida_de ?? ""}
+              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+            />
+          </label>
+          <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
+            Emitida até
+            <input
+              type="date"
+              name="emitida_ate"
+              defaultValue={filtros.emitida_ate ?? ""}
+              className="rounded-md border border-slate-300 px-3 py-1.5 text-sm"
+            />
+          </label>
           <label className="flex flex-col gap-1 text-xs font-medium text-slate-700">
             Valor mín.
             <input
@@ -346,6 +353,7 @@ export default async function FiscalDocumentosPage({
                 <th className="px-4 py-3 text-left">Destinatário</th>
                 <th className="px-4 py-3 text-right">Valor</th>
                 <th className="px-4 py-3 text-left">Emissão</th>
+                <th className="px-4 py-3 text-left">Obra</th>
                 <th className="px-4 py-3 text-left">Status</th>
                 <th className="px-4 py-3 text-left">Ação</th>
               </tr>
@@ -354,7 +362,7 @@ export default async function FiscalDocumentosPage({
               {documentos.length === 0 ? (
                 <tr>
                   <td
-                    colSpan={9}
+                    colSpan={10}
                     className="px-4 py-12 text-center text-sm text-slate-500"
                   >
                     Nenhum documento. Importe um XML acima.
@@ -407,6 +415,11 @@ export default async function FiscalDocumentosPage({
                     </td>
                     <td className="px-4 py-3 text-slate-700">
                       {formatDate(doc.data_emissao)}
+                    </td>
+                    <td className="px-4 py-3 text-slate-700">
+                      {doc.obra_id != null
+                        ? (obrasPorId.get(doc.obra_id)?.nome ?? "—")
+                        : "—"}
                     </td>
                     <td className="px-4 py-3">
                       <span

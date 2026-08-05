@@ -514,7 +514,8 @@ def parse_nfe_detalhes(content: bytes) -> NfeDetalhes | None:
     if emit is not None:
         ender = _find_first(emit, "enderEmit")
         if ender is not None:
-            uf = _text(_find_first(ender, "UF")) or uf
+            ender_uf = _text(_find_first(ender, "UF"))
+            uf = ender_uf if ender_uf in _CUF_UF.values() else uf
 
     icms_tot = _find_first(inf, "ICMSTot")
 
@@ -525,6 +526,7 @@ def parse_nfe_detalhes(content: bytes) -> NfeDetalhes | None:
 
     itens: list[NfeItem] = []
     dets = [el for el in inf.iter() if _local(el.tag) == "det"]
+    ordens_usadas: set[int] = set()
     for i, det in enumerate(dets, start=1):
         prod = _find_first(det, "prod")
         if prod is None:
@@ -533,6 +535,11 @@ def parse_nfe_detalhes(content: bytes) -> NfeDetalhes | None:
             ordem = int(det.get("nItem", i))
         except (TypeError, ValueError):
             ordem = i
+        if ordem < 1 or ordem in ordens_usadas:
+            ordem = i
+            while ordem in ordens_usadas:
+                ordem += 1
+        ordens_usadas.add(ordem)
         itens.append(
             NfeItem(
                 ordem=ordem,

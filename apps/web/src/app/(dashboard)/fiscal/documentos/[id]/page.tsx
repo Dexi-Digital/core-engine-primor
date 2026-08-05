@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { notFound } from "next/navigation";
 import { revalidatePath } from "next/cache";
 
 import { apiFetch } from "@/lib/api";
@@ -51,16 +52,28 @@ function brl(v: string | null): string {
   return n.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 }
 
+async function fetchDoc(id: number): Promise<DocumentoDetail | null> {
+  try {
+    return await apiFetch<DocumentoDetail>(`/api/v1/fiscal/documentos/${id}`);
+  } catch {
+    return null;
+  }
+}
+
 export default async function DocumentoFiscalDetalhePage({
   params,
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const { id } = await params;
+  const { id: idStr } = await params;
+  const id = Number(idStr);
+  if (!Number.isFinite(id)) notFound();
+
   const [doc, obras] = await Promise.all([
-    apiFetch<DocumentoDetail>(`/api/v1/fiscal/documentos/${id}`),
+    fetchDoc(id),
     apiFetch<Obra[]>(`/api/v1/obras`),
   ]);
+  if (!doc) notFound();
 
   async function vincularObra(formData: FormData) {
     "use server";

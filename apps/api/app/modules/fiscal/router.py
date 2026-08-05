@@ -7,6 +7,7 @@ Endpoints:
   - PATCH  /documentos/{id}             update parcial (observacoes/status)
   - DELETE /documentos/{id}             remove
   - POST   /documentos/{id}/enviar-dominio   dispara envio sincrono
+  - POST   /documentos/{id}/reprocessar      reprocessa XML de docs legados
 """
 from __future__ import annotations
 

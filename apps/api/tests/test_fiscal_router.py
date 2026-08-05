@@ -22,6 +22,7 @@ from tests.fixtures.fiscal.samples import (
     CTE_XML,
     NFCE_65_XML,
     NFE_44_XML,
+    NFE_BOUNDARY_22H_XML,
     NFE_DETALHADA_XML,
 )
 
@@ -540,6 +541,37 @@ async def test_filtros_periodo_valor_e_obra(
     )
     ids = [d["id"] for d in r.json()]
     assert ids == [id2]
+
+
+@pytest.mark.asyncio
+async def test_filtro_periodo_usa_fuso_local_nao_utc(
+    api_client: AsyncClient,
+    auth_headers: dict[str, str],
+):
+    """Nota emitida 2024-04-30T22:00:00-03:00 (=2024-05-01T01:00:00 UTC).
+    Com boundary em UTC ela vazaria para o mes seguinte; com boundary em
+    America/Sao_Paulo ela tem que ficar em abril."""
+    r = await api_client.post(
+        "/api/v1/fiscal/documentos",
+        files=_upload_payload(NFE_BOUNDARY_22H_XML, "boundary.xml"),
+        headers=auth_headers,
+    )
+    assert r.status_code == 201
+    doc_id = r.json()["id"]
+
+    r_ate = await api_client.get(
+        "/api/v1/fiscal/documentos",
+        params={"emitida_ate": "2024-04-30"},
+        headers=auth_headers,
+    )
+    assert doc_id in [d["id"] for d in r_ate.json()]
+
+    r_de = await api_client.get(
+        "/api/v1/fiscal/documentos",
+        params={"emitida_de": "2024-05-01"},
+        headers=auth_headers,
+    )
+    assert doc_id not in [d["id"] for d in r_de.json()]
 
 
 @pytest.mark.asyncio

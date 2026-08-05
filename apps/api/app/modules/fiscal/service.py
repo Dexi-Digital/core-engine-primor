@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, Sequence
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import delete, desc, or_, select
 from sqlalchemy.exc import IntegrityError
@@ -33,6 +34,11 @@ from app.modules.licitacoes.storage import EditaisStorage
 from app.modules.obras.models import Obra
 
 logger = logging.getLogger(__name__)
+
+# Filtros de "emitida_de"/"emitida_ate" usam o fuso local (nao UTC): uma
+# nota emitida as 21h-23h59 -03:00 ainda cai no dia UTC seguinte, o que
+# quebraria fechamentos de mes se comparassemos contra meia-noite UTC.
+_TZ_SP = ZoneInfo("America/Sao_Paulo")
 
 
 # Igual ao padrao do dp_sesmt: AGENTS.md exige que toda mutacao de
@@ -361,14 +367,14 @@ async def list_documentos(
     if emitida_de is not None:
         stmt = stmt.where(
             DocumentoFiscal.data_emissao
-            >= datetime.combine(emitida_de, time.min, tzinfo=UTC)
+            >= datetime.combine(emitida_de, time.min, tzinfo=_TZ_SP)
         )
     if emitida_ate is not None:
-        # limite exclusivo no dia seguinte cobre qualquer horario/fuso
+        # limite exclusivo no dia seguinte, na mesma tz local (-03:00)
         stmt = stmt.where(
             DocumentoFiscal.data_emissao
             < datetime.combine(
-                emitida_ate + timedelta(days=1), time.min, tzinfo=UTC
+                emitida_ate + timedelta(days=1), time.min, tzinfo=_TZ_SP
             )
         )
     if obra_id is not None:
