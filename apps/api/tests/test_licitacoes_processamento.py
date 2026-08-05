@@ -147,3 +147,301 @@ async def test_storage_factory_onedrive_sem_credenciais_usa_mock(monkeypatch) ->
             assert isinstance(storage, OneDriveStorage)
     finally:
         get_settings.cache_clear()
+
+
+# --- processar_aprovado ----------------------------------------------------
+
+XLSX_PLANILHA = None  # preenchido no primeiro uso para nao pagar o custo em import
+
+
+def _xlsx_planilha_bytes() -> bytes:
+    global XLSX_PLANILHA
+    if XLSX_PLANILHA is None:
+        import io
+
+        from openpyxl import Workbook
+
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["Item", "Unid", "Quant", "Preço Unitário", "Total"])
+        buf = io.BytesIO()
+        wb.save(buf)
+        XLSX_PLANILHA = buf.getvalue()
+    return XLSX_PLANILHA
+
+
+class FakePncp:
+    """Duble do PncpClient: 2 anexos, um PDF e uma planilha XLSX."""
+
+    def __init__(self, arquivos=None, fail=False) -> None:
+        self._fail = fail
+        from app.integrations.pncp.client import PncpArquivo
+
+        self.arquivos = arquivos if arquivos is not None else [
+            PncpArquivo(
+                sequencial_documento=1,
+                titulo="EDITAL_PREGAO_002",
+                tipo_documento_descricao="Edital",
+                url="https://pncp.gov.br/arquivos/1",
+                status_ativo=True,
+                data_publicacao_pncp=None,
+            ),
+            PncpArquivo(
+                sequencial_documento=2,
+                titulo="Planilha_Orcamentaria",
+                tipo_documento_descricao="Outros",
+                url="https://pncp.gov.br/arquivos/2",
+                status_ativo=True,
+                data_publicacao_pncp=None,
+            ),
+        ]
+
+    async def list_arquivos(self, *, cnpj, ano, sequencial):
+        import httpx
+
+        if self._fail:
+            raise httpx.ConnectError("pncp fora do ar")
+        return self.arquivos
+
+    async def stream_arquivo(self, url):
+        async def chunks():
+            if url.endswith("/2"):
+                yield _xlsx_planilha_bytes()
+            else:
+                yield b"%PDF-1.7 conteudo"
+
+        filename = "uivd1biu.xlsx" if url.endswith("/2") else "uivd1biu.pdf"
+        ct = (
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            if url.endswith("/2")
+            else "application/pdf"
+        )
+        return chunks(), filename, ct
+
+    async def aclose(self) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_processar_aprovado_fluxo_completo(
+    db_session: AsyncSession, tmp_path
+) -> None:
+    from app.modules.licitacoes.processamento import (
+        STATUS_APROVADO,
+        STATUS_COMPLETO,
+        processar_aprovado,
+    )
+    from app.modules.licitacoes.storage import LocalStorage
+
+    lic = await _mk_licitacao(db_session)
+    lic.status_triagem = STATUS_APROVADO
+    await db_session.commit()
+
+    result = await processar_aprovado(
+        db_session,
+        licitacao_id=lic.id,
+        pncp=FakePncp(),
+        storage=LocalStorage(tmp_path),
+    )
+
+    assert result.status_triagem == STATUS_COMPLETO
+    assert result.anexos_count == 2
+    assert result.planilha_encontrada is True
+
+    await db_session.refresh(lic)
+    assert lic.status_triagem == STATUS_COMPLETO
+
+    pasta = (await db_session.execute(select(PastaProjeto))).scalar_one()
+    assert pasta.licitacao_id == lic.id
+    assert pasta.nome_pasta.startswith("mg-belo_horizonte")
+
+    planilha = (
+        await db_session.execute(
+            select(PlanilhaOrcamentaria).where(PlanilhaOrcamentaria.principal)
+        )
+    ).scalar_one()
+    assert planilha.nome_arquivo.endswith(".xlsx")
+    assert planilha.link == "https://pncp.gov.br/arquivos/2"
+    assert planilha.score_classificacao >= 10
+
+
+@pytest.mark.asyncio
+async def test_processar_aprovado_sem_planilha(
+    db_session: AsyncSession, tmp_path
+) -> None:
+    from app.integrations.pncp.client import PncpArquivo
+    from app.modules.licitacoes.processamento import (
+        STATUS_APROVADO,
+        STATUS_SEM_PLANILHA,
+        processar_aprovado,
+    )
+    from app.modules.licitacoes.storage import LocalStorage
+
+    lic = await _mk_licitacao(db_session, external_id="x-2026-8", sequencial_compra=8)
+    lic.status_triagem = STATUS_APROVADO
+    await db_session.commit()
+
+    so_pdf = [
+        PncpArquivo(
+            sequencial_documento=1,
+            titulo="EDITAL",
+            tipo_documento_descricao="Edital",
+            url="https://pncp.gov.br/arquivos/1",
+            status_ativo=True,
+            data_publicacao_pncp=None,
+        )
+    ]
+    result = await processar_aprovado(
+        db_session,
+        licitacao_id=lic.id,
+        pncp=FakePncp(arquivos=so_pdf),
+        storage=LocalStorage(tmp_path),
+    )
+    assert result.status_triagem == STATUS_SEM_PLANILHA
+    assert result.planilha_encontrada is False
+
+
+@pytest.mark.asyncio
+async def test_processar_aprovado_pncp_fora_vira_erro_portal(
+    db_session: AsyncSession, tmp_path
+) -> None:
+    from app.modules.licitacoes.processamento import (
+        STATUS_APROVADO,
+        STATUS_ERRO_PORTAL,
+        processar_aprovado,
+    )
+    from app.modules.licitacoes.storage import LocalStorage
+
+    lic = await _mk_licitacao(db_session, external_id="x-2026-9", sequencial_compra=9)
+    lic.status_triagem = STATUS_APROVADO
+    await db_session.commit()
+
+    result = await processar_aprovado(
+        db_session,
+        licitacao_id=lic.id,
+        pncp=FakePncp(fail=True),
+        storage=LocalStorage(tmp_path),
+    )
+    assert result.status_triagem == STATUS_ERRO_PORTAL
+    assert result.error_message
+
+
+@pytest.mark.asyncio
+async def test_processar_rejeitado_e_bloqueado(
+    db_session: AsyncSession, tmp_path
+) -> None:
+    from app.modules.licitacoes.processamento import (
+        STATUS_REJEITADO,
+        ProcessamentoNaoPermitido,
+        processar_aprovado,
+    )
+    from app.modules.licitacoes.storage import LocalStorage
+
+    lic = await _mk_licitacao(db_session, external_id="x-2026-10", sequencial_compra=10)
+    lic.status_triagem = STATUS_REJEITADO
+    await db_session.commit()
+
+    with pytest.raises(ProcessamentoNaoPermitido):
+        await processar_aprovado(
+            db_session,
+            licitacao_id=lic.id,
+            pncp=FakePncp(),
+            storage=LocalStorage(tmp_path),
+        )
+
+
+@pytest.mark.asyncio
+async def test_reprocessar_completo_e_idempotente(
+    db_session: AsyncSession, tmp_path
+) -> None:
+    from app.modules.licitacoes.processamento import (
+        STATUS_APROVADO,
+        STATUS_COMPLETO,
+        processar_aprovado,
+    )
+    from app.modules.licitacoes.storage import LocalStorage
+
+    lic = await _mk_licitacao(db_session, external_id="x-2026-11", sequencial_compra=11)
+    lic.status_triagem = STATUS_APROVADO
+    await db_session.commit()
+
+    storage = LocalStorage(tmp_path)
+    await processar_aprovado(
+        db_session, licitacao_id=lic.id, pncp=FakePncp(), storage=storage
+    )
+    result2 = await processar_aprovado(
+        db_session, licitacao_id=lic.id, pncp=FakePncp(), storage=storage
+    )
+    assert result2.status_triagem == STATUS_COMPLETO
+
+    pastas = (await db_session.execute(select(PastaProjeto))).scalars().all()
+    planilhas = (
+        await db_session.execute(select(PlanilhaOrcamentaria))
+    ).scalars().all()
+    assert len([p for p in pastas if p.licitacao_id == lic.id]) == 1
+    assert len([p for p in planilhas if p.licitacao_id == lic.id]) == 1
+
+
+@pytest.mark.asyncio
+async def test_marcar_planilha_principal_e_sticky(
+    db_session: AsyncSession, tmp_path
+) -> None:
+    from app.integrations.pncp.client import PncpArquivo
+    from app.modules.licitacoes.processamento import (
+        STATUS_APROVADO,
+        marcar_planilha_principal,
+        processar_aprovado,
+    )
+    from app.modules.licitacoes.storage import LocalStorage
+
+    lic = await _mk_licitacao(db_session, external_id="x-2026-12", sequencial_compra=12)
+    lic.status_triagem = STATUS_APROVADO
+    await db_session.commit()
+
+    duas_planilhas = [
+        PncpArquivo(
+            sequencial_documento=1,
+            titulo="Planilha_Orcamentaria",
+            tipo_documento_descricao="Outros",
+            url="https://pncp.gov.br/arquivos/2",
+            status_ativo=True,
+            data_publicacao_pncp=None,
+        ),
+        PncpArquivo(
+            sequencial_documento=2,
+            titulo="Cronograma",
+            tipo_documento_descricao="Outros",
+            url="https://pncp.gov.br/arquivos/2",
+            status_ativo=True,
+            data_publicacao_pncp=None,
+        ),
+    ]
+    storage = LocalStorage(tmp_path)
+    await processar_aprovado(
+        db_session,
+        licitacao_id=lic.id,
+        pncp=FakePncp(arquivos=duas_planilhas),
+        storage=storage,
+    )
+    rows = (
+        (await db_session.execute(select(PlanilhaOrcamentaria))).scalars().all()
+    )
+    rows = [r for r in rows if r.licitacao_id == lic.id]
+    assert len(rows) == 2
+    secundaria = next(r for r in rows if not r.principal)
+
+    escolhida = await marcar_planilha_principal(
+        db_session, licitacao_id=lic.id, planilha_id=secundaria.id
+    )
+    assert escolhida.principal is True
+    assert escolhida.status_validacao == "principal_manual"
+
+    # Reprocessar NAO desfaz a escolha manual.
+    await processar_aprovado(
+        db_session,
+        licitacao_id=lic.id,
+        pncp=FakePncp(arquivos=duas_planilhas),
+        storage=storage,
+    )
+    await db_session.refresh(escolhida)
+    assert escolhida.principal is True

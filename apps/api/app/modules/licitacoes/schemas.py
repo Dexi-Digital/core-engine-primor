@@ -344,3 +344,15 @@ class PlanilhaOrcamentariaRead(BaseModel):
     link: str | None
     status_validacao: str
     principal: bool
+
+
+class ProcessamentoResult(BaseModel):
+    """Resultado do processamento pos-aprovacao (Captador Squad 2)."""
+
+    licitacao_id: int
+    status_triagem: str
+    anexos_count: int = 0
+    planilha_encontrada: bool = False
+    planilha_anexo_id: int | None = None
+    pasta_link: str | None = None
+    error_message: str | None = None
