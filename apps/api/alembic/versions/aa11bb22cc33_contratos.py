@@ -15,7 +15,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "aa11bb22cc33"
-down_revision = "a1b2c3d4e5f6"
+down_revision = "c7d8e9f0a1b2"  # relinearizado no merge (S2+S4 entraram antes)
 branch_labels = None
 depends_on = None
 
