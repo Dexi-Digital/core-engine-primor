@@ -21,10 +21,14 @@ from app.core.config import get_settings
 from app.core.db import get_db
 from app.integrations.onedrive.client import build_onedrive_client
 from app.integrations.onedrive.storage import OneDriveStorage
+from app.integrations.resend.client import ResendClient
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.dp_sesmt.schemas import ModuleStatus
+from app.modules.financeiro_contratos.alerts import dispatch_contrato_alerts
 from app.modules.financeiro_contratos.schemas import (
+    ContratoAlertaDispatchPayload,
+    ContratoAlertaSummary,
     ContratoCreate,
     ContratoRead,
     ContratoUpdate,
@@ -129,6 +133,51 @@ async def create_contrato_endpoint(
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _contrato_to_read(row)
+
+
+@router.post("/contratos/dispatch-alerts", response_model=ContratoAlertaSummary)
+async def dispatch_contrato_alerts_endpoint(
+    payload: ContratoAlertaDispatchPayload,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> ContratoAlertaSummary:
+    """Disparo manual dos alertas (a demo Vercel nao tem worker/beat).
+    Requires RESEND_API_KEY; 503 se ausente -- paridade com o D.6.
+
+    ROUTE-ORDERING: precisa estar registrada ANTES de
+    `/contratos/{contrato_id}` (abaixo) -- senao FastAPI tentaria
+    converter "dispatch-alerts" para int e devolveria 422.
+    """
+    settings = get_settings()
+    if not settings.resend_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="RESEND_API_KEY nao configurada; configure em settings.",
+        )
+    resend = ResendClient(api_key=settings.resend_api_key)
+    try:
+        summary = await dispatch_contrato_alerts(
+            db, resend, recipients=[str(r) for r in payload.recipients]
+        )
+    finally:
+        await resend.aclose()
+    return ContratoAlertaSummary(
+        total_contratos=summary.total_contratos,
+        sent=summary.sent,
+        skipped=summary.skipped,
+        failed=summary.failed,
+        results=[
+            {
+                "contrato_id": r.contrato_id,
+                "janela": r.janela,
+                "status": r.status,
+                "recipients": r.recipients,
+                "resend_message_id": r.resend_message_id,
+                "error_message": r.error_message,
+            }
+            for r in summary.results
+        ],  # type: ignore[arg-type]
+    )
 
 
 @router.get("/contratos/{contrato_id}", response_model=ContratoRead)

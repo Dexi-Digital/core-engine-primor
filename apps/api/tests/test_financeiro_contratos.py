@@ -6,12 +6,18 @@ from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
 
+import httpx
 import pytest
 from httpx import AsyncClient
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.integrations.resend.client import ResendClient
+from app.modules.financeiro_contratos.alerts import (
+    dispatch_contrato_alerts,
+    render_alerta_contrato_html,
+)
 from app.modules.financeiro_contratos.models import (
     STATUS_CONTRATO,
     TIPOS_CONTRATO,
@@ -433,3 +439,121 @@ async def test_delete_contrato_arquivo_path_inexistente_nao_falha(
     assert resp.status_code == 404
 
     get_settings.cache_clear()
+
+
+# --- alertas de vencimento (Task 5) ---------------------------------------
+
+
+def _fake_resend(sent: list[dict]) -> ResendClient:
+    """ResendClient com transporte mockado (mesma tecnica de
+    test_licitacoes_certidoes.py: `client=` no construtor, nao overwrite
+    de `_client` apos instanciar)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        import json as _json
+
+        sent.append(_json.loads(request.content))
+        return httpx.Response(200, json={"id": f"msg_{len(sent)}"})
+
+    return ResendClient(
+        api_key="test-key",
+        client=httpx.AsyncClient(
+            base_url="https://api.resend.com",
+            transport=httpx.MockTransport(handler),
+            headers={"Authorization": "Bearer test-key"},
+        ),
+    )
+
+
+def test_render_alerta_contrato_html_essentials() -> None:
+    c = Contrato(
+        id=7,
+        titulo="Locacao escavadeira",
+        contraparte_nome="TratorMax",
+        tipo="locacao",
+        data_inicio=date(2026, 1, 1),
+        data_fim=date(2026, 8, 15),
+        status="vigente",
+    )
+    html = render_alerta_contrato_html(
+        c, janela=15, public_base_url="https://motor.example", dias_restantes=11
+    )
+    assert "Locacao escavadeira" in html
+    assert "TratorMax" in html
+    assert "15/08/2026" in html
+    assert "11 dia(s)" in html
+    assert "https://motor.example/financeiro/contratos" in html
+
+
+@pytest.mark.asyncio
+async def test_dispatch_contrato_alerts_idempotente(
+    db_session: AsyncSession,
+) -> None:
+    today = date(2026, 8, 4)
+    vigente = await create_contrato(
+        db_session, titulo="Vence em 10d", contraparte_nome="A", tipo="fornecedor",
+        data_inicio=today, data_fim=today + timedelta(days=10), status="vigente",
+    )
+    await create_contrato(  # encerrado -> skipped_status
+        db_session, titulo="Encerrado", contraparte_nome="B", tipo="cliente",
+        data_inicio=today, data_fim=today + timedelta(days=5), status="encerrado",
+    )
+    await create_contrato(  # sem data_fim -> skipped_no_data_fim
+        db_session, titulo="Indeterminado", contraparte_nome="C", tipo="cliente",
+        data_inicio=today, status="vigente",
+    )
+
+    sent: list[dict] = []
+    resend = _fake_resend(sent)
+    try:
+        summary = await dispatch_contrato_alerts(
+            db_session, resend, recipients=["fin@primor.com"], today=today,
+            public_base_url="https://motor.example",
+        )
+    finally:
+        await resend.aclose()
+    assert summary.sent == 1
+    assert summary.skipped == 2
+    assert summary.failed == 0
+    assert len(sent) == 1
+    assert "Vence em 10d" in sent[0]["html"]
+
+    # segunda rodada no mesmo dia: nada novo (janela 15d ja logada)
+    sent2: list[dict] = []
+    resend2 = _fake_resend(sent2)
+    try:
+        summary2 = await dispatch_contrato_alerts(
+            db_session, resend2, recipients=["fin@primor.com"], today=today,
+            public_base_url="https://motor.example",
+        )
+    finally:
+        await resend2.aclose()
+    assert summary2.sent == 0
+    assert len(sent2) == 0
+    # e o log existe para o contrato vigente
+    logs = (
+        (await db_session.execute(
+            select(ContratoAlertaLog).where(
+                ContratoAlertaLog.contrato_id == vigente.id
+            )
+        )).scalars().all()
+    )
+    assert len(logs) == 1 and logs[0].janela == "15d" and logs[0].status == "sent"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_alerts_rota_estatica_resolve_antes_do_dinamico(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
+    """ROUTE-ORDERING: `POST /contratos/dispatch-alerts` precisa resolver
+    para o endpoint estatico, nao ser capturado como `{contrato_id}`
+    (o que daria 422 de int-parsing em vez de rodar o dispatch)."""
+    resp = await api_client.post(
+        "/api/v1/financeiro/contratos/dispatch-alerts",
+        json={"recipients": ["fin@primor.com"]},
+        headers=auth_headers,
+    )
+    # Sem RESEND_API_KEY configurada no ambiente de teste -> 503 (nao 422).
+    # 422 indicaria que a rota dinamica `/contratos/{contrato_id}` capturou
+    # "dispatch-alerts" tentando converte-lo para int.
+    assert resp.status_code == 503, resp.text
