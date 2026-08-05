@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 
@@ -432,3 +432,127 @@ def validar_chave_acesso(chave: str) -> bool:
     resto = soma % 11
     dv = 0 if resto in (0, 1) else 11 - resto
     return dv == int(chave[43])
+
+
+# Codigo IBGE (cUF, posicoes 0-1 da chave de acesso) -> sigla. Fallback
+# para quando o XML nao traz <enderEmit><UF> (emissores minimos).
+_CUF_UF = {
+    "11": "RO", "12": "AC", "13": "AM", "14": "RR", "15": "PA",
+    "16": "AP", "17": "TO", "21": "MA", "22": "PI", "23": "CE",
+    "24": "RN", "25": "PB", "26": "PE", "27": "AL", "28": "SE",
+    "29": "BA", "31": "MG", "32": "ES", "33": "RJ", "35": "SP",
+    "41": "PR", "42": "SC", "43": "RS", "50": "MS", "51": "MT",
+    "52": "GO", "53": "DF",
+}
+
+
+@dataclass
+class NfeItem:
+    """Um <det> da NF-e -- o minimo para apropriacao de custo por obra."""
+
+    ordem: int
+    codigo: str | None
+    descricao: str | None
+    ncm: str | None
+    cfop: str | None
+    unidade: str | None
+    quantidade: Decimal | None
+    valor_unitario: Decimal | None
+    valor_total: Decimal | None
+
+
+@dataclass
+class NfeDetalhes:
+    """2o passe de extracao, exclusivo NF-e/NFC-e (a migracao 90->TOTVS
+    precisa de impostos + itens; os outros tipos seguem so com o
+    ParsedDocumento minimo)."""
+
+    uf: str | None
+    chave_dv_valida: bool | None
+    valor_icms: Decimal | None
+    valor_ipi: Decimal | None
+    valor_pis: Decimal | None
+    valor_cofins: Decimal | None
+    itens: list[NfeItem] = field(default_factory=list)
+
+
+def parse_nfe_detalhes(content: bytes) -> NfeDetalhes | None:
+    """Extrai UF, totais de impostos e itens de uma NF-e/NFC-e.
+
+    Retorna None para tipos que nao sejam nfe/nfce (deteccao identica
+    ao `parse_xml`). Levanta `FiscalParseError` nos mesmos casos que
+    `parse_xml` (XML malformado/vazio/desconhecido).
+    """
+    if not content or not content.strip():
+        raise FiscalParseError("XML vazio")
+    try:
+        root = ET.fromstring(content)
+    except DefusedXmlException as exc:
+        raise FiscalParseError(
+            f"XML rejeitado por seguranca (entidades externas): {exc}"
+        ) from exc
+    except ET.ParseError as exc:
+        raise FiscalParseError(f"XML malformado: {exc}") from exc
+
+    if _detect_tipo(root) not in {"nfe", "nfce"}:
+        return None
+
+    inf = _find_first(root, "infNFe")
+    if inf is None:
+        raise FiscalParseError("NF-e/NFC-e sem <infNFe>")
+
+    chave = inf.get("Id", "")
+    if chave.startswith("NFe"):
+        chave = chave[3:]
+    dv_valida: bool | None = None
+    uf: str | None = None
+    if re.fullmatch(r"\d{44}", chave):
+        dv_valida = validar_chave_acesso(chave)
+        uf = _CUF_UF.get(chave[:2])
+
+    emit = _find_first(inf, "emit")
+    if emit is not None:
+        ender = _find_first(emit, "enderEmit")
+        if ender is not None:
+            uf = _text(_find_first(ender, "UF")) or uf
+
+    icms_tot = _find_first(inf, "ICMSTot")
+
+    def _total(tag: str) -> Decimal | None:
+        if icms_tot is None:
+            return None
+        return _decimal(_text(_find_first(icms_tot, tag)))
+
+    itens: list[NfeItem] = []
+    dets = [el for el in inf.iter() if _local(el.tag) == "det"]
+    for i, det in enumerate(dets, start=1):
+        prod = _find_first(det, "prod")
+        if prod is None:
+            continue
+        try:
+            ordem = int(det.get("nItem", i))
+        except (TypeError, ValueError):
+            ordem = i
+        itens.append(
+            NfeItem(
+                ordem=ordem,
+                codigo=_text(_find_first(prod, "cProd")),
+                descricao=_text(_find_first(prod, "xProd")),
+                ncm=_text(_find_first(prod, "NCM")),
+                cfop=_text(_find_first(prod, "CFOP")),
+                unidade=_text(_find_first(prod, "uCom")),
+                quantidade=_decimal(_text(_find_first(prod, "qCom"))),
+                valor_unitario=_decimal(_text(_find_first(prod, "vUnCom"))),
+                valor_total=_decimal(_text(_find_first(prod, "vProd"))),
+            )
+        )
+
+    return NfeDetalhes(
+        uf=uf,
+        chave_dv_valida=dv_valida,
+        valor_icms=_total("vICMS"),
+        valor_ipi=_total("vIPI"),
+        valor_pis=_total("vPIS"),
+        valor_cofins=_total("vCOFINS"),
+        itens=itens,
+    )

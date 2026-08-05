@@ -38,6 +38,72 @@ NFE_44_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 </nfeProc>
 """
 
+# NF-e com itens + totais de impostos + endereco do emitente. Chave com
+# DV valido (8) -- calculado pelo modulo-11 oficial -- para exercitar
+# `chave_dv_valida=True` (a NFE_44_XML acima tem DV proposital/invalido).
+NFE_DETALHADA_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
+<nfeProc xmlns="http://www.portalfiscal.inf.br/nfe" versao="4.00">
+  <NFe>
+    <infNFe Id="NFe35240414200166000187550010000543211000000008" versao="4.00">
+      <ide>
+        <cUF>35</cUF>
+        <natOp>VENDA</natOp>
+        <mod>55</mod>
+        <serie>1</serie>
+        <nNF>54321</nNF>
+        <dhEmi>2024-04-22T09:15:00-03:00</dhEmi>
+        <tpNF>1</tpNF>
+      </ide>
+      <emit>
+        <CNPJ>14200166000187</CNPJ>
+        <xNome>Construtora Primor LTDA</xNome>
+        <enderEmit>
+          <xMun>Sao Paulo</xMun>
+          <UF>SP</UF>
+        </enderEmit>
+      </emit>
+      <dest>
+        <CNPJ>33000167000101</CNPJ>
+        <xNome>Petrobras Distribuidora</xNome>
+      </dest>
+      <det nItem="1">
+        <prod>
+          <cProd>CIM-CP2</cProd>
+          <xProd>Cimento CP-II 50kg</xProd>
+          <NCM>25232910</NCM>
+          <CFOP>5102</CFOP>
+          <uCom>SC</uCom>
+          <qCom>100.0000</qCom>
+          <vUnCom>200.0000000000</vUnCom>
+          <vProd>20000.00</vProd>
+        </prod>
+      </det>
+      <det nItem="2">
+        <prod>
+          <cProd>ACO-CA50</cProd>
+          <xProd>Vergalhao CA-50 12mm</xProd>
+          <NCM>72142000</NCM>
+          <CFOP>5102</CFOP>
+          <uCom>BR</uCom>
+          <qCom>10.0000</qCom>
+          <vUnCom>500.0000000000</vUnCom>
+          <vProd>5000.00</vProd>
+        </prod>
+      </det>
+      <total>
+        <ICMSTot>
+          <vICMS>3000.00</vICMS>
+          <vIPI>250.00</vIPI>
+          <vPIS>165.00</vPIS>
+          <vCOFINS>760.00</vCOFINS>
+          <vNF>25000.00</vNF>
+        </ICMSTot>
+      </total>
+    </infNFe>
+  </NFe>
+</nfeProc>
+"""
+
 NFCE_65_XML = b"""<?xml version="1.0" encoding="UTF-8"?>
 <NFe xmlns="http://www.portalfiscal.inf.br/nfe">
   <infNFe Id="NFe35240414200166000187650010000099991000000001" versao="4.00">
