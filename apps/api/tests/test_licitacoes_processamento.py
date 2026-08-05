@@ -114,3 +114,36 @@ async def test_local_storage_ensure_project_folder(tmp_path) -> None:
         licitacao_id=42, nome_pasta="mg-bh-prefeitura-002_2026"
     )
     assert caminho2 == caminho
+
+
+@pytest.mark.asyncio
+async def test_storage_factory_local(tmp_path, monkeypatch) -> None:
+    from app.core.config import get_settings
+    from app.modules.licitacoes.storage import LocalStorage
+    from app.modules.licitacoes.storage_factory import editais_storage
+
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
+    monkeypatch.setenv("EDITAIS_STORAGE_PATH", str(tmp_path))
+    get_settings.cache_clear()
+    try:
+        async with editais_storage(get_settings()) as storage:
+            assert isinstance(storage, LocalStorage)
+            assert storage.root == tmp_path
+    finally:
+        get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_storage_factory_onedrive_sem_credenciais_usa_mock(monkeypatch) -> None:
+    from app.core.config import get_settings
+    from app.integrations.onedrive.storage import OneDriveStorage
+    from app.modules.licitacoes.storage_factory import editais_storage
+
+    monkeypatch.setenv("STORAGE_BACKEND", "onedrive")
+    monkeypatch.delenv("MS_GRAPH_TENANT_ID", raising=False)
+    get_settings.cache_clear()
+    try:
+        async with editais_storage(get_settings()) as storage:
+            assert isinstance(storage, OneDriveStorage)
+    finally:
+        get_settings.cache_clear()
