@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, timedelta
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 from httpx import AsyncClient
@@ -331,6 +332,104 @@ async def test_upload_arquivo_contrato(
         files={"arquivo": ("x.pdf", b"%PDF-1.4", "application/pdf")},
         headers=auth_headers,
     )
+    assert resp.status_code == 404
+
+    get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_delete_contrato_remove_arquivo_do_storage(
+    api_client: AsyncClient,
+    auth_headers: dict[str, str],
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Cobertura do wiring `storage=storage` no DELETE (Task 4 review).
+
+    Upload de PDF -> delete do contrato -> o arquivo fisico some do
+    storage (nao so a linha do DB).
+    """
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
+    monkeypatch.setenv("EDITAIS_STORAGE_PATH", str(tmp_path / "editais"))
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+
+    resp = await api_client.post(
+        "/api/v1/financeiro/contratos",
+        json={
+            "titulo": "Com anexo para deletar", "contraparte_nome": "Z",
+            "tipo": "cliente", "data_inicio": "2026-01-01",
+        },
+        headers=auth_headers,
+    )
+    contrato_id = resp.json()["id"]
+
+    resp = await api_client.post(
+        f"/api/v1/financeiro/contratos/{contrato_id}/arquivo",
+        files={"arquivo": ("contrato.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        headers=auth_headers,
+    )
+    assert resp.status_code == 200, resp.text
+    arquivo_path = Path(resp.json()["arquivo_path"])
+    assert arquivo_path.exists()
+
+    resp = await api_client.delete(
+        f"/api/v1/financeiro/contratos/{contrato_id}", headers=auth_headers
+    )
+    assert resp.status_code == 204
+
+    resp = await api_client.get(f"/api/v1/financeiro/contratos/{contrato_id}")
+    assert resp.status_code == 404
+    assert not arquivo_path.exists()
+
+    get_settings.cache_clear()
+
+
+@pytest.mark.asyncio
+async def test_delete_contrato_arquivo_path_inexistente_nao_falha(
+    api_client: AsyncClient,
+    auth_headers: dict[str, str],
+    db_session: AsyncSession,
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Caso benigno: `arquivo_path` aponta para arquivo ja removido do
+    disco (ex.: limpeza manual, migracao de storage) -- delete do
+    contrato precisa ser best-effort e nao pode falhar por isso."""
+    monkeypatch.setenv("STORAGE_BACKEND", "local")
+    monkeypatch.setenv("EDITAIS_STORAGE_PATH", str(tmp_path / "editais"))
+    from app.core.config import get_settings
+
+    get_settings.cache_clear()
+
+    resp = await api_client.post(
+        "/api/v1/financeiro/contratos",
+        json={
+            "titulo": "Anexo fantasma", "contraparte_nome": "Z",
+            "tipo": "cliente", "data_inicio": "2026-01-01",
+        },
+        headers=auth_headers,
+    )
+    contrato_id = resp.json()["id"]
+
+    # Aponta arquivo_path para um caminho que nunca existiu no disco,
+    # sem passar pelo endpoint de upload.
+    row = await db_session.get(Contrato, contrato_id)
+    assert row is not None
+    ghost_path = tmp_path / "editais" / "MotorCentral" / "contratos" / str(
+        contrato_id
+    ) / "fantasma.pdf"
+    assert not ghost_path.exists()
+    row.arquivo_path = str(ghost_path)
+    await db_session.commit()
+
+    resp = await api_client.delete(
+        f"/api/v1/financeiro/contratos/{contrato_id}", headers=auth_headers
+    )
+    assert resp.status_code == 204
+
+    resp = await api_client.get(f"/api/v1/financeiro/contratos/{contrato_id}")
     assert resp.status_code == 404
 
     get_settings.cache_clear()
