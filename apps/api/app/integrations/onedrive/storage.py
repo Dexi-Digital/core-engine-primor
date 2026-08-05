@@ -93,3 +93,21 @@ class OneDriveStorage:
             return
         except OneDriveError as exc:
             raise OSError(f"OneDrive delete falhou: {exc}") from exc
+
+    async def ensure_project_folder(
+        self, *, licitacao_id: int, nome_pasta: str
+    ) -> tuple[str, str | None]:
+        """Pasta fisica `{licitacao_id}` (mesma dos anexos do D.4).
+
+        `nome_pasta` (slug humano) fica so como exibicao em
+        `PastaProjeto.nome_pasta` -- decisao registrada no plano da
+        Squad 2; revisitar quando o SharePoint corporativo chegar.
+        """
+        try:
+            item = await self._client.create_folder(
+                relative_path=str(licitacao_id)
+            )
+        except OneDriveError as exc:
+            raise OSError(f"OneDrive create_folder falhou: {exc}") from exc
+        caminho = f"{self._client.root_folder}/{licitacao_id}"
+        return caminho, item.get("webUrl")

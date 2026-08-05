@@ -315,3 +315,78 @@ class DecisaoTriagemRead(BaseModel):
     observacao: str | None
     usuario_email: str
     created_at: datetime
+
+
+# --- Captador Squad 2 ------------------------------------------------------
+
+
+class PastaProjetoRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    licitacao_id: int
+    nome_pasta: str
+    caminho: str
+    link_pasta: str | None
+    storage_backend: str
+    status: str
+
+
+class PlanilhaOrcamentariaRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    licitacao_id: int
+    anexo_id: int
+    nome_arquivo: str
+    extensao: str
+    score_classificacao: int
+    link: str | None
+    status_validacao: str
+    principal: bool
+
+
+class ProcessamentoResult(BaseModel):
+    """Resultado do processamento pos-aprovacao (Captador Squad 2)."""
+
+    licitacao_id: int
+    status_triagem: str
+    anexos_count: int = 0
+    planilha_encontrada: bool = False
+    planilha_anexo_id: int | None = None
+    pasta_link: str | None = None
+    error_message: str | None = None
+
+
+class PlanilhaPrincipalUpdate(BaseModel):
+    principal: bool = True
+
+
+# --- Captador Squad 2: Aba de Triagem consolidada --------------------------
+
+
+class TriagemRow(BaseModel):
+    """Uma linha da Aba de Triagem (Projeto Tecnico, secao 7.2)."""
+
+    licitacao_id: int
+    status_triagem: str
+    uf_sigla: str | None
+    municipio_nome: str | None
+    orgao_razao_social: str | None
+    objeto_compra: str | None
+    modalidade_nome: str | None
+    valor_total_estimado: Decimal | None
+    data_publicacao_pncp: datetime | None
+    link_portal: str | None
+    link_pasta: str | None
+    link_planilha: str | None
+    planilha_nome: str | None
+    anexos_count: int = 0
+    observacao: str | None = None
+
+
+class TriagemListResponse(BaseModel):
+    total: int
+    page: int
+    page_size: int
+    data: list[TriagemRow]

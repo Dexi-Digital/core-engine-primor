@@ -20,8 +20,6 @@ from app.integrations.llm.anthropic_client import AnthropicProvider
 from app.integrations.llm.base import LLMError, LLMProvider, LLMUnavailableError
 from app.integrations.llm.openai_client import OpenAIProvider
 from app.integrations.llm.router import CostRoutedProvider
-from app.integrations.onedrive.client import build_onedrive_client
-from app.integrations.onedrive.storage import OneDriveStorage
 from app.integrations.pncp.client import PncpClient
 from app.integrations.resend.client import ResendClient
 from app.modules.auth.dependencies import get_current_user
@@ -43,6 +41,11 @@ from app.modules.licitacoes.editais import (
     get_edital,
     list_anexos,
 )
+from app.modules.licitacoes.processamento import (
+    ProcessamentoNaoPermitido,
+    marcar_planilha_principal,
+    processar_aprovado,
+)
 from app.modules.licitacoes.schemas import (
     AnexoEditalRead,
     BoletimDispatchSummary,
@@ -53,9 +56,13 @@ from app.modules.licitacoes.schemas import (
     IngestResult,
     LicitacaoListResponse,
     LicitacaoRead,
+    PlanilhaOrcamentariaRead,
+    PlanilhaPrincipalUpdate,
+    ProcessamentoResult,
     SavedQueryCreate,
     SavedQueryRead,
     TriagemAprovarPayload,
+    TriagemListResponse,
     TriagemObservacaoPayload,
     TriagemRejeitarPayload,
 )
@@ -64,7 +71,8 @@ from app.modules.licitacoes.service import (
     ingest_publicacoes,
     list_licitacoes,
 )
-from app.modules.licitacoes.storage import EditaisStorage, LocalStorage
+from app.modules.licitacoes.storage import EditaisStorage
+from app.modules.licitacoes.storage_factory import editais_storage
 
 router = APIRouter()
 
@@ -74,36 +82,13 @@ def get_pncp_client() -> PncpClient:
 
 
 async def get_editais_storage() -> AsyncIterator[EditaisStorage]:
-    """Storage backend selecionado por config.
+    """Storage backend selecionado por config -- ver `storage_factory`.
 
-    `STORAGE_BACKEND=local` (default) -> filesystem local.
-    `STORAGE_BACKEND=onedrive` -> Microsoft Graph; cai em mock se as
-    4 credenciais MS_GRAPH_* nao estiverem todas presentes (igual ao
-    pattern do DirectData/LLM em outros modulos).
-
-    Async generator (com `yield`) para que o FastAPI feche o
-    `httpx.AsyncClient` interno do `OneDriveClient` ao final da
-    request -- caso contrario cada request vaza um pool de TCP
-    (mesmo padrao usado em `pncp` e `llm` neste mesmo arquivo).
+    Async generator para o FastAPI fechar o client httpx interno ao
+    final da request (mesmo padrao de `pncp` e `llm` neste arquivo).
     """
-    settings = get_settings()
-    backend = (settings.storage_backend or "local").lower()
-    if backend == "onedrive":
-        client = build_onedrive_client(
-            tenant_id=settings.ms_graph_tenant_id,
-            client_id=settings.ms_graph_client_id,
-            client_secret=settings.ms_graph_client_secret,
-            drive_id=settings.ms_graph_drive_id,
-            root_folder=settings.ms_graph_root_folder,
-        )
-        try:
-            yield OneDriveStorage(client)
-        finally:
-            await client.aclose()
-        return
-    # LocalStorage nao tem nada para fechar -- FastAPI segue ok
-    # com um `yield` unico mesmo sem `finally`.
-    yield LocalStorage(settings.editais_storage_path)
+    async with editais_storage(get_settings()) as storage:
+        yield storage
 
 
 def build_llm_provider(settings: Settings) -> LLMProvider:
@@ -179,6 +164,28 @@ async def list_endpoint(
         page=page,
         page_size=page_size,
         data=[LicitacaoRead.model_validate(i) for i in items],
+    )
+
+
+@router.get("/triagem", response_model=TriagemListResponse)
+async def triagem_endpoint(
+    status_triagem: str | None = Query(None, alias="status", max_length=32),
+    uf: str | None = Query(None, max_length=2),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+) -> TriagemListResponse:
+    """Aba de Triagem consolidada: status + links diretos (pasta, planilha).
+
+    ATENCAO: declarada ANTES de `/{licitacao_id}` -- rota estatica de um
+    segmento so, senao Starlette tenta parsear "triagem" como int e
+    devolve 422.
+    """
+    rows, total = await triagem.montar_triagem(
+        db, status=status_triagem, uf=uf, page=page, page_size=page_size
+    )
+    return TriagemListResponse(
+        total=total, page=page, page_size=page_size, data=rows
     )
 
 
@@ -491,3 +498,58 @@ async def triagem_historico_endpoint(
     except LookupError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     return [DecisaoTriagemRead.model_validate(r) for r in rows]
+
+
+# --- Captador Squad 2: processamento pos-aprovacao ---
+
+
+@router.post(
+    "/{licitacao_id}/processar-anexos", response_model=ProcessamentoResult
+)
+async def processar_anexos_endpoint(
+    licitacao_id: int,
+    db: AsyncSession = Depends(get_db),
+    pncp: PncpClient = Depends(get_pncp_client),
+    storage: EditaisStorage = Depends(get_editais_storage),
+    _: User = Depends(get_current_user),
+) -> ProcessamentoResult:
+    """Disparo manual do processamento (a demo Vercel nao tem worker).
+
+    O caminho normal e a task Celery
+    `worker.tasks.licitacoes.processar_edital_aprovado`, despachada
+    pela Tela de Captacao ao aprovar.
+    """
+    try:
+        return await processar_aprovado(
+            db, licitacao_id=licitacao_id, pncp=pncp, storage=storage
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ProcessamentoNaoPermitido as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    finally:
+        await pncp.aclose()
+
+
+@router.patch(
+    "/{licitacao_id}/planilhas/{planilha_id}",
+    response_model=PlanilhaOrcamentariaRead,
+)
+async def marcar_planilha_principal_endpoint(
+    licitacao_id: int,
+    planilha_id: int,
+    payload: PlanilhaPrincipalUpdate,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> PlanilhaOrcamentariaRead:
+    if not payload.principal:
+        raise HTTPException(
+            status_code=400, detail="apenas principal=true e suportado"
+        )
+    try:
+        row = await marcar_planilha_principal(
+            db, licitacao_id=licitacao_id, planilha_id=planilha_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return PlanilhaOrcamentariaRead.model_validate(row)
