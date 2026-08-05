@@ -30,6 +30,7 @@ from app.modules.licitacoes.analise import (
     analyze_edital_for_licitacao,
     get_analise,
 )
+from app.modules.licitacoes.atas import ingest_atas
 from app.modules.licitacoes.boletins import (
     create_saved_query,
     delete_saved_query,
@@ -49,6 +50,7 @@ from app.modules.licitacoes.processamento import (
 from app.modules.licitacoes.resultados import ingest_resultados
 from app.modules.licitacoes.schemas import (
     AnexoEditalRead,
+    AtaIngestSummary,
     BoletimDispatchSummary,
     DecisaoTriagemRead,
     EditalAnaliseRead,
@@ -253,6 +255,30 @@ async def ingest_resultados_endpoint(
     try:
         return await ingest_resultados(
             db, client, dias=dias, uf=uf, max_licitacoes=max_licitacoes
+        )
+    finally:
+        await client.aclose()
+
+
+@router.post("/ingest/atas", response_model=AtaIngestSummary)
+async def ingest_atas_endpoint(
+    data_inicial: Annotated[date | None, Query(description="Default: 90 dias atras")] = None,
+    data_final: Annotated[date | None, Query(description="Default: hoje")] = None,
+    max_paginas: int | None = Query(None, ge=1, le=100),
+    db: AsyncSession = Depends(get_db),
+    client: PncpClient = Depends(get_pncp_client),
+    _: User = Depends(get_current_user),
+) -> AtaIngestSummary:
+    """Ingestao de atas de RP vigentes no periodo (D.9 / adesoes)."""
+    today = date.today()
+    data_final = data_final or today
+    data_inicial = data_inicial or (data_final - timedelta(days=90))
+    if data_inicial > data_final:
+        raise HTTPException(status_code=400, detail="data_inicial > data_final")
+    try:
+        return await ingest_atas(
+            db, client, data_inicial=data_inicial, data_final=data_final,
+            max_paginas=max_paginas,
         )
     finally:
         await client.aclose()

@@ -409,3 +409,13 @@ class ResultadoIngestSummary(BaseModel):
     com_resultado: int
     resultados_gravados: int
     falhas: int
+
+
+# --- Captador Squad 3: ingestao de atas de registro de preco (D.9) --------
+
+
+class AtaIngestSummary(BaseModel):
+    total_fetched: int
+    gravadas: int
+    atualizadas: int
+    vinculadas: int
