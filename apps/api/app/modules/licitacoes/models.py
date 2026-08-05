@@ -620,7 +620,9 @@ class ResultadoLicitacao(Base):
         index=True,
     )
     item_numero: Mapped[int] = mapped_column(Integer)
-    sequencial_resultado: Mapped[int] = mapped_column(Integer, default=1)
+    sequencial_resultado: Mapped[int] = mapped_column(
+        Integer, default=1, server_default="1"
+    )
     cnpj_vencedor: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
     razao_social: Mapped[str | None] = mapped_column(String(512), nullable=True)
     valor_homologado: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
@@ -659,9 +661,7 @@ class AtaRegistroPreco(Base):
     __tablename__ = "licitacoes_atas_rp"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    numero_controle_pncp_ata: Mapped[str] = mapped_column(
-        String(128), unique=True, index=True
-    )
+    numero_controle_pncp_ata: Mapped[str] = mapped_column(String(128))
     numero_ata: Mapped[str | None] = mapped_column(String(64), nullable=True)
     ano_ata: Mapped[int | None] = mapped_column(Integer, nullable=True)
     licitacao_id: Mapped[int | None] = mapped_column(
@@ -685,4 +685,10 @@ class AtaRegistroPreco(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "numero_controle_pncp_ata", name="uq_ata_numero_controle"
+        ),
     )

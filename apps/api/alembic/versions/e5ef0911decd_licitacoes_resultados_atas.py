@@ -48,7 +48,12 @@ def upgrade() -> None:
         sa.Column("situacao", sa.String(length=64), nullable=True),
         sa.Column("porte_fornecedor", sa.String(length=64), nullable=True),
         sa.Column("raw", sa.JSON(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
         sa.UniqueConstraint(
             "licitacao_id", "item_numero", "sequencial_resultado",
             name="uq_resultado_item_seq",
@@ -80,8 +85,18 @@ def upgrade() -> None:
         sa.Column("cancelado", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("possibilidade_adesao", sa.Boolean(), nullable=True),
         sa.Column("raw", sa.JSON(), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now()),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+            server_default=sa.func.now(),
+        ),
         sa.UniqueConstraint("numero_controle_pncp_ata", name="uq_ata_numero_controle"),
     )
     op.create_index("ix_licitacoes_atas_rp_licitacao_id", "licitacoes_atas_rp", ["licitacao_id"])
