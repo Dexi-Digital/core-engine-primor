@@ -8,7 +8,7 @@ Escopo:
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -37,6 +37,10 @@ from app.modules.licitacoes.boletins import (
     dispatch_boletins,
     list_saved_queries,
 )
+from app.modules.licitacoes.dashboards import (
+    dashboard_concorrentes,
+    dashboard_geotargeting,
+)
 from app.modules.licitacoes.editais import (
     download_edital_for_licitacao,
     get_edital,
@@ -52,10 +56,12 @@ from app.modules.licitacoes.schemas import (
     AnexoEditalRead,
     AtaIngestSummary,
     BoletimDispatchSummary,
+    ConcorrenteRow,
     DecisaoTriagemRead,
     EditalAnaliseRead,
     EditalDownloadResult,
     EditalRead,
+    GeotargetingRow,
     IngestResult,
     LicitacaoListResponse,
     LicitacaoRead,
@@ -191,6 +197,31 @@ async def triagem_endpoint(
     return TriagemListResponse(
         total=total, page=page, page_size=page_size, data=rows
     )
+
+
+# --- Squad 3: dashboards comerciais ---
+
+
+@router.get("/dashboards/concorrentes", response_model=list[ConcorrenteRow])
+async def dashboard_concorrentes_endpoint(
+    uf: str | None = Query(None, max_length=2),
+    data_inicial: datetime | None = Query(None),
+    data_final: datetime | None = Query(None),
+    limit: int = Query(50, ge=1, le=500),
+    db: AsyncSession = Depends(get_db),
+) -> list[ConcorrenteRow]:
+    return await dashboard_concorrentes(
+        db, uf=uf, data_inicial=data_inicial, data_final=data_final, limit=limit
+    )
+
+
+@router.get("/dashboards/geotargeting", response_model=list[GeotargetingRow])
+async def dashboard_geotargeting_endpoint(
+    uf: str | None = Query("MG", max_length=2),
+    limit: int = Query(100, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+) -> list[GeotargetingRow]:
+    return await dashboard_geotargeting(db, uf=uf, limit=limit)
 
 
 @router.get("/{licitacao_id}", response_model=LicitacaoRead)

@@ -431,3 +431,22 @@ class AtaIngestSummary(BaseModel):
     atualizadas: int
     vinculadas: int
     falhas: int = 0
+
+
+# --- Captador Squad 3: dashboards comerciais (concorrentes, geotargeting) --
+
+
+class ConcorrenteRow(BaseModel):
+    cnpj: str
+    razao_social: str | None
+    licitacoes_vencidas: int
+    valor_total_homologado: Decimal | None
+    orgaos_distintos: int
+    ultima_vitoria: datetime | None
+
+
+class GeotargetingRow(BaseModel):
+    uf: str | None
+    municipio: str | None
+    licitacoes_com_resultado: int
+    valor_total_homologado: Decimal | None
