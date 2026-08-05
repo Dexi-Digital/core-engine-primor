@@ -4,7 +4,8 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator, Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, time, timedelta
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import desc, or_, select
@@ -29,6 +30,7 @@ from app.modules.fiscal.parser import (
     parse_xml,
 )
 from app.modules.licitacoes.storage import EditaisStorage
+from app.modules.obras.models import Obra
 
 logger = logging.getLogger(__name__)
 
@@ -261,6 +263,11 @@ async def list_documentos(
     emitente_cnpj: str | None = None,
     destinatario_cnpj: str | None = None,
     search: str | None = None,
+    emitida_de: date | None = None,
+    emitida_ate: date | None = None,
+    obra_id: int | None = None,
+    valor_min: Decimal | None = None,
+    valor_max: Decimal | None = None,
     limit: int = 100,
     offset: int = 0,
 ) -> Sequence[DocumentoFiscal]:
@@ -283,11 +290,34 @@ async def list_documentos(
                 DocumentoFiscal.destinatario_nome.ilike(like),
             )
         )
+    if emitida_de is not None:
+        stmt = stmt.where(
+            DocumentoFiscal.data_emissao
+            >= datetime.combine(emitida_de, time.min, tzinfo=UTC)
+        )
+    if emitida_ate is not None:
+        # limite exclusivo no dia seguinte cobre qualquer horario/fuso
+        stmt = stmt.where(
+            DocumentoFiscal.data_emissao
+            < datetime.combine(
+                emitida_ate + timedelta(days=1), time.min, tzinfo=UTC
+            )
+        )
+    if obra_id is not None:
+        stmt = stmt.where(DocumentoFiscal.obra_id == obra_id)
+    if valor_min is not None:
+        stmt = stmt.where(DocumentoFiscal.valor_total >= valor_min)
+    if valor_max is not None:
+        stmt = stmt.where(DocumentoFiscal.valor_total <= valor_max)
     stmt = stmt.order_by(desc(DocumentoFiscal.created_at)).offset(offset).limit(
         limit
     )
     result = await db.scalars(stmt)
     return result.all()
+
+
+# Distingue "nao enviou obra_id" de "enviou obra_id=null" (desvincular).
+_UNSET: Any = object()
 
 
 async def update_documento(
@@ -296,6 +326,7 @@ async def update_documento(
     *,
     observacoes: str | None = None,
     status_envio: str | None = None,
+    obra_id: Any = _UNSET,
     actor: str = _AUDIT_ACTOR_PLACEHOLDER,
 ) -> DocumentoFiscal | None:
     doc = await get_documento(db, doc_id)
@@ -319,6 +350,13 @@ async def update_documento(
             "to": status_envio,
         }
         doc.status_envio = status_envio
+    if obra_id is not _UNSET and obra_id != doc.obra_id:
+        if obra_id is not None:
+            obra = await db.get(Obra, obra_id)
+            if obra is None:
+                raise ValueError(f"obra {obra_id} nao encontrada")
+        changed["obra_id"] = {"from": doc.obra_id, "to": obra_id}
+        doc.obra_id = obra_id
     if not changed:
         return doc
     await db.commit()

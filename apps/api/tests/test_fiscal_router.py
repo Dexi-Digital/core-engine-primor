@@ -15,6 +15,7 @@ from app.main import app
 from app.modules.fiscal.models import DocumentoFiscal, DocumentoFiscalItem
 from app.modules.fiscal.router import get_dominio_dep
 from app.modules.fiscal.service import reset_dominio_singleton
+from app.modules.obras.models import Obra
 from tests.fixtures.fiscal.samples import (
     BAIXA_XML,
     CFE_XML,
@@ -469,3 +470,120 @@ async def test_upload_cte_nao_gera_itens_nem_detalhes(
         f"/api/v1/fiscal/documentos/{data['id']}", headers=auth_headers
     )
     assert detail.json()["itens"] == []
+
+
+@pytest.mark.asyncio
+async def test_filtros_periodo_valor_e_obra(
+    api_client: AsyncClient,
+    auth_headers: dict[str, str],
+    db_session: AsyncSession,
+):
+    """NFE_44 (2024-04-15, 15750.50) e NFE_DETALHADA (2024-04-22, 25000.00):
+    filtros de periodo, valor e obra isolam cada uma."""
+    r1 = await api_client.post(
+        "/api/v1/fiscal/documentos",
+        files=_upload_payload(NFE_44_XML, "a.xml"),
+        headers=auth_headers,
+    )
+    r2 = await api_client.post(
+        "/api/v1/fiscal/documentos",
+        files=_upload_payload(NFE_DETALHADA_XML, "b.xml"),
+        headers=auth_headers,
+    )
+    assert r1.status_code == 201 and r2.status_code == 201
+    id1, id2 = r1.json()["id"], r2.json()["id"]
+
+    # Periodo: so a detalhada foi emitida a partir de 2024-04-20.
+    r = await api_client.get(
+        "/api/v1/fiscal/documentos",
+        params={"emitida_de": "2024-04-20"},
+        headers=auth_headers,
+    )
+    ids = [d["id"] for d in r.json()]
+    assert id2 in ids and id1 not in ids
+
+    # Periodo com teto: so a NFE_44 ate 2024-04-18.
+    r = await api_client.get(
+        "/api/v1/fiscal/documentos",
+        params={"emitida_ate": "2024-04-18"},
+        headers=auth_headers,
+    )
+    ids = [d["id"] for d in r.json()]
+    assert id1 in ids and id2 not in ids
+
+    # Valor minimo: so a detalhada passa de 20000.
+    r = await api_client.get(
+        "/api/v1/fiscal/documentos",
+        params={"valor_min": "20000"},
+        headers=auth_headers,
+    )
+    ids = [d["id"] for d in r.json()]
+    assert id2 in ids and id1 not in ids
+
+    # Obra: cria uma obra, vincula so a detalhada, filtra por ela.
+    obra = Obra(codigo="OB-100", nome="Rodovia Teste")
+    db_session.add(obra)
+    await db_session.commit()
+
+    patch = await api_client.patch(
+        f"/api/v1/fiscal/documentos/{id2}",
+        json={"obra_id": obra.id},
+        headers=auth_headers,
+    )
+    assert patch.status_code == 200
+    assert patch.json()["obra_id"] == obra.id
+
+    r = await api_client.get(
+        "/api/v1/fiscal/documentos",
+        params={"obra_id": obra.id},
+        headers=auth_headers,
+    )
+    ids = [d["id"] for d in r.json()]
+    assert ids == [id2]
+
+
+@pytest.mark.asyncio
+async def test_patch_obra_inexistente_retorna_422(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+):
+    r1 = await api_client.post(
+        "/api/v1/fiscal/documentos",
+        files=_upload_payload(NFE_44_XML, "a.xml"),
+        headers=auth_headers,
+    )
+    r = await api_client.patch(
+        f"/api/v1/fiscal/documentos/{r1.json()['id']}",
+        json={"obra_id": 999999},
+        headers=auth_headers,
+    )
+    assert r.status_code == 422
+    assert "obra" in r.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_patch_obra_null_desvincula(
+    api_client: AsyncClient,
+    auth_headers: dict[str, str],
+    db_session: AsyncSession,
+):
+    obra = Obra(codigo="OB-101", nome="Ponte Teste")
+    db_session.add(obra)
+    await db_session.commit()
+    r1 = await api_client.post(
+        "/api/v1/fiscal/documentos",
+        files=_upload_payload(NFE_44_XML, "a.xml"),
+        headers=auth_headers,
+    )
+    doc_id = r1.json()["id"]
+    await api_client.patch(
+        f"/api/v1/fiscal/documentos/{doc_id}",
+        json={"obra_id": obra.id},
+        headers=auth_headers,
+    )
+    r = await api_client.patch(
+        f"/api/v1/fiscal/documentos/{doc_id}",
+        json={"obra_id": None},
+        headers=auth_headers,
+    )
+    assert r.status_code == 200
+    assert r.json()["obra_id"] is None

@@ -52,6 +52,7 @@ class DocumentoFiscalUpdate(BaseModel):
 
     observacoes: str | None = None
     status_envio: str | None = None
+    obra_id: int | None = None
 
     @field_validator("status_envio")
     @classmethod

@@ -11,6 +11,8 @@ Endpoints:
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -159,6 +161,11 @@ async def list_endpoint(
     emitente_cnpj: str | None = Query(default=None, max_length=20),
     destinatario_cnpj: str | None = Query(default=None, max_length=20),
     search: str | None = Query(default=None, max_length=200),
+    emitida_de: date | None = Query(default=None),
+    emitida_ate: date | None = Query(default=None),
+    obra_id: int | None = Query(default=None, ge=1),
+    valor_min: Decimal | None = Query(default=None, ge=0),
+    valor_max: Decimal | None = Query(default=None, ge=0),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
@@ -170,6 +177,11 @@ async def list_endpoint(
         emitente_cnpj=emitente_cnpj,
         destinatario_cnpj=destinatario_cnpj,
         search=search,
+        emitida_de=emitida_de,
+        emitida_ate=emitida_ate,
+        obra_id=obra_id,
+        valor_min=valor_min,
+        valor_max=valor_max,
         limit=limit,
         offset=offset,
     )
@@ -200,12 +212,16 @@ async def update_endpoint(
     current_user: User = Depends(get_current_user),
 ) -> DocumentoFiscalRead:
     try:
+        kwargs: dict[str, Any] = {}
+        if "obra_id" in payload.model_fields_set:
+            kwargs["obra_id"] = payload.obra_id
         doc = await update_documento(
             db,
             doc_id,
             observacoes=payload.observacoes,
             status_envio=payload.status_envio,
             actor=current_user.email,
+            **kwargs,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
