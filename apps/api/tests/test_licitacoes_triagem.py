@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import select
 
 from app.modules.licitacoes import triagem
+from app.modules.licitacoes.models import DecisaoTriagem, Licitacao
 
 
 class TestMaquinaDeStatus:
@@ -65,3 +67,40 @@ class TestMaquinaDeStatus:
             triagem.validar_transicao("banana", "aprovado")
         with pytest.raises(triagem.TransicaoInvalidaError):
             triagem.validar_transicao("novo_captado", "banana")
+
+
+def _mk_licitacao(external_id: str = "trg-1") -> Licitacao:
+    return Licitacao(
+        external_id=external_id,
+        source="pncp",
+        objeto_compra="Pavimentacao asfaltica em vias urbanas",
+        uf_sigla="MG",
+        municipio_nome="Belo Horizonte",
+        modalidade_nome="Pregao Eletronico",
+    )
+
+
+@pytest.mark.asyncio
+async def test_licitacao_nasce_novo_captado_e_decisao_persiste(db_session) -> None:
+    lic = _mk_licitacao()
+    db_session.add(lic)
+    await db_session.commit()
+    assert lic.status_triagem == "novo_captado"
+
+    db_session.add(
+        DecisaoTriagem(
+            licitacao_id=lic.id,
+            decisao="aprovado",
+            observacao=None,
+            usuario_email="analista@primor.com",
+        )
+    )
+    await db_session.commit()
+
+    row = await db_session.scalar(
+        select(DecisaoTriagem).where(DecisaoTriagem.licitacao_id == lic.id)
+    )
+    assert row is not None
+    assert row.decisao == "aprovado"
+    assert row.usuario_email == "analista@primor.com"
+    assert row.created_at is not None
