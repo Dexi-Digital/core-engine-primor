@@ -5,7 +5,9 @@
 obra em `fiscal_documentos`; nova tabela filha `fiscal_documento_itens`
 com os <det> (NCM/CFOP/quantidades/valores).
 
-Nota: o brief original apontava `down_revision = "b8c9d0e1f2a3"`, mas o
+Nota: down_revision relinearizado no merge (a1b2c3d4e5f6 -> 48db67e9ae44,
+migration da Squad 2 entrou no main primeiro). Nota original: o brief apontava
+`down_revision = "b8c9d0e1f2a3"`, mas o
 head real deste worktree (checado via `alembic heads`) e
 `a1b2c3d4e5f6` (feat/captador-triagem, ja mergeado a frente de
 b8c9d0e1f2a3). Ajustado para manter o worktree single-headed.
@@ -21,7 +23,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "c7d8e9f0a1b2"
-down_revision = "a1b2c3d4e5f6"
+down_revision = "48db67e9ae44"
 branch_labels = None
 depends_on = None
 
