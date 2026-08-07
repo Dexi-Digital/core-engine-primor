@@ -19,7 +19,11 @@ Cargo e remuneração entram no cadastro de funcionários (Módulo A) na admiss�
 A contabilidade salva o export (CSV/Excel) numa pasta do OneDrive que o `onedrive_sync` já monitora; a ingestão é automática. Esforço manual residual: salvar um arquivo por competência. RPA no portal Onvio para download de relatórios fica documentado como alternativa de automação total, adiado por fragilidade (mudanças de portal, MFA) até que D2+D3 se provem insuficientes.
 
 **D4 — Onboarding (Motor Central → Domínio): kit de admissão estruturado + digitação pela contabilidade.**
-Sem API e sem layout de importação, a digitação final no Domínio permanece com a contabilidade — **limitação do fornecedor, não do projeto**. O Motor Central automatiza tudo ao redor: gera o kit de admissão completo (todos os campos que o Domínio pede, na ordem, + documentos do dossiê) e entrega automaticamente (email/OneDrive) com rastreio de confirmação. **RPA de digitação** no portal fica condicionado a volume: se admissões/mês × tempo de digitação justificar (critério a validar com a Primor — rotatividade de obra pode ser alta), vira fase própria.
+Sem API e sem layout de importação, a digitação final no Domínio permanece com a contabilidade — **limitação do fornecedor, não do projeto**. O Motor Central automatiza tudo ao redor: gera o kit de admissão completo (todos os campos que o Domínio pede, na ordem, + documentos do dossiê) e entrega automaticamente (email/OneDrive) com rastreio de confirmação.
+
+Volume confirmado com a Primor (2026-08-07): **sazonal por obra, não constante** — picos concentrados na abertura de cada frente de obra (uma leva de admissões na mesma semana), vales nos meses entre mobilizações. Isso muda o critério de decisão do RPA: **um limiar mensal médio não se aplica** — a dor real é o pico, não a média. Duas consequências de desenho:
+  - O **kit de admissão precisa suportar geração em lote** desde a primeira versão (não um-a-um): a analista aprova/dispara N admissões da mesma leva de uma vez, kits saem em lote para a contabilidade. Isso já reduz o gargalo do pico sem precisar de RPA.
+  - **RPA de digitação só entra se, mesmo com o kit em lote, a contabilidade reportar que o pico de abertura de obra ainda é o gargalo** — critério agora é qualitativo (dor relatada no pico), não um número fixo de admissões/mês. Revisitar após o kit em lote rodar em pelo menos uma abertura de obra real.
 
 **D5 — Pergunta em aberto ao suporte Domínio:** o sistema importa **eventos eSocial (ex.: S-2200 admissão) em XML**? Se sim, o Motor Central pode gerar o XML do evento e eliminar a digitação de D4 sem RPA. A confirmar; não bloqueia D1–D4.
 
@@ -29,3 +33,4 @@ Sem API e sem layout de importação, a digitação final no Domínio permanece 
 - A apropriação de mão de obra (Módulo B #7 + docx do cliente) fica **desbloqueada do lado contábil** — resta só a definição do "onde" (workplace vs geolocalização, aguardando Sólides).
 - Parâmetros de encargos (D2) viram configuração do sistema e precisam de validação inicial do financeiro da Primor.
 - Registrar com a Primor a limitação do fornecedor (D4) para alinhamento de expectativa: admissão 100% sem digitação só com eSocial (D5) ou RPA.
+- O kit de admissão (D4) precisa ser desenhado para **geração em lote por obra** desde o início — requisito descoberto pela sazonalidade, não um refinamento posterior.
