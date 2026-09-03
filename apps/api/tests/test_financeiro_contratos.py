@@ -224,8 +224,11 @@ async def test_crud_contratos_via_api(
             "contraparte_documento": "12345678000190",
             "tipo": "locacao",
             "valor": 900000,
-            "data_inicio": "2026-08-01",
-            "data_fim": "2026-08-20",
+            # Datas RELATIVAS a hoje: com datas fixas o teste vira
+            # time-bomb -- passou a falhar sozinho quando 2026-08-20
+            # ficou no passado ("vencido", nao "vencendo").
+            "data_inicio": (date.today() - timedelta(days=20)).isoformat(),
+            "data_fim": (date.today() + timedelta(days=5)).isoformat(),
             "status": "vigente",
         },
         headers=auth_headers,

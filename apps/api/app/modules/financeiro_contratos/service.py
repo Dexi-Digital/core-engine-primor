@@ -12,7 +12,7 @@ import logging
 from collections.abc import AsyncIterator
 from datetime import date as _date
 from datetime import timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import select
@@ -20,6 +20,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.actors import SYSTEM as _AUDIT_ACTOR_SYSTEM
 from app.audit.models import AuditLog
+from app.core.valores import coerce_valor as _coerce_valor
 from app.modules.financeiro_contratos.models import (
     STATUS_CONTRATO_VALIDOS,
     TIPOS_CONTRATO_VALIDOS,
@@ -38,26 +39,6 @@ _AUDIT_RESOURCE = "financeiro.contrato"
 # contratos, `sem_validade` significa prazo indeterminado (UI rotula
 # "Sem prazo").
 compute_vencimento_status = compute_status
-
-
-def _coerce_valor(valor: Decimal | int | float | str | None) -> Decimal | None:
-    """Normaliza `valor` para `Decimal`, evitando ruido binario de float.
-
-    `Decimal(str(valor))` (nao `Decimal(valor)` direto) e o que garante que
-    um float como `1234.1` vire `Decimal("1234.1")` exato, nao
-    `Decimal("1234.099999999999909050529822707176208496093750")`.
-
-    Um `valor` nao-numerico (ex.: payload malicioso ou bug do caller) faz
-    `Decimal(str(...))` levantar `decimal.InvalidOperation` -- convertemos
-    para `ValueError` para cair no mesmo tratamento 422 do resto do modulo
-    (tipo/status invalidos), em vez de vazar como 500.
-    """
-    if valor is None:
-        return None
-    try:
-        return Decimal(str(valor))
-    except InvalidOperation as exc:
-        raise ValueError(f"valor invalido: {valor!r}") from exc
 
 
 async def _record_audit(
