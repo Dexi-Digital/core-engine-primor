@@ -125,6 +125,40 @@ class Settings(BaseSettings):
     # adapter cai no `InfosimplesMockClient` deterministico para nao
     # bloquear dev/CI -- mesmo padrao DirectData/LLM/OneDrive/Dominio.
     # Pricing: ~R$0.50-2.00 por consulta no plano da Infosimples.
+    # --- TOTVS RM (Modulo C -- ERP financeiro) ---------------------------
+    # Ambiente da Primor e TOTVS Cloud (TCloud), HTTPS, versao
+    # 12.1.2510.136 (prod) / .170 (dev). Confirmado no ticket 30268517
+    # em 24/08/2026. Sem `totvs_username`/`totvs_password` o adapter cai
+    # no mock deterministico (padrao do repo).
+    #
+    # `totvs_extractor`: "rest" (WebAPI na ApiPort, Bearer) |
+    # "consultasql" (SOAP na HttpPort, Basic) | "mock". A escolha
+    # definitiva depende do time RM Gestao Financeira responder se
+    # existe API REST de Financeiro nessa versao -- ticket em aberto.
+    # Leitura direta no banco esta FORA (ambiente e cloud).
+    totvs_base_url: str | None = Field(default=None)
+    totvs_username: str | None = Field(default=None)
+    totvs_password: str | None = Field(default=None)
+    totvs_extractor: str = Field(default="consultasql")
+    totvs_lancamentos_path: str = Field(default="/api/fin/v1/lancamentos")
+    totvs_consultasql_cod_sentenca: str | None = Field(default=None)
+    totvs_consultasql_cod_coligada: int = Field(default=1)
+    totvs_consultasql_cod_sistema: str = Field(default="F")
+    # Guarda contra o FILTRO SILENCIOSO por coligada. Confirmado pela
+    # TOTVS em 27/08/2026: perfil sem permissao numa coligada nao recebe
+    # erro -- a API devolve 200 com menos registros. Declare aqui as
+    # coligadas que o pull DEVE enxergar (CSV, ex.: "1,2"); se o perfil
+    # nao enxergar todas, a execucao falha alto em vez de gravar uma
+    # leitura parcial. Vazio = guarda desligada.
+    totvs_coligadas_esperadas: str = Field(default="")
+
+    # Janela do pull agendado, em dias para tras a partir de hoje.
+    totvs_pull_dias: int = Field(default=45)
+    # TTL do lock single-flight. Acima da duracao esperada do pull: o
+    # wsConsultaSQL nao pagina e segura a licenca pelo processamento
+    # inteiro, entao o pull pode demorar.
+    totvs_pull_lock_ttl_s: int = Field(default=3600)
+
     infosimples_token: str | None = Field(default=None)
     infosimples_base_url: str = Field(default="https://api.infosimples.com")
 
@@ -168,6 +202,12 @@ class Settings(BaseSettings):
     # deterministico -- mesmo padrao OnSafety/Dominio. Auth e apiKey
     # crua no header Authorization (spec v2/api-docs, 2026-08-04).
     tangerino_api_key: str | None = Field(default=None)
+    # Janela do pull de batidas, em dias para tras.
+    ponto_pull_dias: int = Field(default=45)
+    # TTL do lock single-flight do ponto. Alto porque o pull percorre
+    # ~395 funcionarios, um por um (a API nao tem "batidas do periodo").
+    ponto_pull_lock_ttl_s: int = Field(default=7200)
+
     tangerino_base_url: str = Field(
         default="https://employer.tangerino.com.br"
     )

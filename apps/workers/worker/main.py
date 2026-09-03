@@ -109,6 +109,24 @@ celery_app.conf.beat_schedule = {
         "task": "worker.tasks.financeiro.dispatch_contrato_alerts",
         "schedule": crontab(hour="8", minute="15"),
     },
+    # Modulos A/B: pull do ponto eletronico (Solides/Tangerino), 02h30.
+    # Antes do TOTVS (03h00) para os dois nao disputarem o worker. Sao
+    # 395 funcionarios e a API so devolve batidas por funcionario, entao
+    # e o job mais longo da madrugada. Single-flight por lock no Redis.
+    "ponto-pull-solides": {
+        "task": "worker.tasks.dp_sesmt.pull_ponto",
+        "schedule": crontab(hour="2", minute="30"),
+    },
+    # Modulo C: pull de lancamentos financeiros do TOTVS RM, 03h00.
+    # MADRUGADA de proposito (decisao #3): fora do horario comercial --
+    # a licenca de WebService do RM e concorrente com a operacao -- e
+    # fora do bloco 08h00-08h15, que ja concentra certidoes, ASO,
+    # afastamentos e contratos. Single-flight por lock no Redis:
+    # execucoes sobrepostas dobrariam o consumo de licenca.
+    "totvs-pull-lancamentos": {
+        "task": "worker.tasks.financeiro.pull_totvs",
+        "schedule": crontab(hour="3", minute="0"),
+    },
     # onedrive_diagnostico (POC): roda segunda 05h America/Sao_Paulo.
     # Compara conteudo do SharePoint com docs obrigatorios por entidade.
     "onedrive-diagnostico-weekly": {

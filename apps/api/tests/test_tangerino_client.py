@@ -14,12 +14,22 @@ from app.integrations.tangerino.client import (
 
 
 def test_settings_defaults_tangerino_e_onvio():
+    """Nenhuma credencial entra por default, e os valores fixos batem.
+
+    As credenciais sao checadas por "falsy" e nao por `is None` de
+    proposito: a fixture `_sem_credenciais_reais` do conftest zera essas
+    variaveis com string vazia para isolar a suite das credenciais reais
+    que hoje existem no `.env`. O que importa aqui e que nada
+    autentique sozinho -- `None` e `""` levam os adapters ao mock do
+    mesmo jeito.
+    """
     s = Settings(_env_file=None)
-    assert s.tangerino_api_key is None
+    assert not s.tangerino_api_key
+    assert not s.onvio_client_id
+    assert not s.onvio_client_secret
+    assert not s.onvio_integration_key
+
     assert s.tangerino_base_url == "https://employer.tangerino.com.br"
-    assert s.onvio_client_id is None
-    assert s.onvio_client_secret is None
-    assert s.onvio_integration_key is None
     assert s.onvio_audience == "409f91f6-dc17-44c8-a5d8-e0a1bafd8b67"
     assert s.onvio_allow_send is False
 
@@ -124,8 +134,10 @@ async def test_real_list_funcionarios_normaliza_e_auth_header():
     r = await c.list_funcionarios(page=0, size=50)
     assert seen["auth"] == "tok-123"
     assert seen["path"] == "/employee/find-all"
-    assert seen["params"]["pageNumber"] == "0"
-    assert seen["params"]["pageSize"] == "50"
+    # `page`/`size`: a API real IGNORA pageNumber/pageSize e devolve o
+    # default de 20 itens. Confirmado com credencial em 28/08/2026.
+    assert seen["params"]["page"] == "0"
+    assert seen["params"]["size"] == "50"
     item = r["items"][0]
     assert item["cpf"] == "52998224725"
     assert item["workplaces"] == [{"id": 1, "external_id": "OB-1", "nome": "OBRA X"}]
@@ -159,8 +171,10 @@ async def test_real_list_batidas_path_e_periodo():
     c = _real_tangerino(handler)
     r = await c.list_batidas(7, start_date="2026-08-01", end_date="2026-08-05")
     assert seen["path"] == "/external/api/v1/payssego/punches/7"
-    assert seen["params"]["startDate"] == "2026-08-01"
-    assert seen["params"]["endDate"] == "2026-08-05"
+    # dd/MM/yyyy: a API real devolve 400 (BindException) para ISO.
+    # Confirmado com credencial em 27/08/2026.
+    assert seen["params"]["startDate"] == "01/08/2026"
+    assert seen["params"]["endDate"] == "05/08/2026"
     b = r["items"][0]
     assert b["segundos_trabalhados"] == 28800
     assert b["inicio_ts"] == 1754032800000
@@ -215,3 +229,101 @@ async def test_real_locais_trabalho_normaliza():
             "padrao": False,
         }
     ]
+
+
+# --------------------------------------------------- descobertas com token real
+def test_datas_sao_convertidas_para_formato_brasileiro():
+    """Confirmado contra a API REAL em 27/08/2026.
+
+    O spec publico nao declara o formato. Testando com credencial:
+      startDate=2026-07-28   -> HTTP 400 BindException (typeMismatch)
+      startDate=28/07/2026   -> passou o binding (404 "cant find punches")
+
+    Ou seja: dd/MM/yyyy. O adapter aceita ISO na interface (resto do
+    repo usa ISO) e converte na borda.
+    """
+    from app.integrations.tangerino.client import to_tangerino_date
+
+    assert to_tangerino_date("2026-07-28") == "28/07/2026"
+    assert to_tangerino_date("28/07/2026") == "28/07/2026"
+
+
+@pytest.mark.asyncio
+async def test_list_batidas_envia_data_no_formato_aceito_pela_api():
+    enviado: dict[str, str] = {}
+
+    def handler(request: Request) -> Response:
+        enviado.update(dict(request.url.params))
+        return Response(200, json={"content": [], "totalElements": 0})
+
+    c = _real_tangerino(handler)
+    try:
+        await c.list_batidas(123, start_date="2026-07-01", end_date="2026-07-31")
+    finally:
+        await c.aclose()
+
+    assert enviado["startDate"] == "01/07/2026"
+    assert enviado["endDate"] == "31/07/2026"
+
+
+def test_paginacao_usa_page_e_size_nao_pagenumber():
+    """Confirmado contra a API REAL em 28/08/2026.
+
+        pageNumber=0&pageSize=5  -> 20 itens (ignorado, caiu no default)
+        page=0&size=5            ->  5 itens (honrado)
+
+    Com `pageNumber` o adapter receberia sempre 20 de 396 funcionarios.
+    """
+    seen: dict = {}
+
+    def handler(request: Request) -> Response:
+        seen.update(dict(request.url.params))
+        return _spring([], 0)
+
+    import asyncio
+
+    c = _real_tangerino(handler)
+    asyncio.run(c.list_funcionarios(page=0, size=500))
+    assert seen["size"] == "500"
+    assert seen["page"] == "0"
+    assert "pageSize" not in seen
+    assert "pageNumber" not in seen
+
+
+@pytest.mark.asyncio
+async def test_batidas_404_vira_lista_vazia_nao_erro():
+    """A API responde 404 "Cant find punches for this employee" quando o
+    funcionario nao tem batida no periodo -- observado contra a API real
+    em 27/08/2026.
+
+    Isso e ausencia de dado, nao falha. Se levantasse erro, o pull
+    noturno abortaria inteiro no primeiro dos 396 funcionarios sem
+    batida, e nenhum dos seguintes seria lido.
+    """
+    def handler(request: Request) -> Response:
+        return Response(
+            404,
+            json={
+                "timestamp": 1787883934030,
+                "status": 404,
+                "error": "Not Found",
+                "exception": "br.com.tangerino.exception.NotFoundException",
+                "message": "Cant find punches for this employee",
+            },
+        )
+
+    c = _real_tangerino(handler)
+    r = await c.list_batidas(7, start_date="2026-08-01", end_date="2026-08-31")
+    assert r["items"] == []
+    assert r["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_404_em_outro_endpoint_continua_sendo_erro():
+    """So batidas tem essa semantica. 404 em funcionarios e problema."""
+    def handler(request: Request) -> Response:
+        return Response(404, text="nao existe")
+
+    c = _real_tangerino(handler)
+    with pytest.raises(TangerinoError):
+        await c.list_funcionarios(page=0, size=10)

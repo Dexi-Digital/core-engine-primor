@@ -44,6 +44,27 @@ logger = logging.getLogger(__name__)
 TANGERINO_BASE_URL = "https://employer.tangerino.com.br"
 
 
+def to_tangerino_date(valor: str) -> str:
+    """Converte data ISO (`YYYY-MM-DD`) para o formato que a API aceita.
+
+    O spec publico nao declara o formato. Testado contra a API REAL em
+    27/08/2026 com credencial da Primor:
+
+        startDate=2026-07-28  -> HTTP 400, BindException (typeMismatch)
+        startDate=28/07/2026  -> passa o binding (404 so quando o
+                                 funcionario nao tem batida no periodo)
+
+    Ou seja: `dd/MM/yyyy`. A interface do adapter continua recebendo ISO
+    (convencao do resto do repo) e converte aqui na borda. Valor ja no
+    formato brasileiro passa intacto.
+    """
+    partes = valor.split("-")
+    if len(partes) == 3 and len(partes[0]) == 4:
+        ano, mes, dia = partes
+        return f"{dia}/{mes}/{ano}"
+    return valor
+
+
 def _mock_cpf(digest: str) -> str:
     """CPF deterministico com digitos verificadores VALIDOS.
 
@@ -164,8 +185,13 @@ class TangerinoClient(IntegrationClient):
     ) -> dict[str, Any]:
         """Lista batidas de ponto de um funcionario no periodo.
 
-        Datas em ISO `YYYY-MM-DD`. Timestamps expostos CRUS (epoch
-        assumido -- unidade a confirmar com credencial real).
+        Datas entram em ISO `YYYY-MM-DD` e sao convertidas para
+        `dd/MM/yyyy` na borda (ver `to_tangerino_date`) -- a API rejeita
+        ISO com 400.
+
+        Timestamps saem CRUS, em epoch de MILISSEGUNDOS (confirmado
+        contra a API real em 27/08/2026: `birthDate=1123383600000`,
+        `admissionDate=1787022000000`).
 
         Item: {employee_id, employee_external_id, data_trabalho_ts,
                inicio_ts, fim_ts, segundos_trabalhados, status, pis}
@@ -176,8 +202,9 @@ class TangerinoClient(IntegrationClient):
             f"/external/api/v1/payssego/punches/{employee_id}",
             page=page,
             size=size,
-            startDate=start_date,
-            endDate=end_date,
+            vazio_em_404=True,
+            startDate=to_tangerino_date(start_date),
+            endDate=to_tangerino_date(end_date),
         )
         return self._envelope(raw, page, size, self._normalize_batida)
 
@@ -194,17 +221,32 @@ class TangerinoClient(IntegrationClient):
     # --------------------------- HTTP interno ----------------------------
 
     def _auth_headers(self) -> dict[str, str]:
-        # apiKey CRUA no header Authorization (spec "Token Access") --
-        # sem prefixo Bearer; se a API real exigir, ajustar so aqui.
+        # Header Authorization com o valor exatamente como a Solides
+        # entrega. Testado contra a API real em 27/08/2026: funciona
+        # tanto com o prefixo "Basic " quanto com a chave crua -- por
+        # isso repassamos o valor sem tratar.
         return {"Authorization": self._api_token}
 
     async def _get_page(
-        self, endpoint: str, *, page: int, size: int, **params: Any
+        self,
+        endpoint: str,
+        *,
+        page: int,
+        size: int,
+        vazio_em_404: bool = False,
+        **params: Any,
     ) -> dict[str, Any]:
-        # Paginacao: o spec lista page/pageNumber/offset/size/pageSize
-        # sem documentar qual vale; pageNumber/pageSize e o par usado
-        # pelos exemplos payssego -- a confirmar com credencial real.
-        query = {"pageNumber": page, "pageSize": size, **params}
+        # Paginacao: o par correto e `page`/`size` -- confirmado contra
+        # a API REAL em 28/08/2026. `pageNumber`/`pageSize` sao
+        # IGNORADOS e a resposta cai no default de 20 itens, o que
+        # devolveria 20 de 396 funcionarios sem erro nenhum.
+        #
+        # ATENCAO: a API nao avanca pagina. `page`, `offset`, `start` e
+        # `pageNumber` devolvem todos os MESMOS registros; so `size`
+        # e honrado. Quem chama deve pedir tudo de uma vez com `size`
+        # grande e conferir `totalElements` -- ver
+        # `app.modules.ponto.service._buscar_tudo`.
+        query = {"page": page, "size": size, **params}
         try:
             r = await self._client.get(endpoint, params=query, headers=self._auth_headers())
         except httpx.HTTPError as exc:
@@ -213,6 +255,14 @@ class TangerinoClient(IntegrationClient):
             raise TangerinoAuthError(
                 f"Tangerino {endpoint} status {r.status_code}: api key invalida ou sem permissao"
             )
+        if r.status_code == 404 and vazio_em_404:
+            # "Cant find punches for this employee" -- observado contra a
+            # API real em 27/08/2026. E AUSENCIA DE DADO, nao falha: o
+            # funcionario simplesmente nao bateu ponto no periodo. Se
+            # virasse erro, o pull noturno abortaria no primeiro dos ~396
+            # funcionarios sem batida e os demais nem seriam lidos.
+            logger.debug("tangerino: sem registros em %s (404)", endpoint)
+            return {"content": [], "totalElements": 0}
         if r.status_code >= 300:
             raise TangerinoError(f"Tangerino {endpoint} status {r.status_code}: {r.text[:200]}")
         try:
