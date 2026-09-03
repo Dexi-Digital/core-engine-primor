@@ -8,8 +8,8 @@ Chaves de acesso vivem em variáveis de ambiente; **nunca no código**.
 | `dominio`       | Domínio (Thomson Reuters)         | API          | A, C |
 | `onvio`         | Onvio (admissão/contabilidade)    | API          | A |
 | `onsafety`      | OnSafety (SST, EPIs)              | API          | A |
-| `tangerino`     | Tangerino (ponto, fotos base)     | API          | A, E |
-| `totvs`         | TOTVS (ERP financeiro)            | API / DB     | C |
+| `tangerino`     | Sólides Ponto (ex-Tangerino)      | API          | A, B |
+| `totvs`         | TOTVS RM (ERP financeiro)         | API (REST/SOAP) | C |
 | `sistema90`     | Sistema 90 (legado frota)         | API parcial  | B |
 | `onedrive`      | OneDrive / SharePoint             | Graph API    | A, B, C |
 | `easyjur`       | EasyJur (jurídico)                | API          | C |
@@ -639,3 +639,413 @@ Env vars:
 | `ONVIO_INTEGRATION_KEY`   | opcional    | Chave de integração do vínculo contador↔cliente |
 | `ONVIO_AUDIENCE`          | não         | Default: `409f91f6-dc17-44c8-a5d8-e0a1bafd8b67` |
 | `ONVIO_ALLOW_SEND`        | não         | Default: `false` bloqueia envio real          |
+
+## TOTVS RM (adapter pronto contra mock — aguardando credencial)
+
+Adapter: `app.integrations.totvs.client.TotvsClient`, com a extração
+atrás da interface `TotvsExtractor` (`app/integrations/totvs/extractor.py`).
+Consome: Módulo C. Ticket TOTVS **30268517**.
+
+**Read-only por construção.** Não existe método de escrita no adapter;
+`push()` levanta `TotvsReadOnlyError`. Perfil somente-leitura no RM é a
+outra camada — se uma falhar, a outra segura.
+
+### Ambiente (confirmado pela TOTVS em 24/08/2026)
+
+| | |
+|---|---|
+| Hospedagem | **TOTVS Cloud (TCloud)** — leitura direta no banco está fora |
+| Protocolo | **HTTPS** (config de API já vem pronta no cloud) |
+| Versão produção | **12.1.2510.136** |
+| Versão desenvolvimento | **12.1.2510.170** — usar para validar sem gastar licença de prod |
+| ESN da conta | Otavio Moreira Abdo Lopes (`otavio.lopes@totvs.com.br`) |
+
+Essa versão está acima de todos os cortes que importam: `HttpPort`/`ApiPort`
+separáveis (≥12.1.25), controle de licença (≥12.1.15), `ApiPool` + log
+LS006 no monitor (≥12.1.2306), `JWTTokenExpireMinutes` configurável
+(≥12.1.2310), e as APIs de framework **sem consumo de licença**
+(12.1.2302 p121 / 2209 p195 / 2205 p246).
+
+### Licença — é isto que dita o desenho
+
+Licença de WebService do RM é consumida **por requisição de dados** e só
+liberada quando a requisição termina: 3 chamadas simultâneas = 3 licenças.
+A geração de token em `/api/connect/token` **não consome licença**
+(confirmado pela TOTVS em 27/08/2026), então renovar é de graça e o
+default de 5 minutos deixou de ser um problema a resolver. Há
+reaproveitamento da mesma licença por 30s entre requisições **não
+concorrentes**. A escala de consumo é `4001 → 4199 → 4016 → 4017 → 4000
+→ 4099`, subindo até a **TOTVS Full**, e a TOTVS documenta que *não é
+possível nomear licenças* — ou seja, um pull descuidado tira assento de
+usuário real do ERP. Mensagem de esgotamento: `Excedeu o número de licenças`.
+
+Consequências, todas já implementadas:
+
+- Pull **só no worker**, nunca na API (`worker.tasks.financeiro.pull_totvs`).
+- Chamadas **sequenciais**, encadeadas (aproveita a janela de 30s).
+- **Lock single-flight** no Redis (`app.core.locks.single_flight`,
+  chave `totvs:pull:lancamentos`) — obrigatório.
+- Slot no beat às **03h00**: fora do horário comercial e fora do bloco
+  08h00–08h15, que já tem certidões, ASO, afastamentos e contratos.
+- `health_check` usa `/api/framework/v1/coligadas`, que **não consome
+  licença** nessa versão.
+
+### Extractors
+
+| Modo | Porta | Auth | Paginação | Estado |
+|---|---|---|---|---|
+| `consultasql` | `HttpPort` (SOAP) | Basic | sem limite de retorno | **caminho oficial** — sentença cadastrada no RM |
+| `rest` | `ApiPort` (WebAPI) | Bearer | `page`/`pageSize` + `hasNext` | **não serve para lançamentos** (ver abaixo) |
+| `mock` | — | — | — | determinístico, default sem credencial |
+
+**A escolha está fechada.** A TOTVS confirmou em 31/08/2026 (Eduarda
+Soares) que *não existe API REST de lançamento financeiro nativa* que
+atenda extração massiva com paginação — as APIs do módulo Gestão
+Financeira não cobrem esse caso — e indicou o **wsConsultaSQL** como a
+alternativa adequada. O `RestExtractor` fica no código porque as APIs de
+framework (coligadas) seguem úteis e porque a interface prova que trocar
+é barato, mas não é o caminho para lançamentos.
+
+**Bearer, não Basic** — a própria TOTVS registra que Basic "não é
+recomendada pelo seu baixo nível de segurança". Token sai de
+`POST /api/connect/token` com `{"username","password"}` e dura **5 minutos**
+por default (refresh token, 16h). Um pull noturno atravessa o expiry: o
+`RestExtractor` renova via `refresh_token` e faz **um** retry em 401.
+
+**wsConsultaSQL não é SQL livre.** `RealizarConsultaSQLContexto` executa
+uma sentença **cadastrada dentro do RM** (BI → Criação de consultas SQL),
+por `codSentenca` + `codColigada` + `codSistema`, com parâmetros
+separados por `;`. Resposta é um `NewDataSet` XML em CDATA dentro do
+envelope SOAP. Reforça o read-only (a query nem mora no nosso código),
+mas cria dependência: mudar a extração vira mudança no RM, não deploy
+nosso. Erro `FE011` (sentença bloqueada por filtro de perfil/usuário)
+vira `TotvsPermissionError` — **nunca** pode ser confundido com "zero
+lançamentos".
+
+### Armadilha: permissão que filtra em silêncio (CONFIRMADO)
+
+Falta de permissão de **coligada** nas APIs **não levanta erro** — vira
+**filtro**, devolvendo um subconjunto com HTTP 200. Confirmado pela TOTVS
+em 27/08/2026, textualmente: *"o perfil vai funcionar como filtro também.
+Nesse cenário, ao consultar uma API apenas recebe os registros da
+coligada 1"*. (Permissão de *rotina* é caso diferente: essa dá erro.)
+Campo restrito usado em filtro dá 403; em `fields`, só some da resposta.
+
+Consequência prática: um perfil apertado demais entrega dado parcial
+parecendo sucesso, e a reconciliação fecha "certo" em cima de metade dos
+lançamentos.
+
+**Guarda implementada.** `TOTVS_COLIGADAS_ESPERADAS` (CSV) declara quais
+coligadas o pull deve enxergar. Antes de ler, o pull chama
+`/api/framework/v1/coligadas` — que não consome licença — e compara. Se
+faltar alguma, levanta `TotvsPermissionError` e grava `failed` no
+`totvs_sync_log`, em vez de gravar leitura parcial. É opt-in: vazio
+desliga a guarda. O extractor `consultasql` não consegue listar coligadas
+(o endpoint vive na ApiPort, ele fala SOAP na HttpPort), então lá a
+guarda é pulada com aviso em log.
+
+### Decimal
+
+O RM devolve valor como string, e o formato depende da tag
+`WebServiceCulture` no Host. `app.core.valores.coerce_valor_rm` normaliza
+o separador (o que aparece por último é o decimal) e delega ao
+`coerce_valor` reusado do `financeiro_contratos`. Nada passa por `float`.
+Ambiguidade conhecida: `"1.234"` sem vírgula é lido como **decimal
+invariant** (1.234), que é o que `WebServiceCulture=Invariant` produz —
+pedido em aberto com o time Cloud.
+
+### Tabelas de destino
+
+- **`totvs_lancamentos`** — unique em `external_id` **sozinho**, no
+  formato **`codcoligada-idlan`** (padrão do PNCP: `external_id` +
+  `ON CONFLICT`). `extractor` é proveniência, **não** chave: se entrasse
+  na chave, trocar REST por ConsultaSQL duplicaria a base inteira.
+
+  A chave foi confirmada pela TOTVS em 31/08/2026: *"a chave que
+  identifica um lançamento de forma única na tabela FLAN é a combinação
+  de CODCOLIGADA com IDLAN"*. **`CODFILIAL` ficou de fora** — a
+  suposição inicial deste adapter a incluía, e isso criaria uma linha
+  duplicada se a filial de um lançamento fosse corrigida no RM. A filial
+  continua gravada como dado, só não como identidade.
+- **`totvs_sync_log`** — unique em (`source`, `janela`), com `source`
+  na chave **desde o primeiro commit**. É o bug do
+  `dispatch_contrato_alerts_endpoint`: em `contratos_alertas_log` a
+  unique key não distingue origem, então disparo manual queima a janela
+  do beat. Aqui `beat` e `manual` ocupam linhas distintas.
+
+Nada de coluna `totvs_*` no `Contrato` (mesmo precedente da assinatura
+digital, `financeiro_contratos/models.py`, 04/08). Reconciliação é por
+documento — e depende da normalização só-dígitos de
+`Contrato.contraparte_documento`, hoje `String(32)` livre: **ticket
+separado**.
+
+### Env vars
+
+| Variável | Obrigatória | Descrição |
+|---|---|---|
+| `TOTVS_BASE_URL` | sim (real) | `https://<host>:<ApiPort ou HttpPort>`. Sem ela, o adapter usa mock. |
+| `TOTVS_USERNAME` | sim (real) | Usuário do RM. Permissão é a do Perfil dele no módulo. |
+| `TOTVS_PASSWORD` | sim (real) | Mesma senha de acesso ao RM. |
+| `TOTVS_EXTRACTOR` | não | `rest` \| `consultasql` (default) \| `mock`. |
+| `TOTVS_LANCAMENTOS_PATH` | não | Endpoint REST de lançamentos — **placeholder** até o time RM Gestão Financeira responder. |
+| `TOTVS_CONSULTASQL_COD_SENTENCA` | se `consultasql` | Código da sentença cadastrada no RM. |
+| `TOTVS_CONSULTASQL_COD_COLIGADA` | não | Default `1`. |
+| `TOTVS_CONSULTASQL_COD_SISTEMA` | não | Default `F` (Financeiro). |
+| `TOTVS_COLIGADAS_ESPERADAS` | recomendada | CSV das coligadas que o pull deve enxergar (ex.: `1,2`). Guarda contra o filtro silencioso. Vazio = desligada. |
+| `TOTVS_PULL_DIAS` | não | Janela do pull, em dias para trás. Default `45`. |
+| `TOTVS_PULL_LOCK_TTL_S` | não | TTL do lock single-flight. Default `3600`. |
+
+### Em aberto (bloqueiam o "ligar real", não o código)
+
+1. ~~RM Gestão Financeira~~ — **RESPONDIDO em 31/08/2026.** Sem API REST
+   para lançamentos; caminho é wsConsultaSQL; chave `CODCOLIGADA`+`IDLAN`;
+   contraparte por `CODCFO`+`CODCOLIGADA` → `FCFO.CGCCFO`; campos
+   `VALORORIGINAL`, `DATAVENCIMENTO`, `DATAEMISSAO`, `STATUSLAN`.
+   **Resta cadastrar a sentença SQL no RM** (ver abaixo).
+2. **Time Cloud**: hostname, portas, IP de saída / VPN, e a tag
+   `WebServiceCulture=Invariant` no Host. (`JWTTokenExpireMinutes`
+   saiu do pedido: como gerar token não consome licença, os 5 min
+   default servem.)
+3. **Portal do Cliente → Gestão de Licenças** + ESN: saldo de licenças de
+   WebService. Há monitor em tempo real — dá para **medir** o consumo na
+   madrugada antes de ligar.
+### Usuário de serviço (resolvido)
+
+No cadastro do usuário no RM, aba **Identificação**:
+
+- **"Força a troca de senha a cada ___ dias"** — deixar **desmarcado**
+- **"Sempre é Válido"** — deixar **marcado** (libera o campo Expiração
+  de Validade)
+
+Sem isso a senha ou o usuário expiram e o pull morre às 3h da manhã sem
+ninguém perceber. Orientação da TOTVS em 27/08/2026.
+
+## Onvio / Domínio (credencial recebida em 03/09/2026)
+
+Adapter: `app.integrations.onvio.client.OnvioClient`. Módulo consumidor:
+`app.modules.fiscal`. Este é o **único canal de máquina com o Domínio**
+(ADR-003, D1): a API só *importa* XML, não há consulta de leitura.
+
+### O fiscal estava plugado no adapter errado
+
+Até 03/09/2026 o módulo fiscal instanciava o `DominioClient`, que aponta
+para `api.dominioexterior.com.br` com um `POST /token` que não
+corresponde a nenhuma API documentada. Com credencial real ele nunca
+teria funcionado. A factory `get_dominio_client` agora monta o
+`OnvioClient`; o **nome da função foi mantido** de propósito, porque é a
+costura usada pelo router e pelos testes (`dependency_overrides`).
+
+Há um teste-guarda (`test_producao_nao_instancia_mais_o_adapter_legado`)
+que falha se alguém voltar a instanciar o adapter legado.
+
+### Diferenças de semântica que isso trouxe
+
+| | Antes (`DominioClient`) | Agora (`OnvioClient`) |
+|---|---|---|
+| Método | `upload_xml(filename, content, tipo)` | `send_nfe_xml(filename, content)` — sem `tipo` |
+| Retorno | `protocolo` | `batch_id` |
+| Confirmação | imediata | só em `get_batch_status(batch_id)` |
+
+A coluna `protocolo_dominio` passou a guardar o `batch_id`. O nome foi
+mantido para não exigir migration por troca de nomenclatura.
+
+### Estado `bloqueado`
+
+`ONVIO_ALLOW_SEND=false` (default) faz o envio real levantar
+`OnvioSendBlockedError`. Isso vira `status_envio="bloqueado"`, **não**
+`"erro"**, e **não** incrementa `retry_count` — é guard de configuração,
+não falha. Marcar como erro faria o worker reprocessar para sempre algo
+que nunca vai passar e poluiria a contagem de falhas reais.
+
+### As três entidades
+
+Validadas via `GET /activation/info` em 03/09/2026:
+
+| Empresa | CNPJ |
+|---|---|
+| Primor Soluções Ltda | 57.803.505/0001-01 |
+| Construtora ZAG Ltda | 00.356.328/0001-45 |
+| Consórcio ZAG Guaxima | 54.641.090/0001-29 |
+
+O "escritório contábil" das três é a **própria Primor Soluções** — a
+contabilidade é interna, não terceirizada.
+
+`ONVIO_INTEGRATION_KEY` é escalar e hoje aponta para a Primor Soluções.
+Suporte multi-entidade (uma chave por CNPJ) é ticket separado.
+
+### Bug corrigido
+
+O campo `query` do multipart era `{"boxe/File": false}`; a documentação
+(solução 8476) especifica `boxeFile`, sem barra. Nunca apareceu porque o
+envio real nunca rodou.
+
+### Falta para enviar de verdade
+
+1. Rodar `activation/enable` para gerar a `integrationKey` de envio
+2. `ONVIO_ALLOW_SEND=true`
+3. Validar o primeiro envio — como a contabilidade é interna, dá para
+   combinar sem depender de terceiro
+
+Canais: `api.dominio@thomsonreuters.com`, WhatsApp 11 5047-2396,
+call em calendly.com/leonardo-steiner.
+
+## Sólides Ponto / Tangerino (LIGADO — credencial real desde 27/08/2026)
+
+Adapter: `app.integrations.tangerino.client.TangerinoClient`.
+Módulo consumidor: `app.modules.ponto`. Consome: Módulos A e B.
+
+**Somente leitura.** O adapter não tem método de escrita, e a ingestão
+**nunca cria funcionário no DP** — `dp_employees` continua sendo a fonte
+da verdade do cadastro.
+
+### Credencial
+
+Token de integração obtido no painel em **Empregador → Integrações**
+(menu antigo: Configurações → Integrações). Se não aparecer, é preciso
+pedir liberação ao suporte (`suportedp@solides.com.br` ou chat dentro da
+plataforma).
+
+`TANGERINO_API_KEY` vai no header `Authorization`. A Sólides entrega o
+valor já com o prefixo `Basic `; testado contra a API real, **funciona
+com e sem o prefixo**, então o adapter repassa o valor como veio.
+Sem a variável, cai em mock determinístico.
+
+### O que a exploração da API real revelou
+
+O spec público não declara várias coisas. Medido contra a conta da
+Primor em 27–28/08/2026:
+
+| Questão | Resposta |
+|---|---|
+| Formato de data em `startDate`/`endDate` | **`dd/MM/yyyy`**. ISO devolve **400** (BindException). |
+| Unidade dos timestamps | **epoch em milissegundos** (`1787022000000`). |
+| Parâmetros de paginação | **`page`/`size`**. `pageNumber`/`pageSize` são ignorados e a resposta cai no default de 20. |
+| A API pagina? | **Não.** `page`, `offset`, `start` e `pageNumber` devolvem sempre os mesmos registros. Só `size` é honrado. |
+| Teto de `size` | **2000**, imposto pelo servidor. |
+| Geolocalização nas batidas | **Não existe** em nenhum modelo. |
+| Sem batida no período | **404** `"Cant find punches for this employee"` — ausência de dado, não falha. |
+
+Cada uma dessas viraria um bug silencioso: `pageNumber` traria 20 de 396
+funcionários sem erro; ISO abortaria as batidas; o 404 derrubaria o pull
+inteiro no primeiro funcionário sem ponto.
+
+### Limitação do fornecedor (a levar à Sólides)
+
+Sem paginação e com `size` limitado a 2000, **não é possível ler os 2400
+funcionários da conta (contando demitidos) numa única chamada** — e a
+API devolve os **demitidos primeiro**, então pedir tudo traz 2000
+demitidos e **zero ativos**.
+
+Por isso o pull usa `showFired=0` e traz os ~396 ativos, que são os que
+geram batida. Consequência aceita: o histórico completo de demitidos não
+é recuperável em lote. Vale abrir com o suporte deles.
+
+### Vínculo funcionário → obra (fecha o ADR-003)
+
+O ADR-003 deixou "workplace vs geolocalização" como pergunta aberta
+aguardando a Sólides. **Resolvida pela API:** geolocalização não existe,
+e os 83 locais de trabalho da conta **são as obras** — "Obra 243",
+"Obra 217 - Januária", "OBRA 246 - ABAETÉ" — ao lado de ~20
+administrativos ("ADM PRIMOR", "ESCRITÓRIO PRIMOR", "MANUTENÇÃO PRIMOR").
+
+A ponte é o código embutido no nome (`app.modules.ponto.matching`):
+`"Obra 243"` → `243`, casado contra `obras_obra.codigo`. Três desfechos,
+todos legítimos:
+
+- **ligado** — obra existe no cadastro
+- **obra não cadastrada** — código extraído, obra ainda não existe. Fica
+  pendente e visível na tela; não inventamos obra.
+- **administrativo** — sem código, sem obra. Correto, não é falha.
+
+Cuidado de dado: **"Obra 010 CTC" aparece duas vezes** na lista real com
+ids diferentes. `nome_normalizado` (sem acento, sem caixa) existe para
+detectar esse tipo de duplicidade.
+
+### Tabelas
+
+- `ponto_locais_trabalho` — workplaces + `codigo_obra` + `obra_id` nullable
+- `ponto_funcionarios` — funcionário como o Sólides o conhece, ligado por
+  CPF ao `dp_employees` (nulo = pendência de cadastro)
+- `ponto_batidas` — `external_id` = `{tangerino_id}-{data}-{inicio_epoch}`,
+  já que a API não expõe id próprio da batida
+- `ponto_sync_log` — unique em (`source`, `janela`, `recurso`), com
+  `source` na chave desde o primeiro commit (mesmo precedente do TOTVS)
+
+### Agendamento
+
+`worker.tasks.dp_sesmt.pull_ponto`, **02h30**, sob lock single-flight
+(`ponto:pull`). Antes do TOTVS (03h00) para não disputarem o worker, e
+fora do bloco 08h00–08h15. É o job mais longo da madrugada: a API só
+devolve batidas **por funcionário**, então são ~396 requisições
+sequenciais.
+
+### Env vars
+
+| Variável | Obrigatória | Descrição |
+|---|---|---|
+| `TANGERINO_API_KEY` | sim (real) | Token de Empregador → Integrações. Sem ela, mock. |
+| `TANGERINO_BASE_URL` | não | Default `https://employer.tangerino.com.br`. |
+| `PONTO_PULL_DIAS` | não | Janela de batidas, em dias para trás. Default `45`. |
+| `PONTO_PULL_LOCK_TTL_S` | não | TTL do lock. Default `7200` (o pull é longo). |
+
+### Tela
+
+`/rh/ponto` — números de topo, as duas filas de pendência (local sem obra
+cadastrada, funcionário sem cadastro no DP) e o histórico de importações.
+
+### A sentença SQL a cadastrar no RM
+
+Como o wsConsultaSQL executa uma sentença **cadastrada dentro do RM**
+(BI → Criação de consultas SQL), esta é a peça que falta para ligar. Ela
+usa exatamente os nomes de campo e o relacionamento confirmados pela
+TOTVS em 31/08/2026.
+
+Código sugerido: **`MOTOR.FLAN.01`** · Sistema: **`F`** (Financeiro)
+
+```sql
+SELECT
+    FLAN.CODCOLIGADA,
+    FLAN.CODFILIAL,
+    FLAN.IDLAN,
+    FLAN.VALORORIGINAL,
+    FLAN.DATAVENCIMENTO,
+    FLAN.DATAEMISSAO,
+    FLAN.STATUSLAN,
+    FLAN.CODCFO,
+    FCFO.NOME    AS NOMECFO,
+    FCFO.CGCCFO
+FROM FLAN
+LEFT JOIN FCFO
+       ON FCFO.CODCOLIGADA = FLAN.CODCOLIGADA
+      AND FCFO.CODCFO      = FLAN.CODCFO
+WHERE FLAN.DATAVENCIMENTO BETWEEN :DATAINICIAL AND :DATAFINAL
+```
+
+Detalhes que importam:
+
+- **O `LEFT JOIN` é proposital.** Com `INNER`, um lançamento sem
+  contraparte cadastrada sumiria da extração — e sumir em silêncio é o
+  pior modo de falha possível numa reconciliação financeira.
+- **O join usa `CODCOLIGADA` além de `CODCFO`**, como a TOTVS
+  especificou. Só por `CODCFO` haveria mistura entre coligadas.
+- **`AS NOMECFO` é o alias que o adapter espera** (`CAMPO_NOME`). Se a
+  coluna de nome da FCFO na instância da Primor não for `NOME`, basta
+  ajustar o lado esquerdo do alias — o adapter não muda.
+- Os parâmetros `:DATAINICIAL` e `:DATAFINAL` são preenchidos pelo
+  adapter e enviados separados por `;`, no formato que o
+  `ConsultaSqlExtractor` já monta.
+
+Para carga **incremental** (em vez de recarregar a janela inteira),
+trocar o `WHERE` por `FLAN.RECMODIFIEDON >= :DATAINICIAL` traz só o que
+mudou desde a última execução. Fica como evolução — a janela por
+vencimento resolve o caso de uso atual e é mais fácil de conferir.
+
+Depois de cadastrada, preencher no ambiente:
+
+```ini
+TOTVS_EXTRACTOR=consultasql
+TOTVS_CONSULTASQL_COD_SENTENCA=MOTOR.FLAN.01
+TOTVS_CONSULTASQL_COD_SISTEMA=F
+TOTVS_CONSULTASQL_COD_COLIGADA=<coligada da Primor>
+TOTVS_COLIGADAS_ESPERADAS=<lista das coligadas, ex.: 1,2>
+```
