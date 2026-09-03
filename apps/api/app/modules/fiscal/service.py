@@ -15,10 +15,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.actors import SYSTEM as _AUDIT_ACTOR_SYSTEM
 from app.audit.models import AuditLog
-from app.integrations.dominio.client import (
-    DominioAuthError,
-    DominioError,
-    DominioMockClient,
+from app.integrations.onvio.client import (
+    OnvioAuthError,
+    OnvioError,
+    OnvioSendBlockedError,
 )
 from app.modules.fiscal.models import (
     STATUS_ENVIO_VALIDOS,
@@ -495,8 +495,15 @@ async def enviar_para_dominio(
     e `retry_count`. Em caso de erro, NAO re-levanta -- atualiza o
     registro e retorna; quem agenda o retry e a task do worker.
 
-    `dominio_client` e qualquer client que implemente `upload_xml(...)`
-    -- DominioClient real ou DominioMockClient.
+    `dominio_client` e qualquer client que implemente
+    `send_nfe_xml(filename=..., content=...)` -- `OnvioClient` real ou
+    em modo mock.
+
+    O Onvio devolve `batch_id`, nao `protocolo`: a coluna
+    `protocolo_dominio` guarda esse identificador (o nome da coluna foi
+    mantido para nao exigir migration por troca de nomenclatura). O
+    armazenamento definitivo so se confirma consultando
+    `get_batch_status(batch_id)` -- ver `conferir_envio`.
     """
     doc = await get_documento(db, doc_id)
     if doc is None:
@@ -524,12 +531,28 @@ async def enviar_para_dominio(
     filename = f"{doc.tipo}-{doc.chave_acesso or doc.xml_hash[:16]}.xml"
 
     try:
-        result = await dominio_client.upload_xml(
-            filename=filename, content=xml_bytes, tipo=doc.tipo
+        result = await dominio_client.send_nfe_xml(
+            filename=filename, content=xml_bytes
         )
-    except DominioAuthError as exc:
+    except OnvioSendBlockedError as exc:
+        # Guard de configuracao, NAO falha de envio. Marcar "erro" e
+        # incrementar `retry_count` faria o worker reprocessar para
+        # sempre algo que nunca vai passar, e poluiria a contagem de
+        # falhas reais. Estado proprio, sem retry.
+        doc.status_envio = "bloqueado"
+        doc.error_msg = str(exc)
+        await db.commit()
+        await _record_audit(
+            db,
+            action="enviar_bloqueado",
+            resource_id=doc.id,
+            actor=actor,
+            metadata={"motivo": str(exc)},
+        )
+        return doc
+    except OnvioAuthError as exc:
         doc.status_envio = "erro"
-        doc.error_msg = f"auth Dominio: {exc}"
+        doc.error_msg = f"auth Onvio: {exc}"
         doc.retry_count += 1
         await db.commit()
         await _record_audit(
@@ -544,9 +567,9 @@ async def enviar_para_dominio(
             },
         )
         return doc
-    except DominioError as exc:
+    except OnvioError as exc:
         doc.status_envio = "erro"
-        doc.error_msg = f"dominio: {exc}"
+        doc.error_msg = f"onvio: {exc}"
         doc.retry_count += 1
         await db.commit()
         await _record_audit(
@@ -559,7 +582,7 @@ async def enviar_para_dominio(
         return doc
 
     doc.status_envio = "enviado"
-    doc.protocolo_dominio = str(result.get("protocolo") or "")
+    doc.protocolo_dominio = str(result.get("batch_id") or "")
     doc.sent_at = datetime.now(tz=UTC)
     doc.error_msg = None
     await db.commit()
@@ -570,7 +593,7 @@ async def enviar_para_dominio(
         resource_id=doc.id,
         actor=actor,
         metadata={
-            "protocolo": doc.protocolo_dominio,
+            "batch_id": doc.protocolo_dominio,
             "tipo": doc.tipo,
             "valor_total": doc.valor_total,
         },
@@ -579,34 +602,32 @@ async def enviar_para_dominio(
 
 
 def get_dominio_client(settings: Any) -> Any:
-    """Constroi um novo client real ou mock conforme configuracao.
+    """Constroi o client do canal contabil (Onvio) -- real ou mock.
 
-    Mesma estrategia de DirectData/LLM: se faltar credencial, cai no
-    mock determinístico para nao bloquear dev/CI. Em prod, basta
-    configurar `DOMINIO_*` no env.
+    O ADR-003 (D1) define a API Onvio como o UNICO canal de maquina com
+    o Dominio, e o `OnvioClient` implementa o fluxo documentado: token
+    na Thomson Reuters -> `activation/enable` -> `invoice/v3/batches`.
 
-    Esta funcao e a "factory" -- cada chamada cria um client novo. Para
-    uso na API HTTP use `get_dominio_singleton()` que cacheia para
-    aproveitar o token-cache (a Domínio rate-limita /token).
+    Ate 03/09/2026 esta funcao montava o `DominioClient`, que aponta
+    para `api.dominioexterior.com.br` com um `POST /token` que nao
+    corresponde a nenhuma API documentada -- ou seja, o caminho de
+    producao nunca teria funcionado com credencial real. O nome da
+    funcao foi mantido de proposito: e a costura usada pelo router e
+    pelos testes (`dependency_overrides`), e renomear so geraria ruido.
+
+    Sem credencial, cai no mock deterministico -- mesma estrategia de
+    DirectData/LLM. O envio REAL ainda depende de `ONVIO_ALLOW_SEND`,
+    porque e escrita no Dominio de PRODUCAO do escritorio contabil.
     """
-    from app.integrations.dominio.client import DominioClient
+    from app.integrations.onvio.client import OnvioClient
 
-    if all(
-        [
-            settings.dominio_audit_url,
-            settings.dominio_integracao,
-            settings.dominio_client_id,
-            settings.dominio_client_secret,
-        ]
-    ):
-        return DominioClient(
-            audit_url=settings.dominio_audit_url,
-            integracao=settings.dominio_integracao,
-            client_id=settings.dominio_client_id,
-            client_secret=settings.dominio_client_secret,
-            base_url=settings.dominio_base_url,
-        )
-    return DominioMockClient()
+    return OnvioClient(
+        client_id=settings.onvio_client_id,
+        client_secret=settings.onvio_client_secret,
+        integration_key=settings.onvio_integration_key,
+        audience=settings.onvio_audience,
+        allow_send=settings.onvio_allow_send,
+    )
 
 
 # Singleton de processo. Criar um novo `DominioClient` por request

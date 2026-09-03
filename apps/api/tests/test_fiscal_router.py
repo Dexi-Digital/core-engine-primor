@@ -203,7 +203,8 @@ async def test_enviar_dominio_com_mock_marca_enviado(
     body = r_send.json()
     assert body["status_envio"] == "enviado"
     assert body["protocolo_dominio"]
-    assert body["protocolo_dominio"].startswith("MOCK-NFCE-")
+    # O Onvio devolve `batch_id`; o modo mock usa "mock-<sha1 do XML>".
+    assert body["protocolo_dominio"].startswith("mock-")
 
     # Persistencia + audit
     doc = await db_session.get(DocumentoFiscal, doc_id)
@@ -243,10 +244,11 @@ async def test_enviar_dominio_idempotente(api_client: AsyncClient, auth_headers:
 
 
 class _FailingDominioClient:
-    """Client que sempre devolve DominioError -- simula timeout/erro
-    de transporte sem precisar dropar o transport."""
+    """Client que sempre devolve OnvioError -- simula timeout/erro de
+    transporte sem precisar dropar o transport."""
 
-    name = "dominio_failing"
+    name = "onvio_failing"
+    is_mock = False
 
     async def health_check(self) -> bool:
         return False
@@ -254,17 +256,17 @@ class _FailingDominioClient:
     async def aclose(self) -> None:
         return None
 
-    async def upload_xml(self, **kwargs):
-        from app.integrations.dominio.client import DominioError
+    async def send_nfe_xml(self, **kwargs):
+        from app.integrations.onvio.client import OnvioError
 
-        raise DominioError("timeout simulado")
+        raise OnvioError("timeout simulado")
 
 
 @pytest.mark.asyncio
 async def test_enviar_dominio_em_erro_persiste_status_e_retry(
     api_client: AsyncClient, db_session: AsyncSession, auth_headers: dict[str, str]
 ):
-    """Quando o adapter levanta DominioError, o servico tem que:
+    """Quando o adapter levanta OnvioError, o servico tem que:
     - Marcar status_envio='erro'
     - Salvar error_msg
     - Incrementar retry_count

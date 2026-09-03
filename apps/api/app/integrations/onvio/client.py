@@ -237,7 +237,11 @@ class OnvioClient(IntegrationClient):
         token = await self._get_token()
         files = {
             "file[]": (filename, content, "application/xml"),
-            "query": (None, '{"boxe/File": false}', "application/json"),
+            # `boxeFile` (sem barra) -- e a chave que a documentacao
+            # especifica (solucao 8476). O valor false vale para
+            # contador SEM o servico BOX-e contratado; com BOX-e ativo,
+            # passa a true e os XMLs ficam 5 anos na nuvem deles.
+            "query": (None, '{"boxeFile": false}', "application/json"),
         }
         try:
             r = await self._client.post(
