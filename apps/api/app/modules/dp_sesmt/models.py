@@ -507,6 +507,17 @@ class EmployeeDocument(Base):
     onsafety_external_id: Mapped[str | None] = mapped_column(
         String(64), nullable=True
     )
+    # Obra (= `establishment`/Projeto na OnSafety) em que o documento
+    # foi emitido. Resolvido no pull por `Projeto.codigoExterno` ->
+    # `obras_obra.codigo`, com fallback pelo codigo no nome (mesmo
+    # padrao dos locais de trabalho do Tangerino, ADR-003). Fica NULL
+    # quando o documento nao tem obra ou quando ela nao esta cadastrada
+    # -- nunca bloqueia a ingestao do documento.
+    obra_id: Mapped[int | None] = mapped_column(
+        ForeignKey("obras_obra.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

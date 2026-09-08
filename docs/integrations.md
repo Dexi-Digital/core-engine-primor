@@ -372,7 +372,22 @@ de homologação (2026-07-13):
   padrão deles **inclui** excluídos — os `list_*` do adapter defaultam
   `ativo=True` para o pull não ingerir registros deletados.
 - 401 = auth (token inválido/ambiente errado); **403 = validação de
-  negócio**, não auth.
+  negócio**, não auth. Sem token válido **todo** `GET /v2/*` responde 403
+  com corpo vazio — não confundir com projeção `fields` inválida.
+- **O spec OpenAPI deles é público e não exige token:**
+  `GET https://api.dev.onsafety.com.br/v3/api-docs` (~492 KB, 354
+  schemas). É a fonte mais rápida para conferir campo/tipo antes de
+  ampliar uma projeção `fields` — foi assim que os campos de data dos
+  treinamentos (`dataFim`, `dataVencimento`, `validadeDias`) e o
+  `establishment` foram descobertos (08/09/2026).
+- **`resultadoAso` não tem enum nem descrição em lugar nenhum do spec**
+  (`integer int32` puro; nenhum literal "apto"/"inapto" nas 354 schemas).
+  O mapa `{1: apto, 2: inapto, 3: apto_restricoes}` do `onsafety_sync.py`
+  segue **assumido** — pergunta em aberto com o suporte, e o rollout do
+  ASO em produção depende dela.
+- **`ControleEpi.validade` é `string` sem `format`** no spec (formato
+  livre confirmado). Ao lado existe `vidaUtilDia` (int32), útil como
+  sinal cruzado se o formato da string se mostrar instável.
 
 **LGPD:** ASO é dado de saúde. Todo pull deve gravar log de auditoria
 (padrão `dp_dossie_consultas`) no service que consome o adapter.
@@ -386,15 +401,38 @@ Env vars:
 | `ONSAFETY_ALLOW_PROD_WRITE` | não         | Default: `false`. **Guard-rail**: `create_or_update` contra `api.onsafety.com.br` levanta `OnsafetyProdWriteBlockedError` sem este opt-in (o token disponível hoje é o de produção — ADR-001). Leitura não é afetada. |
 | `ONSAFETY_PROJETO_ID`       | p/ push     | Estabelecimento/projeto OnSafety ao qual o push vincula o trabalhador. Sem ele a API deles recusa com 403. Em homolog: obra de teste "OBRA TESTE MOTOR CENTRAL". |
 
-**Pull SST (Squad 2):** `POST /api/v1/dp-sesmt/onsafety/pull` (manual) e
-cron 07h30 (`worker.tasks.dp_sesmt.pull_onsafety` — antes dos alertas ASO
-das 08h05, para usarem dado fresco). Matching por CPF (validado com
-`is_valid_cpf`; sem match não cria funcionário). ASOs → colunas `aso_*`
-de `dp_employees` com regra **"ASO nunca regride"** (pull não sobrescreve
-dado mais recente); fichas de EPI → `EmployeeDocument` tipo `FICHA_EPI`
-com `source="onsafety"` e upsert por `onsafety_external_id` (docs manuais
-nunca são tocados). LGPD: 1 row em `dp_dossie_consultas` por
-(funcionário, fonte) por run + summary do run em `audit_log`.
+**Pull SST (Squad 2):** `POST /api/v1/dp-sesmt/onsafety/pull` (manual —
+**enfileira** a task na fila `dp_sesmt`; `?inline=true` roda no request e
+devolve o summary, só para base pequena) e cron 07h30
+(`worker.tasks.dp_sesmt.pull_onsafety` — antes dos alertas ASO das 08h05,
+para usarem dado fresco). Matching por CPF (validado com `is_valid_cpf`;
+sem match não cria funcionário). ASOs → colunas `aso_*` de `dp_employees`
+com regra **"ASO nunca regride"** (pull não sobrescreve dado mais
+recente); fichas de EPI → `EmployeeDocument` tipo `FICHA_EPI`; treinamentos
+→ `EmployeeDocument` tipo `NR10`/`NR12`/`NR18`/`NR35`. Todos com
+`source="onsafety"` e upsert por `onsafety_external_id` (docs manuais
+nunca são tocados). O run carrega 3 índices em memória (funcionários por
+CPF, documentos por external id, obras por código) — antes era 1 SELECT
+por item. LGPD: 1 row em `dp_dossie_consultas` por (funcionário, fonte)
+por run + summary do run em `audit_log`.
+
+**Treinamentos → NR (regras de segurança).** Só entra no dossiê o
+treinamento que é (a) **aprovado** e (b) **com validade conhecida**
+(`dataVencimento`, ou `dataFim + validadeDias`). O motivo do item (b): o
+`diagnostico/runner.py` lê `validade = None` como *"documento perene →
+conforme"*, então uma NR-35 vencida gravada sem validade apareceria como
+**OK** no checklist — pior do que aparecer como ausente. Descartados
+contam em `treinos_sem_validade` / `treinos_reprovados`. A NR sai do
+`treinamentoCodigo.grupo` (rótulo normalizado deles), com fallback para
+`sigla` e `descricao`; NR fora do checklist (NR-06, integração, brigada)
+não vira documento e conta em `treinos_nr_desconhecida`.
+
+**Obra do documento.** O `establishment` (Projeto) vem junto nos
+treinamentos e nas fichas de EPI e resolve `dp_employee_documents.obra_id`
+por `Projeto.codigoExterno` → `obras_obra.codigo`, com fallback pelo
+código embutido no nome (`"OBRA 243 - ..."`, mesmo padrão dos locais de
+trabalho do Tangerino, ADR-003). Sem match o documento entra com
+`obra_id` nulo e o contador `projeto_no_match` mede o buraco de cadastro.
 
 **Push de onboarding (etapa 3):** `POST /api/v1/dp-sesmt/employees/{id}/sync-onsafety`
 envia o funcionário via `create_or_update` (`codigoExterno` = employee id;

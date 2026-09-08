@@ -477,3 +477,109 @@ async def test_real_health_check_ok_e_falha():
 
     assert await _real_client(ok).health_check() is True
     assert await _real_client(down).health_check() is False
+
+
+# --- treinamentos: campos de data e NR (issue #39) --------------------------
+# Os campos abaixo foram confirmados no spec OpenAPI publico da OnSafety
+# (`GET /v3/api-docs`, schema `TreinamentoRealizado`) em 08/09/2026.
+
+
+def test_fields_treinamentos_projeta_datas_e_nr():
+    """A projecao PRECISA trazer vencimento -- sem ele o doc de NR
+    entra com validade None, e o diagnostico trata None como
+    "perene -> OK" (falso compliance de NR vencida)."""
+    from app.integrations.onsafety.client import FIELDS_TREINAMENTOS
+
+    for campo in (
+        "treinamentoRealizado.dataFim",
+        "treinamentoRealizado.dataVencimento",
+        "treinamentoRealizado.validadeDias",
+        "treinamentoRealizado.sigla",
+        "treinamentoRealizado.treinamentoCodigo.grupo",
+        "treinamentoRealizado.establishment.id",
+        "treinamentoRealizado.establishment.codigoExterno",
+    ):
+        assert campo in FIELDS_TREINAMENTOS, campo
+
+
+@pytest.mark.asyncio
+async def test_mock_treinamento_traz_datas_sigla_e_projeto():
+    c = OnsafetyClient(api_token=None)
+    trs = await c.list_treinamentos_trabalhadores(page=0, size=100)
+    item = trs["items"][0]
+    assert set(item) == {
+        "id",
+        "descricao",
+        "sigla",
+        "grupo",
+        "aprovado",
+        "renovado",
+        "certificado_id",
+        "data_fim",
+        "data_vencimento",
+        "validade_dias",
+        "situacao",
+        "projeto",
+        "ativo",
+        "trabalhador",
+    }
+    assert item["data_fim"] and item["data_vencimento"]
+    assert item["projeto"]["codigo_externo"]
+
+
+def test_normalize_treinamento_datas_iso_e_projeto():
+    c = OnsafetyClient(api_token=None)
+    raw = {
+        "id": "t-1",
+        "aprovado": True,
+        "renovado": False,
+        "certificateId": "c-1",
+        "ativo": True,
+        "treinamentoRealizado": {
+            "id": "tr-1",
+            "descricao": "NR-35 Trabalho em Altura",
+            "sigla": "NR-35",
+            "dataFim": "2026-03-10T00:00:00.000+00:00",
+            "dataVencimento": "2028-03-10T00:00:00.000+00:00",
+            "validadeDias": 730,
+            "situacao": "CONCLUIDO",
+            "treinamentoCodigo": {"grupo": "NR-35", "codigo": 35},
+            "establishment": {
+                "id": "p-1",
+                "nome": "OBRA 243 - GUAXIMA",
+                "codigoExterno": "243",
+            },
+        },
+        "trabalhador": {"id": "w-1", "nome": "X", "cpf": "529.982.247-25"},
+    }
+    item = c._normalize_treinamento(raw)
+    assert item["data_fim"] == "2026-03-10"
+    assert item["data_vencimento"] == "2028-03-10"
+    assert item["validade_dias"] == 730
+    assert item["sigla"] == "NR-35"
+    assert item["grupo"] == "NR-35"
+    assert item["projeto"] == {
+        "id": "p-1",
+        "nome": "OBRA 243 - GUAXIMA",
+        "codigo_externo": "243",
+    }
+    assert item["trabalhador"]["cpf"] == "52998224725"
+
+
+@pytest.mark.asyncio
+async def test_mock_cpfs_cruzam_entre_datasets():
+    """Follow-up da #39: os CPFs de exames/EPI/treinamentos precisam
+    existir no dataset `trabalhadores`, senao nenhum teste de pull
+    exercita o caminho de match real."""
+    c = OnsafetyClient(api_token=None)
+    trab = await c.list_trabalhadores(page=0, size=100, ativo=None)
+    base = {i["cpf"] for i in trab["items"]}
+    assert base
+    for chamada in (
+        c.list_exames_ocupacionais,
+        c.list_controles_epi,
+        c.list_treinamentos_trabalhadores,
+    ):
+        res = await chamada(page=0, size=100)
+        cpfs = {i["trabalhador"]["cpf"] for i in res["items"]}
+        assert cpfs and cpfs <= base, chamada.__name__

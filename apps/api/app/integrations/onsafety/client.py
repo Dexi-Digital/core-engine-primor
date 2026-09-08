@@ -78,12 +78,25 @@ FIELDS_EXAMES = (
 FIELDS_CONTROLES_EPI = (
     "id,dataEntrega,nomeEquipamento,ca,quantidade,validade,"
     "previsaoDevolucao,dataDevolucao,statusEntrega,ativo,"
+    "establishment.id,establishment.nome,establishment.codigoExterno,"
     "trabalhador.id,trabalhador.nome,trabalhador.cpf"
 )
+# Datas e NR confirmadas no spec OpenAPI publico da OnSafety
+# (`GET /v3/api-docs`, schema `TreinamentoRealizado`, lido em
+# 08/09/2026). `dataVencimento`/`validadeDias` NAO sao opcionais para
+# nos: sem validade o documento de NR entra perene no dossie e o
+# diagnostico o trata como conforme (ver `pull_treinamentos`).
 FIELDS_TREINAMENTOS = (
     "id,aprovado,renovado,certificateId,ativo,"
     "trabalhador.id,trabalhador.nome,trabalhador.cpf,"
-    "treinamentoRealizado.id,treinamentoRealizado.descricao"
+    "treinamentoRealizado.id,treinamentoRealizado.descricao,"
+    "treinamentoRealizado.sigla,treinamentoRealizado.situacao,"
+    "treinamentoRealizado.dataFim,treinamentoRealizado.dataVencimento,"
+    "treinamentoRealizado.validadeDias,"
+    "treinamentoRealizado.treinamentoCodigo.grupo,"
+    "treinamentoRealizado.establishment.id,"
+    "treinamentoRealizado.establishment.nome,"
+    "treinamentoRealizado.establishment.codigoExterno"
 )
 
 def _mock_cpf(digest: str) -> str:
@@ -580,6 +593,7 @@ class OnsafetyClient(IntegrationClient):
             "data_devolucao": _date10(raw.get("dataDevolucao")),
             "status_entrega": raw.get("statusEntrega"),
             "ativo": raw.get("ativo"),
+            "projeto": self._normalize_sub_projeto(raw.get("establishment")),
             "trabalhador": self._normalize_sub_trabalhador(
                 raw.get("trabalhador")
             ),
@@ -587,16 +601,44 @@ class OnsafetyClient(IntegrationClient):
 
     def _normalize_treinamento(self, raw: dict[str, Any]) -> dict[str, Any]:
         realizado = raw.get("treinamentoRealizado") or {}
+        codigo = realizado.get("treinamentoCodigo") or {}
         return {
             "id": raw.get("id"),
             "descricao": realizado.get("descricao"),
+            "sigla": realizado.get("sigla"),
+            # `grupo` do treinamentoCodigo e o rotulo normalizado da NR
+            # na OnSafety -- preferimos ele a parsear `descricao`.
+            "grupo": codigo.get("grupo"),
             "aprovado": raw.get("aprovado"),
             "renovado": raw.get("renovado"),
             "certificado_id": raw.get("certificateId"),
+            "data_fim": _date10(realizado.get("dataFim")),
+            "data_vencimento": _date10(realizado.get("dataVencimento")),
+            "validade_dias": realizado.get("validadeDias"),
+            "situacao": realizado.get("situacao"),
+            "projeto": self._normalize_sub_projeto(
+                realizado.get("establishment")
+            ),
             "ativo": raw.get("ativo"),
             "trabalhador": self._normalize_sub_trabalhador(
                 raw.get("trabalhador")
             ),
+        }
+
+    def _normalize_sub_projeto(
+        self, raw: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """Projeto/estabelecimento da OnSafety (= obra, no nosso dominio).
+
+        `codigoExterno` e o canal de reconciliacao com `obras_obra.codigo`
+        (mesmo papel do `codigoExterno` do trabalhador).
+        """
+        if not raw:
+            return None
+        return {
+            "id": raw.get("id"),
+            "nome": raw.get("nome"),
+            "codigo_externo": raw.get("codigoExterno"),
         }
 
     # ------------------------------ mock ---------------------------------
@@ -666,7 +708,22 @@ class OnsafetyClient(IntegrationClient):
         )
         nome = self._MOCK_NOMES[i % len(self._MOCK_NOMES)]
         cpf = _mock_cpf(digest)
-        trabalhador = {"id": uid, "nome": nome, "cpf": cpf}
+        if recurso == "trabalhadores":
+            trabalhador = {"id": uid, "nome": nome, "cpf": cpf}
+        else:
+            # Os datasets-filhos (exames/EPI/treinamentos) referenciam
+            # trabalhadores REAIS do dataset `trabalhadores` -- antes
+            # cada recurso gerava CPF proprio e nada cruzava, entao
+            # nenhum teste de pull exercitava o match de verdade
+            # (follow-up da issue #39).
+            base = self._mock_item(
+                "trabalhadores", i % self._MOCK_TOTAIS["trabalhadores"]
+            )
+            trabalhador = {
+                "id": base["id"],
+                "nome": base["nome"],
+                "cpf": base["cpf"],
+            }
         if recurso == "trabalhadores":
             return {
                 "id": uid,
@@ -709,16 +766,42 @@ class OnsafetyClient(IntegrationClient):
                 "data_devolucao": None,
                 "status_entrega": "ENTREGUE",
                 "ativo": True,
+                "projeto": {
+                    "id": uid,
+                    "nome": f"OBRA {240 + (i % 3)} - TESTE",
+                    "codigo_externo": str(240 + (i % 3)),
+                },
                 "trabalhador": trabalhador,
             }
         if recurso == "treinamentos":
-            nrs = ["NR-35 Trabalho em Altura", "NR-18 Construcao", "NR-06 EPI"]
+            nrs = [
+                ("NR-35", "NR-35 Trabalho em Altura"),
+                ("NR-18", "NR-18 Construcao"),
+                ("NR-06", "NR-06 EPI"),
+            ]
+            sigla, descricao = nrs[i % len(nrs)]
+            ano_fim = 2025
+            mes = 1 + (idx % 12)
             return {
                 "id": uid,
-                "descricao": nrs[i % len(nrs)],
-                "aprovado": idx % 5 != 0,
+                "descricao": descricao,
+                "sigla": sigla,
+                "grupo": sigla,
+                # `i` (nao o digest) para o dataset ter sempre pelo
+                # menos um reprovado -- o pull tem caminho proprio para
+                # ele e precisa de cobertura estavel.
+                "aprovado": i % 6 != 0,
                 "renovado": idx % 3 == 0,
                 "certificado_id": uid,
+                "data_fim": f"{ano_fim}-{mes:02d}-20",
+                "data_vencimento": f"{ano_fim + 2}-{mes:02d}-20",
+                "validade_dias": 730,
+                "situacao": "CONCLUIDO",
+                "projeto": {
+                    "id": uid,
+                    "nome": f"OBRA {240 + (i % 3)} - TESTE",
+                    "codigo_externo": str(240 + (i % 3)),
+                },
                 "ativo": True,
                 "trabalhador": trabalhador,
             }
