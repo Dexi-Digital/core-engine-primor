@@ -77,8 +77,8 @@ async def _run_sync_onboarding(cpf: str) -> dict[str, object]:
 
 @celery_app.task(name="worker.tasks.dp_sesmt.pull_onsafety")
 def pull_onsafety() -> dict[str, object]:
-    """Pull SST da OnSafety: ASOs -> dp_employees.aso_*, EPIs ->
-    dp_employee_documents (Squad 2, ADR-001).
+    """Pull SST da OnSafety: ASOs -> dp_employees.aso_*, EPIs e
+    treinamentos de NR -> dp_employee_documents (Squad 2, ADR-001).
 
     Roda 1x/dia (Celery beat 07h30) -- ANTES dos alertas ASO das 08h05,
     para os alertas usarem o dado fresco da OnSafety. Erro de upstream

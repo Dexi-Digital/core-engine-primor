@@ -224,11 +224,14 @@ async def test_crud_contratos_via_api(
             "contraparte_documento": "12345678000190",
             "tipo": "locacao",
             "valor": 900000,
-            # Datas RELATIVAS a hoje: com datas fixas o teste vira
-            # time-bomb -- passou a falhar sozinho quando 2026-08-20
-            # ficou no passado ("vencido", nao "vencendo").
-            "data_inicio": (date.today() - timedelta(days=20)).isoformat(),
-            "data_fim": (date.today() + timedelta(days=5)).isoformat(),
+            # Datas RELATIVAS a hoje: com data fixa este teste vira
+            # time-bomb -- `vencimento_status` e calculado contra
+            # `date.today()`, entao a data envelhece e o contrato vira
+            # "vencido" sozinho (foi o que quebrou o teste no main).
+            # 10 dias cabem na janela de 30 -> "vencendo", estavel em
+            # qualquer data em que a suite rode.
+            "data_inicio": (date.today() - timedelta(days=30)).isoformat(),
+            "data_fim": (date.today() + timedelta(days=10)).isoformat(),
             "status": "vigente",
         },
         headers=auth_headers,
@@ -236,7 +239,7 @@ async def test_crud_contratos_via_api(
     assert resp.status_code == 201, resp.text
     body = resp.json()
     contrato_id = body["id"]
-    assert body["vencimento_status"] in ("vencendo", "vigente")
+    assert body["vencimento_status"] == "vencendo"
     assert body["dias_para_vencer"] is not None
 
     # list + filtro
