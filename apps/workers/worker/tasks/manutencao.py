@@ -143,15 +143,17 @@ async def _run_ocr_parte_diaria(
     # item_id no DB e o worker tentava `LocalStorage.read(item_id)` ->
     # FileNotFoundError. Bug apontado em code review.
     try:
-        async with open_partes_diarias_storage(settings) as storage:
-            async with SessionLocal() as session:
-                parte = await processar_ocr_parte_diaria(
-                    session,
-                    parte_id,
-                    client=client,
-                    storage=storage,
-                    actor=actor or SYSTEM_WORKER,
-                )
+        async with (
+            open_partes_diarias_storage(settings) as storage,
+            SessionLocal() as session,
+        ):
+            parte = await processar_ocr_parte_diaria(
+                session,
+                parte_id,
+                client=client,
+                storage=storage,
+                actor=actor or SYSTEM_WORKER,
+            )
         return {
             "parte_id": parte.id,
             "ocr_status": parte.ocr_status,

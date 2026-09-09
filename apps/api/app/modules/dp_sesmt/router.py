@@ -277,23 +277,39 @@ async def sync_onsafety_endpoint(
 
 @router.post("/onsafety/pull", response_model=dict)
 async def onsafety_pull_endpoint(
+    inline: bool = False,
     db: AsyncSession = Depends(get_db),
     client: OnsafetyClient = Depends(get_onsafety_dep),
     current_user: User = Depends(get_current_user),
 ) -> dict:
-    """Dispara manualmente o pull SST da OnSafety (ASOs + fichas de EPI).
+    """Dispara manualmente o pull SST (ASOs + fichas de EPI + treinamentos).
 
-    Endpoint sincrono (padrao /aso/alerts/dispatch) -- util para teste
-    manual e para a UI "Sincronizar agora". Em prod o cron roda 1x/dia
-    (07h30, antes dos alertas ASO das 08h05). Erro de upstream nao vira
-    5xx: volta no campo `error` do summary, com o parcial ja commitado.
+    **Enfileira** a task Celery (fila `dp_sesmt`) e responde na hora: o
+    pull percorre a base INTEIRA da OnSafety (~5.3k trabalhadores em
+    producao) e segurar isso num request HTTP estourava timeout de
+    gateway. Em prod o beat ja roda 1x/dia (07h30, antes dos alertas
+    ASO das 08h05) -- este endpoint e o "Sincronizar agora".
 
-    ATENCAO escala: o pull processa a base INTEIRA da OnSafety inline
-    neste request (1 SELECT por item -- ver follow-up na issue #39).
-    Com a base de producao (~5.3k trabalhadores) isso pode levar
-    minutos; para rodadas grandes prefira a task Celery
-    `worker.tasks.dp_sesmt.pull_onsafety`.
+    `?inline=true` roda no proprio request e devolve o summary
+    completo. So para base pequena / teste manual: erro de upstream nao
+    vira 5xx, volta no campo `error` com o parcial ja commitado.
     """
+    if not inline:
+        from app.modules.manutencao_frota.service import (
+            get_celery_dispatcher,
+        )
+
+        await client.aclose()
+        get_celery_dispatcher().send_task(
+            "worker.tasks.dp_sesmt.pull_onsafety",
+            queue="dp_sesmt",
+        )
+        return {
+            "enfileirado": True,
+            "task": "worker.tasks.dp_sesmt.pull_onsafety",
+            "actor": current_user.email,
+        }
+
     from app.modules.dp_sesmt.onsafety_sync import pull_onsafety
 
     try:
