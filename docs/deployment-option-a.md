@@ -120,7 +120,9 @@ services:
     name: motor-central-worker
     runtime: docker
     dockerfilePath: ./apps/workers/Dockerfile
-    dockerContext: ./apps/workers
+    # Contexto = RAIZ do repo: as tasks importam o pacote da API
+    # (`from app.*`), inalcancavel a partir de `apps/workers`.
+    dockerContext: .
     plan: starter
     envVars:
       - key: DATABASE_URL

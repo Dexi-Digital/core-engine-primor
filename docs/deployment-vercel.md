@@ -1,5 +1,11 @@
 # Deploy temporário na Vercel (demo, até o servidor definitivo do cliente)
 
+> **SUPERADO por `docs/deployment-railway.md` (2026-09-09).** A Vercel não roda
+> processo longo, então este roteiro deixa os 5 crons pausados e obriga a API a
+> virar função serverless — origem do 500 de `sslmode`/`ssl`, do `/tmp` efêmero
+> para anexos e do rate limit de login desligado. Mantido como histórico e pela
+> pegadinha de SSL, que vale em qualquer plataforma.
+
 Arquitetura 100% gratuita para demonstrar a integração OnSafety (e o
 restante do Motor Central) sem depender de infra própria. **Não roda
 Celery worker/beat** — crons ficam pausados; use os endpoints de
