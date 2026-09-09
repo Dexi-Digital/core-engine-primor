@@ -64,7 +64,7 @@ Railway achar o `railway.json` e o `Dockerfile` certos):
 |---|---|---|---|
 | `api` | `apps/api` | do `railway.json` | roda `alembic upgrade head` no pre-deploy |
 | `web` | `apps/web` | `node server.js` | Next.js standalone |
-| `workers` | `apps/workers` | do `Procfile`/compose | **nunca mais de 1 réplica** — o `-B` duplicaria os 5 crons |
+| `workers` | **`/` (raiz)** | do `railway.json` | Contexto precisa ser a raiz para alcançar `apps/api` (ver abaixo). **Nunca mais de 1 réplica** — o `-B` duplicaria os 5 crons |
 
 O `preDeployCommand` da API aborta o deploy se a migration falhar, sem virar o
 tráfego para a versão nova. Por isso o `alembic heads` precisa ter **alvo
@@ -121,6 +121,18 @@ NEXT_PUBLIC_API_BASE_URL=https://<api>.up.railway.app
 ### Serviço `workers` (escopo completo)
 
 Mesmas variáveis da `api` (banco, storage, integrações) + `REDIS_URL`.
+
+**Root Directory do worker é a raiz do repo**, não `apps/workers` — as tasks
+importam o pacote da API (`from app.*`), que um contexto em `apps/workers` não
+alcança. O `apps/workers/railway.json` já traz
+`dockerfilePath: apps/workers/Dockerfile`; aponte o **Railway Config File**
+para `/apps/workers/railway.json`.
+
+Até 2026-09-09 a imagem do worker era construída sem o pacote da API. Isso
+**não quebrava**: as tasks capturam o `ImportError` e devolvem
+`{"error": "API package not available in worker"}` — os 5 crons disparavam no
+horário e não processavam nada, com o container de pé. Vale o alerta porque o
+sintoma é ausência de resultado, não erro.
 
 ## 4. O erro que trava a demo em silêncio
 

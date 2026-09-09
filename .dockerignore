@@ -1,0 +1,51 @@
+# .dockerignore da RAIZ -- vale para todo build cujo contexto e a raiz
+# do repo (hoje: `apps/workers/Dockerfile`, que precisa alcancar
+# `apps/api`). O Docker le o .dockerignore na raiz do CONTEXTO, entao
+# os `apps/*/.dockerignore` NAO se aplicam a esses builds.
+#
+# Sem este arquivo o contexto enviado ao daemon passa de 700 MB
+# (venvs + node_modules + .git).
+
+# Ambientes e dependencias (o maior peso)
+**/.venv
+**/node_modules
+**/.next
+**/dist
+**/build
+**/*.egg-info
+
+# Caches
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.ruff_cache
+**/.mypy_cache
+**/.coverage
+**/htmlcov
+**/.turbo
+
+# Git e CI
+.git
+.gitignore
+.github
+.pre-commit-config.yaml
+
+# Segredos -- NUNCA entram na imagem
+**/.env
+**/.env.local
+**/.env.*.local
+.env.prod
+
+# Editores / SO
+**/.vscode
+**/.idea
+**/*.swp
+**/.DS_Store
+
+# Nao servem ao runtime do worker
+docs
+infra
+scripts
+**/tests
+**/test_*.py
+**/*_test.py

@@ -57,7 +57,11 @@ services:
 
   workers:
     build:
-      context: ../apps/workers
+      # Contexto = raiz do repo: as tasks importam o pacote da API
+      # (`from app.*`), inalcancavel a partir de `apps/workers`. Ver
+      # apps/workers/Dockerfile e o teste que trava isso.
+      context: ..
+      dockerfile: apps/workers/Dockerfile
     environment:
       REDIS_URL: redis://redis:6379/0
     depends_on:
