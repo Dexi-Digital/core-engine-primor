@@ -26,8 +26,12 @@ from app.core.db import Base
 TIPOS_VALIDOS: frozenset[str] = frozenset(
     {"nfe", "nfse", "nfce", "cte", "cfe", "baixa"}
 )
+# `bloqueado`: o envio foi recusado pelo guard `ONVIO_ALLOW_SEND`, que
+# protege o Dominio de PRODUCAO do escritorio contabil. E estado
+# distinto de `erro` de proposito -- nao conta como falha e nao entra
+# na fila de retry, porque retentar nao resolve.
 STATUS_ENVIO_VALIDOS: frozenset[str] = frozenset(
-    {"pendente", "enviando", "enviado", "erro"}
+    {"pendente", "enviando", "enviado", "erro", "bloqueado"}
 )
 
 

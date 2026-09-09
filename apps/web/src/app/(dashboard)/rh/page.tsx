@@ -9,6 +9,16 @@ import {
   StatusBadge,
 } from "@/components/ui/primitives";
 import { apiFetch } from "@/lib/api";
+import { SubNav, type SubNavItem } from "@/components/ui/sub-nav";
+
+// Mesmas secoes da tela de Ponto -- manter as duas listas em sincronia.
+const RH_SUBNAV: SubNavItem[] = [
+  { href: "/rh", label: "Visão geral" },
+  { href: "/rh/funcionarios", label: "Funcionários" },
+  { href: "/rh/equipe-administrativa", label: "Equipe administrativa" },
+  { href: "/rh/afastamentos", label: "Afastamentos" },
+  { href: "/rh/ponto", label: "Ponto" },
+];
 
 type Employee = {
   id: number;
@@ -80,6 +90,8 @@ export default async function RHPage() {
         title="RH / DP & SESMT"
         subtitle="Cadastro de funcionarios (operacionais + equipe administrativa), dossie de admissao via APIs publicas, alertas ASO e acompanhamento INSS."
       />
+
+      <SubNav items={RH_SUBNAV} />
 
       <ModuleStatusCard
         title="RH / DP & SESMT"

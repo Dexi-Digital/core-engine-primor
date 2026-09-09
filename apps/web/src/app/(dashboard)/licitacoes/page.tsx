@@ -2,6 +2,20 @@ import Link from "next/link";
 import { revalidatePath } from "next/cache";
 
 import { apiFetch } from "@/lib/api";
+import { PageHeader } from "@/components/ui/primitives";
+import { SubNav, type SubNavItem } from "@/components/ui/sub-nav";
+
+// Sub-paginas do modulo de Licitacoes. Ficam aqui (e nao espalhadas no
+// header) para as cinco telas terem a mesma hierarquia e a aba ativa
+// indicar onde o usuario esta.
+const LICITACOES_SUBNAV: SubNavItem[] = [
+  { href: "/licitacoes", label: "Oportunidades" },
+  { href: "/licitacoes/captacao", label: "Captação" },
+  { href: "/licitacoes/triagem", label: "Triagem" },
+  { href: "/licitacoes/dashboards", label: "Inteligência comercial" },
+  { href: "/licitacoes/certidoes", label: "Certidões / atestados" },
+  { href: "/licitacoes/boletins", label: "Boletins" },
+];
 
 type LicitacaoRead = {
   id: number;
@@ -82,49 +96,18 @@ export default async function LicitacoesPage(props: {
 
   return (
     <div className="space-y-6">
-      <header className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-bold">Licitações</h1>
-          <p className="mt-1 text-sm text-slate-500">
-            Fonte: <strong>PNCP</strong> — Portal Nacional de Contratações Públicas.
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          <Link
-            href="/licitacoes/captacao"
-            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
-            Tela de Captação →
-          </Link>
-          <Link
-            href="/licitacoes/triagem"
-            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
-            Aba de Triagem →
-          </Link>
-          <Link
-            href="/licitacoes/dashboards"
-            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
-            Inteligência comercial →
-          </Link>
-          <Link
-            href="/licitacoes/certidoes"
-            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
-            Certidões / atestados →
-          </Link>
-          <Link
-            href="/licitacoes/boletins"
-            className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-          >
-            Boletins por email →
-          </Link>
-          <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">
-            Implementado
-          </span>
-        </div>
-      </header>
+      <PageHeader
+        eyebrow="Captação"
+        title="Licitações"
+        subtitle={
+          <>
+            Fonte: <strong>PNCP</strong> — Portal Nacional de Contratações
+            Públicas.
+          </>
+        }
+      />
+
+      <SubNav items={LICITACOES_SUBNAV} />
 
       <form className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">
         <label className="flex flex-col text-xs font-medium text-slate-600">
@@ -166,8 +149,10 @@ export default async function LicitacoesPage(props: {
 
       {resp === null ? (
         <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-          Não foi possível conectar à API (<code>NEXT_PUBLIC_API_BASE_URL</code>). Suba o backend
-          com <code>docker compose -f infra/docker-compose.yml up</code> e atualize.
+          Não foi possível conectar à API (<code>NEXT_PUBLIC_API_BASE_URL</code>). Suba o
+          backend com <code>cd apps/api &amp;&amp; .venv/bin/python -m uvicorn app.main:app
+          --port 8000</code> (ou <code>docker compose -f infra/docker-compose.yml up</code>,
+          se o Docker estiver rodando) e atualize.
         </div>
       ) : resp.data.length === 0 ? (
         <div className="rounded-xl border border-slate-200 bg-white p-6 text-sm text-slate-600">

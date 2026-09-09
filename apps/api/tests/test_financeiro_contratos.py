@@ -224,11 +224,12 @@ async def test_crud_contratos_via_api(
             "contraparte_documento": "12345678000190",
             "tipo": "locacao",
             "valor": 900000,
-            # Datas RELATIVAS a hoje: `vencimento_status` e calculado
-            # contra `date.today()`, entao data fixa envelhece e o
-            # contrato vira "vencido" com a passagem do tempo (foi o
-            # que quebrou este teste no main). 10 dias cabem na janela
-            # de 30 dias -> "vencendo", estavel em qualquer data.
+            # Datas RELATIVAS a hoje: com data fixa este teste vira
+            # time-bomb -- `vencimento_status` e calculado contra
+            # `date.today()`, entao a data envelhece e o contrato vira
+            # "vencido" sozinho (foi o que quebrou o teste no main).
+            # 10 dias cabem na janela de 30 -> "vencendo", estavel em
+            # qualquer data em que a suite rode.
             "data_inicio": (date.today() - timedelta(days=30)).isoformat(),
             "data_fim": (date.today() + timedelta(days=10)).isoformat(),
             "status": "vigente",

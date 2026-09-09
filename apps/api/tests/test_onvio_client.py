@@ -260,3 +260,39 @@ async def test_real_status_nao_armazenado():
     st = await c.get_batch_status("batch-99")
     assert st["stored"] is False
     assert st["message"] == "Arquivo com schema invalido"
+
+
+@pytest.mark.asyncio
+async def test_campo_query_usa_boxeFile_e_nao_boxe_barra_File():
+    """A documentacao (solucao 8476) especifica a chave `boxeFile`. O
+    codigo tinha `boxe/File`, com uma barra no meio.
+
+    Nunca apareceu porque o envio real nunca rodou -- o guard
+    ONVIO_ALLOW_SEND fica off por default. Com credencial real em maos
+    (03/09/2026), isso passa a importar.
+    """
+    enviado: dict = {}
+
+    def handler(request: Request) -> Response:
+        url = str(request.url)
+        if "oauth/token" in url:
+            return Response(200, json={"access_token": "t", "expires_in": 86400})
+        if "activation/enable" in url:
+            return Response(200, json={"integrationKey": "ik-1"})
+        enviado["body"] = request.content.decode("utf-8", "replace")
+        return Response(200, json={"id": "batch-1"})
+
+    c = OnvioClient(
+        client_id="cid",
+        client_secret="csec",
+        integration_key="chave-do-contador",
+        allow_send=True,
+        client=AsyncClient(transport=MockTransport(handler)),
+    )
+    try:
+        await c.send_nfe_xml(filename="nota.xml", content=b"<nfe/>")
+    finally:
+        await c.aclose()
+
+    assert '"boxeFile"' in enviado["body"], enviado["body"][:300]
+    assert "boxe/File" not in enviado["body"]

@@ -31,6 +31,56 @@ def _disable_login_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     get_settings.cache_clear()
 
 
+# Credenciais de integracao que, se presentes no `.env`, fariam os
+# adapters montarem clients REAIS dentro da suite. Descoberto em
+# 03/09/2026, quando as credenciais Onvio de producao entraram no
+# `.env`: dois testes do fiscal passaram a construir o `OnvioClient`
+# real e so nao enviaram XML para a contabilidade de producao porque o
+# guard `ONVIO_ALLOW_SEND` estava desligado.
+#
+# Teste nao pode depender de sorte nem de guard. Por default, a suite
+# roda com TODAS as credenciais externas vazias -- o que joga cada
+# adapter no seu mock deterministico. Quem quiser exercitar o caminho
+# real usa `monkeypatch.setenv(...)` dentro do proprio teste, que roda
+# depois desta fixture e portanto vence.
+_CREDENCIAIS_EXTERNAS = (
+    "ONVIO_CLIENT_ID",
+    "ONVIO_CLIENT_SECRET",
+    "ONVIO_INTEGRATION_KEY",
+    "DOMINIO_AUDIT_URL",
+    "DOMINIO_INTEGRACAO",
+    "DOMINIO_CLIENT_ID",
+    "DOMINIO_CLIENT_SECRET",
+    "TANGERINO_API_KEY",
+    "TOTVS_BASE_URL",
+    "TOTVS_USERNAME",
+    "TOTVS_PASSWORD",
+    "MS_GRAPH_TENANT_ID",
+    "MS_GRAPH_CLIENT_ID",
+    "MS_GRAPH_CLIENT_SECRET",
+    "MS_GRAPH_DRIVE_ID",
+    "ONSAFETY_TOKEN",
+    "INFOSIMPLES_TOKEN",
+    "DIRECTDATA_API_KEY",
+    "RESEND_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GOOGLE_DOCUMENTAI_CREDENTIALS_JSON",
+)
+
+
+@pytest.fixture(autouse=True)
+def _sem_credenciais_reais(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Isola a suite de qualquer credencial real presente no `.env`."""
+    from app.core.config import get_settings
+
+    for chave in _CREDENCIAIS_EXTERNAS:
+        monkeypatch.setenv(chave, "")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 @pytest_asyncio.fixture
 async def db_session() -> AsyncGenerator[AsyncSession, None]:
     engine = create_async_engine("sqlite+aiosqlite:///:memory:", future=True)

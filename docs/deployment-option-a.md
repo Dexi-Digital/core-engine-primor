@@ -147,13 +147,89 @@ Aplica `pg_trgm` rodando uma vez no console do banco:
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 ```
 
-## Railway
+## Railway (caminho recomendado)
 
-1. Cria projeto e adiciona Postgres + Redis no dashboard (cada um vira service)
-2. `railway up` na raiz — ele detecta o Procfile e cria 1 web (api) + 1 worker
-3. Aponta o build da web pra `apps/web/Dockerfile` e cria service novo
-4. Configura todas as env vars no dashboard
-5. Railway roda o `release:` automatic antes do primeiro boot
+Por que Railway e nao Vercel: na Vercel a API vira serverless, **nao ha
+worker nem Redis**, e o storage de anexos e efemero — os crons ficam
+parados e o que separa "web" de "app" precisa ser costurado na mao. No
+Railway tudo vive num projeto so, com Postgres e Redis como plugins de
+um clique, e o worker roda de verdade.
+
+O repo ja esta preparado: tres `Dockerfile` (api, workers, web), o
+`next.config` em `output: "standalone"`, e um `railway.json` por app com
+build, start e migrations.
+
+### Passo a passo
+
+1. **Criar o projeto** — em railway.app, "New Project" → "Deploy from
+   GitHub repo" → `Dexi-Digital/core-engine-primor`.
+
+2. **Adicionar os dois plugins** — "New" → "Database" → **PostgreSQL**, e
+   de novo → **Redis**. O Railway injeta `DATABASE_URL` e `REDIS_URL`
+   nos outros services automaticamente. Não é preciso converter a URL na
+   mão: `resolve_async_database_url` normaliza `postgresql://` →
+   `postgresql+asyncpg://` e `sslmode=` → `ssl=` no boot.
+
+3. **Habilitar o `pg_trgm`** — no console do Postgres do projeto:
+   ```sql
+   CREATE EXTENSION IF NOT EXISTS pg_trgm;
+   ```
+   Sem isso a migration `3fbc4a1e8d57` falha.
+
+4. **Criar os três services**, cada um apontando para um diretório do
+   monorepo (Settings → Root Directory):
+
+   | Service | Root Directory | O que faz |
+   |---|---|---|
+   | `api` | `apps/api` | FastAPI. Roda `alembic upgrade head` antes de subir. |
+   | `worker` | `apps/workers` | Celery + beat. **Manter em 1 réplica** — com 2, os crons disparam em dobro. |
+   | `web` | `apps/web` | Next.js. É o que ganha o domínio público. |
+
+   O `railway.json` de cada pasta já traz build e start; não é preciso
+   configurar comando nenhum.
+
+5. **Variáveis de ambiente.** No service `web`, apontar para a API:
+   ```ini
+   NEXT_PUBLIC_API_BASE_URL=https://<dominio-do-service-api>
+   ```
+   Nos services `api` e `worker`, o mínimo para subir:
+   ```ini
+   ENVIRONMENT=production
+   SECRET_KEY=<gere com: openssl rand -hex 32>
+   PUBLIC_BASE_URL=https://<dominio-do-service-web>
+   CORS_ORIGINS=["https://<dominio-do-service-web>"]
+   ADMIN_EMAIL=...
+   ADMIN_PASSWORD=<senha forte temporaria>
+   ```
+   `DATABASE_URL` e `REDIS_URL` vêm dos plugins. **`ENVIRONMENT=production`
+   ativa o guard que impede subir com a `SECRET_KEY` default.**
+
+   As credenciais de integração são todas opcionais — sem elas o adapter
+   correspondente cai em mock. Para o Sólides funcionar de verdade,
+   basta `TANGERINO_API_KEY`.
+
+6. **Gerar o domínio** — no service `web`, Settings → Networking →
+   "Generate Domain". É a URL para mandar ao cliente.
+
+### Ordem na primeira subida
+
+Postgres e Redis primeiro, depois `api` (as migrations rodam no
+pre-deploy e criam o schema), depois `worker` e `web`. Subir a `api`
+antes do banco existir só gera um deploy vermelho e um retry.
+
+### Custo
+
+Railway cobra por uso. Três services pequenos + Postgres + Redis para
+uma demo ficam na casa de US$ 15–25/mês. O plano Hobby (US$ 5 de
+crédito) segura um ambiente de demonstração ligado por poucas horas
+por dia, mas não 24/7.
+
+### Alternativa
+
+Render faz o mesmo com um `render.yaml` na raiz (Blueprint declarativo,
+tudo num arquivo versionado). Vale se preferir o deploy descrito em
+código em vez de configurado no dashboard. O `Procfile` da raiz já
+existe para esse caminho.
 
 ## Fly.io
 

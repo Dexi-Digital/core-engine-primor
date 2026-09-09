@@ -9,8 +9,16 @@ from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.pool import NullPool
 
 from app.core.config import get_settings
+from app.core.db_url import resolve_async_database_url
 
 settings = get_settings()
+
+# Normaliza a URL antes de criar o engine. Railway, Render e
+# Heroku-likes injetam `DATABASE_URL` sozinhos como `postgresql://`
+# (ou `postgres://`), que o asyncpg nao aceita, e entregam
+# `sslmode=require`, que ele tambem nao entende (quer `ssl=`). Sem isso
+# a app nao sobe nessas plataformas -- ver `resolve_async_database_url`.
+_database_url = resolve_async_database_url(settings.database_url)
 
 # `VERCEL` e setado automaticamente pela Vercel em build e runtime. Em
 # serverless cada invocacao pode ser um processo novo (cold start) --
@@ -25,7 +33,7 @@ if os.getenv("VERCEL"):
     _engine_kwargs["poolclass"] = NullPool
     _engine_kwargs["connect_args"] = {"statement_cache_size": 0}
 
-engine = create_async_engine(settings.database_url, **_engine_kwargs)
+engine = create_async_engine(_database_url, **_engine_kwargs)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
 
 

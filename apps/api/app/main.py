@@ -40,6 +40,7 @@ from app.modules.onedrive_diagnostico.router import (
 )
 from app.modules.onedrive_sync.router import router as onedrive_sync_router
 from app.modules.overview.router import router as overview_router
+from app.modules.ponto.router import router as ponto_router
 
 
 @asynccontextmanager
@@ -154,6 +155,7 @@ def create_app() -> FastAPI:
     # proprio prefix.
     app.include_router(diagnostico_router)
     app.include_router(obras_router)
+    app.include_router(ponto_router)
     app.include_router(dp_employee_docs_router)
     app.include_router(empresa_documentos_router)
     app.include_router(onedrive_sync_router)

@@ -219,3 +219,79 @@ async def _run_afastamento_alerts(
         "skipped": summary.skipped,
         "failed": summary.failed,
     }
+
+
+@celery_app.task(name="worker.tasks.dp_sesmt.pull_ponto")
+def pull_ponto(
+    desde: str | None = None, ate: str | None = None, source: str = "beat"
+) -> dict[str, object]:
+    """Pull do ponto eletronico (Solides/Tangerino) -- Modulos A e B.
+
+    Roda as 02h30, na madrugada: sao 395 funcionarios e a API do Solides
+    so devolve batidas POR funcionario, entao e um loop longo. Fora do
+    bloco 08h00-08h15 (certidoes/ASO/afastamentos/contratos) e antes do
+    pull do TOTVS as 03h00, para os dois nao disputarem o worker.
+
+    Somente leitura: nunca cria funcionario no DP nem escreve no Solides.
+    """
+    return asyncio.run(_run_pull_ponto(desde, ate, source))
+
+
+async def _run_pull_ponto(
+    desde: str | None, ate: str | None, source: str
+) -> dict[str, object]:
+    try:
+        from datetime import date, timedelta
+
+        from app.core.config import get_settings
+        from app.core.db import SessionLocal
+        from app.core.locks import single_flight
+        from app.integrations.tangerino.client import TangerinoClient
+        from app.modules.ponto.service import (
+            ingest_batidas,
+            ingest_funcionarios,
+            ingest_locais_trabalho,
+        )
+    except ImportError as exc:  # pragma: no cover
+        return {"error": f"API package not available in worker: {exc}"}
+
+    settings = get_settings()
+    fim = date.fromisoformat(ate) if ate else date.today()
+    inicio = (
+        date.fromisoformat(desde)
+        if desde
+        else fim - timedelta(days=settings.ponto_pull_dias)
+    )
+
+    from redis.asyncio import Redis
+
+    redis = Redis.from_url(settings.redis_url)
+    try:
+        async with single_flight(
+            "ponto:pull", redis=redis, ttl_s=settings.ponto_pull_lock_ttl_s
+        ) as adquiriu:
+            if not adquiriu:
+                return {"skipped": True, "reason": "pull ja em execucao"}
+
+            client = TangerinoClient(api_token=settings.tangerino_api_key)
+            try:
+                async with SessionLocal() as db:
+                    # Ordem importa: locais antes de funcionarios (o
+                    # vinculo com obra vem dali) e funcionarios antes de
+                    # batidas (o loop de batidas percorre os ativos).
+                    locais = await ingest_locais_trabalho(db, client, source=source)
+                    funcs = await ingest_funcionarios(db, client, source=source)
+                    batidas = await ingest_batidas(
+                        db, client, desde=inicio, ate=fim, source=source
+                    )
+            finally:
+                await client.aclose()
+    finally:
+        await redis.aclose()
+
+    return {
+        "locais": {"lidos": locais.lidos, "sem_obra": locais.sem_vinculo},
+        "funcionarios": {"lidos": funcs.lidos, "sem_cadastro_dp": funcs.sem_vinculo},
+        "batidas": {"lidos": batidas.lidos, "gravados": batidas.gravados},
+        "janela": batidas.janela,
+    }
