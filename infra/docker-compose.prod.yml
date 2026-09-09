@@ -42,7 +42,9 @@ services:
     # depois (exit 0) e o `depends_on: condition: service_completed_successfully`
     # da api so libera quando a migration termina sem erro.
     build:
-      context: ../apps/api
+      # Contexto = raiz do repo (ver apps/api/Dockerfile).
+      context: ..
+      dockerfile: apps/api/Dockerfile
     env_file:
       - ../.env.prod
     command: ["alembic", "upgrade", "head"]
@@ -53,7 +55,9 @@ services:
 
   api:
     build:
-      context: ../apps/api
+      # Contexto = raiz do repo (ver apps/api/Dockerfile).
+      context: ..
+      dockerfile: apps/api/Dockerfile
     env_file:
       - ../.env.prod
     environment:

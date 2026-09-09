@@ -57,14 +57,25 @@ Copiar a string do Neon crua = 500 na subida.
 ## 2. Serviços no Railway
 
 Projeto novo → **Deploy from GitHub repo** → `Dexi-Digital/core-engine-primor`.
-Crie um serviço por app, cada um com **Root Directory** próprio (é o que faz o
-Railway achar o `railway.json` e o `Dockerfile` certos):
 
-| Serviço | Root Directory | Start | Observação |
+**O serviço da API não precisa de nenhuma configuração.** O `railway.json` da
+raiz é lido por padrão e já traz builder `DOCKERFILE`, o caminho do Dockerfile
+e o `alembic upgrade head` no pre-deploy.
+
+| Serviço | Root Directory | Railway Config File | Observação |
 |---|---|---|---|
-| `api` | `apps/api` | do `railway.json` | roda `alembic upgrade head` no pre-deploy |
-| `web` | `apps/web` | `node server.js` | Next.js standalone |
-| `workers` | **`/` (raiz)** | do `railway.json` | Contexto precisa ser a raiz para alcançar `apps/api` (ver abaixo). **Nunca mais de 1 réplica** — o `-B` duplicaria os 5 crons |
+| `api` | *(nada)* | *(nada)* | usa o `railway.json` da raiz |
+| `web` | `apps/web` | *(nada)* | Next.js standalone |
+| `workers` | *(nada)* | `/apps/workers/railway.json` | **Nunca mais de 1 réplica** — o `-B` duplicaria os 5 crons |
+
+Só a `web` precisa de Root Directory, porque é o único app cujo Dockerfile
+espera o próprio diretório como contexto. `api` e `workers` buildam da raiz.
+
+> **Se o log mostrar `╭─ Railpack ─╮`**, ele caiu no autodetect e vai falhar
+> com *"could not determine how to build the app"* — a raiz do monorepo não é
+> buildável sozinha. Quando estiver certo, o log começa com
+> `FROM python:3.12-slim`. Atenção: o Railway deixa mudanças de Settings
+> *staged* — é preciso aplicar pelo banner de deploy no topo da tela.
 
 O `preDeployCommand` da API aborta o deploy se a migration falhar, sem virar o
 tráfego para a versão nova. Por isso o `alembic heads` precisa ter **alvo
@@ -122,11 +133,10 @@ NEXT_PUBLIC_API_BASE_URL=https://<api>.up.railway.app
 
 Mesmas variáveis da `api` (banco, storage, integrações) + `REDIS_URL`.
 
-**Root Directory do worker é a raiz do repo**, não `apps/workers` — as tasks
-importam o pacote da API (`from app.*`), que um contexto em `apps/workers` não
-alcança. O `apps/workers/railway.json` já traz
-`dockerfilePath: apps/workers/Dockerfile`; aponte o **Railway Config File**
-para `/apps/workers/railway.json`.
+O worker builda da **raiz** (as tasks importam `from app.*`, inalcançável a
+partir de `apps/workers`). Deixe o Root Directory vazio e aponte o **Railway
+Config File** para `/apps/workers/railway.json` — sem isso ele usaria o
+`railway.json` da raiz, que é o da API.
 
 Até 2026-09-09 a imagem do worker era construída sem o pacote da API. Isso
 **não quebrava**: as tasks capturam o `ImportError` e devolvem
