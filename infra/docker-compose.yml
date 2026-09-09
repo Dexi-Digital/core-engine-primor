@@ -39,7 +39,9 @@ services:
 
   api:
     build:
-      context: ../apps/api
+      # Contexto = raiz do repo (ver apps/api/Dockerfile).
+      context: ..
+      dockerfile: apps/api/Dockerfile
     environment:
       DATABASE_URL: postgresql+asyncpg://primor:primor@postgres:5432/primor
       REDIS_URL: redis://redis:6379/0
