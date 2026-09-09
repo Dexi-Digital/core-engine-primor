@@ -224,8 +224,13 @@ async def test_crud_contratos_via_api(
             "contraparte_documento": "12345678000190",
             "tipo": "locacao",
             "valor": 900000,
-            "data_inicio": "2026-08-01",
-            "data_fim": "2026-08-20",
+            # Datas RELATIVAS a hoje: `vencimento_status` e calculado
+            # contra `date.today()`, entao data fixa envelhece e o
+            # contrato vira "vencido" com a passagem do tempo (foi o
+            # que quebrou este teste no main). 10 dias cabem na janela
+            # de 30 dias -> "vencendo", estavel em qualquer data.
+            "data_inicio": (date.today() - timedelta(days=30)).isoformat(),
+            "data_fim": (date.today() + timedelta(days=10)).isoformat(),
             "status": "vigente",
         },
         headers=auth_headers,
@@ -233,7 +238,7 @@ async def test_crud_contratos_via_api(
     assert resp.status_code == 201, resp.text
     body = resp.json()
     contrato_id = body["id"]
-    assert body["vencimento_status"] in ("vencendo", "vigente")
+    assert body["vencimento_status"] == "vencendo"
     assert body["dias_para_vencer"] is not None
 
     # list + filtro

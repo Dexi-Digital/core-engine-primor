@@ -32,3 +32,11 @@ include = ["worker*"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+# Conjunto de regras DECLARADO, igual ao de apps/api. Sem `select`
+# explicito o pacote herdava o default da ruff, que mudou na 0.16 e
+# reprovou o CI (DTZ011/SIM117/RUF100) sem ninguem ter tocado em
+# codigo. Regra nova entra por decisao, nao por upgrade de linter.
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM"]
+ignore = ["E501"]
