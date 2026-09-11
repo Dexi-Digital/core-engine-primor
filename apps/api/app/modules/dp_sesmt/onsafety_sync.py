@@ -64,14 +64,22 @@ logger = logging.getLogger(__name__)
 _AUDIT_RESOURCE = "dp_sesmt.onsafety_pull"
 _PAGE_SIZE = 200
 
-# resultado_aso da OnSafety e um int32 SEM enum/descricao no spec
-# OpenAPI e a base de homolog esta vazia -- este mapeamento e
-# ASSUMIDO, nao confirmado. NAO fazer rollout em producao antes da
-# confirmacao da OnSafety (pergunta registrada na issue #39): e dado
-# de saude exibido ao RH -- rotulo invertido e pior que nenhum.
-# Valores fora do mapa ficam como string do numero (nao inventamos
-# semantica) e contam em `aso_resultado_desconhecido`.
-_RESULTADO_MAP = {1: "apto", 2: "inapto", 3: "apto_restricoes"}
+# `resultadoAso` e int32 SEM enum nem description no spec OpenAPI.
+#
+# Medido na base REAL em 11/09/2026 (401 fichas): o valor e SEMPRE 1
+# (395x) ou nulo (5x) -- 2 e 3 nunca aparecem. Como praticamente todo
+# ASO real e "apto", isso e evidencia forte de que **1 = apto**.
+#
+# 2 e 3 seguem SEM comprovacao, e ha motivo concreto para nao chutar:
+# o `tipoExame` da mesma API e 0-indexado (0=Admissional, 1=Periodico,
+# 3=Mudanca de risco). Se `resultadoAso` seguir a mesma convencao,
+# "inapto" e "apto com restricoes" podem estar em ordem diferente da
+# que assumiamos -- e trocar os dois e rotular errado dado de saude.
+#
+# Por isso mapeamos SO o 1. Qualquer outro valor vira a string crua do
+# numero e conta em `aso_resultado_desconhecido`, para a UI exibir
+# "desconhecido" em vez de um rotulo possivelmente invertido.
+_RESULTADO_MAP = {1: "apto"}
 
 # Treinamentos da OnSafety -> tipos de documento do dossie. So as NRs
 # que o checklist do diagnostico conhece: um treinamento fora deste
@@ -413,83 +421,89 @@ async def pull_treinamentos(
 ) -> None:
     """Treinamentos de NR -> documentos `NR10`/`NR12`/`NR18`/`NR35`.
 
+    Percorre `/v2/treinamentos_realizados` e desce nos participantes.
+    O caminho inverso (`.../trabalhadores`) NAO serve: contra a base
+    real a relacao `treinamentoRealizado` volta vazia, entao sigla,
+    descricao e validade nunca chegariam (medido em 11/09/2026).
+
     Dois filtros deliberados, ambos para nao produzir falso
     "conforme" no diagnostico documental:
 
-    1. **So treinamento aprovado.** Participacao reprovada nao e
-       comprovante de capacitacao; entra so no contador.
-    2. **So com validade conhecida.** `validade=None` significa
-       "documento perene, sem prazo" para `diagnostico/runner.py` --
-       uma NR-35 vencida gravada sem validade apareceria como OK, que
-       e pior do que a NR aparecer como ausente. Vencimento vem de
-       `data_vencimento`; sem ele, de `data_fim + validade_dias`.
+    1. **So participante aprovado.** Reprovado nao e comprovante de
+       capacitacao; entra so no contador.
+    2. **So treinamento com validade conhecida.** `validade=None`
+       significa "documento perene, sem prazo" para
+       `diagnostico/runner.py` -- uma NR-35 vencida gravada sem
+       validade apareceria como OK, que e pior do que aparecer
+       ausente. Vencimento vem de `data_vencimento`; sem ele, de
+       `data_fim + validade_dias`.
 
-    NR fora do checklist (NR-06, integracao, brigada...) nao vira
-    documento -- so contador.
+    A NR sai da `sigla` ("NR 35"); na base real o `grupo` e uma
+    categoria descritiva, nao o rotulo da norma. NR fora do checklist
+    (NR-6, sinalizacao viaria, brigada...) nao vira documento.
     """
-    treinos = await _iter_paginado(client.list_treinamentos_trabalhadores)
+    treinos = await _iter_paginado(client.list_treinamentos_realizados)
     summary.treinos_total = len(treinos)
     for treino in treinos:
-        employee, motivo = _match_employee(indices, treino)
-        if employee is None:
-            if motivo == "invalido":
-                summary.cpfs_invalidos += 1
-            else:
-                summary.treinos_no_match += 1
-            continue
-        if await _log_consulta(
-            db,
-            employee_id=employee.id,
-            fonte="onsafety_treinamento",
-            cpf=(treino.get("trabalhador") or {}).get("cpf") or "",
-            ja_logados=ja_logados,
-        ):
-            summary.consultas_logadas += 1
-
-        if not treino.get("aprovado"):
-            summary.treinos_reprovados += 1
-            continue
-
         tipo = _tipo_doc_nr(treino)
-        if tipo is None:
-            summary.treinos_nr_desconhecida += 1
-            continue
-
         emissao = _parse_date_counted(treino.get("data_fim"), summary)
         validade = _parse_date_counted(treino.get("data_vencimento"), summary)
         if validade is None:
             dias = treino.get("validade_dias")
             if emissao is not None and isinstance(dias, int) and dias > 0:
                 validade = emissao + timedelta(days=dias)
-        if validade is None:
-            summary.treinos_sem_validade += 1
-            continue
+        obra_id = _resolver_obra(indices, treino.get("projeto"), summary)
 
-        external_id = str(treino.get("id"))
-        doc = indices.docs.get(external_id)
-        certificado = treino.get("certificado_id")
-        fields = {
-            "employee_id": employee.id,
-            "tipo": tipo,
-            "numero": str(certificado)[:128] if certificado else None,
-            "emissao": emissao,
-            "validade": validade,
-            "observacoes": treino.get("descricao") or None,
-            "source": "onsafety",
-            "onsafety_external_id": external_id,
-            "obra_id": _resolver_obra(
-                indices, treino.get("projeto"), summary
-            ),
-        }
-        if doc is None:
-            novo = EmployeeDocument(**fields)
-            db.add(novo)
-            indices.docs[external_id] = novo
-            summary.treinos_created += 1
-        else:
-            for k, v in fields.items():
-                setattr(doc, k, v)
-            summary.treinos_updated += 1
+        for participante in treino.get("participantes") or []:
+            employee, motivo = _match_employee(indices, participante)
+            if employee is None:
+                if motivo == "invalido":
+                    summary.cpfs_invalidos += 1
+                else:
+                    summary.treinos_no_match += 1
+                continue
+            if await _log_consulta(
+                db,
+                employee_id=employee.id,
+                fonte="onsafety_treinamento",
+                cpf=(participante.get("trabalhador") or {}).get("cpf") or "",
+                ja_logados=ja_logados,
+            ):
+                summary.consultas_logadas += 1
+
+            if not participante.get("aprovado"):
+                summary.treinos_reprovados += 1
+                continue
+            if tipo is None:
+                summary.treinos_nr_desconhecida += 1
+                continue
+            if validade is None:
+                summary.treinos_sem_validade += 1
+                continue
+
+            external_id = str(participante.get("id"))
+            doc = indices.docs.get(external_id)
+            certificado = participante.get("certificado_id")
+            fields = {
+                "employee_id": employee.id,
+                "tipo": tipo,
+                "numero": str(certificado)[:128] if certificado else None,
+                "emissao": emissao,
+                "validade": validade,
+                "observacoes": treino.get("descricao") or None,
+                "source": "onsafety",
+                "onsafety_external_id": external_id,
+                "obra_id": obra_id,
+            }
+            if doc is None:
+                novo_doc = EmployeeDocument(**fields)
+                db.add(novo_doc)
+                indices.docs[external_id] = novo_doc
+                summary.treinos_created += 1
+            else:
+                for k, v in fields.items():
+                    setattr(doc, k, v)
+                summary.treinos_updated += 1
     await db.commit()
 
 

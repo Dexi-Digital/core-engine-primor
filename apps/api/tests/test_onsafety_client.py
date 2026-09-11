@@ -484,22 +484,32 @@ async def test_real_health_check_ok_e_falha():
 # (`GET /v3/api-docs`, schema `TreinamentoRealizado`) em 08/09/2026.
 
 
-def test_fields_treinamentos_projeta_datas_e_nr():
+def test_fields_treinamentos_realizados_traz_validade_e_participantes():
     """A projecao PRECISA trazer vencimento -- sem ele o doc de NR
     entra com validade None, e o diagnostico trata None como
-    "perene -> OK" (falso compliance de NR vencida)."""
-    from app.integrations.onsafety.client import FIELDS_TREINAMENTOS
+    "perene -> OK" (falso compliance de NR vencida).
+
+    E precisa vir de `/v2/treinamentos_realizados`: pelo endpoint de
+    participacoes a relacao `treinamentoRealizado` volta VAZIA contra a
+    base real (medido em 11/09/2026)."""
+    from app.integrations.onsafety.client import (
+        FIELDS_TREINAMENTOS,
+        FIELDS_TREINAMENTOS_REALIZADOS,
+    )
 
     for campo in (
-        "treinamentoRealizado.dataFim",
-        "treinamentoRealizado.dataVencimento",
-        "treinamentoRealizado.validadeDias",
-        "treinamentoRealizado.sigla",
-        "treinamentoRealizado.treinamentoCodigo.grupo",
-        "treinamentoRealizado.establishment.id",
-        "treinamentoRealizado.establishment.codigoExterno",
+        "dataFim",
+        "dataVencimento",
+        "validadeDias",
+        "sigla",
+        "trabalhadores.aprovado",
+        "trabalhadores.trabalhador.cpf",
     ):
-        assert campo in FIELDS_TREINAMENTOS, campo
+        assert campo in FIELDS_TREINAMENTOS_REALIZADOS, campo
+
+    assert "treinamentoRealizado" not in FIELDS_TREINAMENTOS, (
+        "pedir a relacao vazia no endpoint de participacoes so gera ruido"
+    )
 
 
 @pytest.mark.asyncio
