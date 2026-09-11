@@ -29,6 +29,15 @@ if [ "${SEED_DEMO:-}" = "1" ] || [ "${SEED_DEMO:-}" = "true" ]; then
   echo "[start] seed OK"
 fi
 
+# Importacao do cadastro real da OnSafety. Opt-in e idempotente, mas
+# traz DADO PESSOAL REAL quando o token e de producao -- por isso nunca
+# roda sozinha.
+if [ "${IMPORT_ONSAFETY:-}" = "1" ] || [ "${IMPORT_ONSAFETY:-}" = "true" ]; then
+  echo "[start] IMPORT_ONSAFETY ligado -- importando cadastro de trabalhadores..."
+  python -m scripts.import_trabalhadores_onsafety
+  echo "[start] import OK"
+fi
+
 echo "[start] API em 127.0.0.1:${API_PORT}"
 uvicorn app.main:app --host 127.0.0.1 --port "$API_PORT" &
 api_pid=$!
