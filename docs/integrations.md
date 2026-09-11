@@ -342,7 +342,8 @@ Endpoints usados:
 | GET    | `/v2/trabalhadores`                            | pull cadastro      |
 | GET    | `/v2/exames_ocupacionais`                      | pull ASO (A.2)     |
 | GET    | `/v2/controles_epi`                            | pull ficha de EPI  |
-| GET    | `/v2/treinamentos_realizados_trabalhadores`    | pull treinamentos  |
+| GET    | `/v2/treinamentos_realizados`                  | **pull de NRs** (fonte com sigla/validade + participantes) |
+| GET    | `/v2/treinamentos_realizados_trabalhadores`    | participacoes (sem dados do treinamento) |
 | POST   | `/v2/trabalhadores/create_or_update`           | push onboarding    |
 
 Particularidades confirmadas em chamadas reais (2026-07-12) e no smoke
