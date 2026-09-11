@@ -45,6 +45,9 @@
 # Nao servem ao runtime do worker
 docs
 infra
+# ...mas o start script da imagem unica precisa entrar (COPY em
+# Dockerfile.allinone). Negacao vem DEPOIS da regra que exclui.
+!infra/start-allinone.sh
 scripts
 **/tests
 **/test_*.py
