@@ -21,6 +21,11 @@ rodado quantas vezes for necessário sem duplicar registros.
 | `licitacoes_saved_queries` | 2 | Saved queries do PNCP que espelham o trabalho da Evandro/Brenda: "Infraestrutura viária MG/ES/GO/MT/RO" e "Adesões SRP MG". |
 | `licitacoes` | 6 | Editais publicados de exemplo dos órgãos onde a PRIMOR atua. |
 
+| `frota_veiculos` | 5 | Caminhões, retroescavadeira, pick-up e caçamba, alocados nas 5 obras. Um deles em `manutencao` para a tela não ficar toda verde. |
+| `frota_documentos` | 8 | CRLV, seguro e IPVA — com **um vencido** e **um vencendo**, mesma escolha das certidões. |
+| `partes_diarias` | 4 | Em estágios diferentes do OCR (`revisado`, `processado`, `pendente`). A `pendente` é proposital: sem worker Celery no ar, é assim que o pipeline realmente se comporta. |
+| `contratos` | 4 | Locação, fornecedor e cliente, incluindo um vigente perto do vencimento e um encerrado. |
+
 ### Dados que NÃO são plantados
 
 - **Credenciais de sistemas externos** (Registro.br, ChatGPT, BitLocker, etc.)
@@ -29,6 +34,9 @@ rodado quantas vezes for necessário sem duplicar registros.
 - **CPFs reais dos colaboradores** — o script usa CPFs sintaticamente
   válidos (passam no algoritmo de verificação), mas não são reais. Ao
   receber os reais, basta atualizar via UI (`/rh/funcionarios`).
+- **Fiscal (NF-e), Ponto (Tangerino/Sólides) e TOTVS** — de propósito. O
+  valor dessas telas está em ver a **integração** trazendo o dado; semear
+  falsificaria justamente o que se quer demonstrar.
 - **CNPJs reais das empresas do grupo** — usa placeholders
   (`33000001000101` … `33000004000104`). Quando o cliente entregar os
   reais, basta substituir as constantes `EMPRESA_*` no topo do script e

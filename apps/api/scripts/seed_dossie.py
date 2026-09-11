@@ -55,11 +55,24 @@ from app.modules.dp_sesmt.models import (
     STATUS_ATIVO,
     Employee,
 )
+from app.modules.financeiro_contratos.models import Contrato
 from app.modules.licitacoes.models import (
     CertidaoEmpresa,
     EmpresaDocumento,
     Licitacao,
     SavedQuery,
+)
+from app.modules.manutencao_frota.models import (
+    DOC_CRLV,
+    DOC_IPVA,
+    DOC_SEGURO,
+    PARTE_PENDENTE,
+    PARTE_PROCESSADO,
+    PARTE_REVISADO,
+    STATUS_MANUTENCAO,
+    DocumentoVeiculo,
+    ParteDiaria,
+    Veiculo,
 )
 from app.modules.obras.models import Obra
 
@@ -896,6 +909,229 @@ async def _upsert_licitacoes() -> int:
     return created
 
 
+# --- Frota, partes diarias e contratos -------------------------------
+#
+# Estes NAO vem do dossie: sao dados de demonstracao coerentes com as
+# obras plantadas acima, para as telas de Manutencao & Frota e de
+# Contratos nao abrirem vazias. Como nas certidoes, ha propositalmente
+# um documento VENCIDO e um VENCENDO -- sem isso o painel abre todo
+# verde e nao exercita os alertas.
+#
+# Fiscal, Ponto e TOTVS ficam de fora de proposito: ali o valor esta em
+# ver a INTEGRACAO trazendo o dado, e semear falsificaria justamente o
+# que se quer demonstrar.
+
+_VEICULOS: tuple[dict, ...] = (
+    {
+        "placa": "RPZ4A12", "marca": "Volvo", "modelo": "FH 460 6x2",
+        "ano_fabricacao": 2021, "ano_modelo": 2022, "cor": "Branco",
+        "tipo": "caminhao", "combustivel": "diesel", "setor": "Transporte",
+        "obra": "MG-010 (DER/MG)", "km_atual": 187_400,
+        "status": STATUS_ATIVO,
+    },
+    {
+        "placa": "RQC7B34", "marca": "Caterpillar", "modelo": "416F2 Retroescavadeira",
+        "ano_fabricacao": 2019, "ano_modelo": 2019, "cor": "Amarelo",
+        "tipo": "maquina", "combustivel": "diesel", "setor": "Terraplenagem",
+        "obra": "Av. Cristiano Machado (PBH)", "km_atual": 9_820,
+        "status": STATUS_ATIVO,
+    },
+    {
+        "placa": "RSD9C56", "marca": "Mercedes-Benz", "modelo": "Atego 2426",
+        "ano_fabricacao": 2018, "ano_modelo": 2018, "cor": "Branco",
+        "tipo": "caminhao", "combustivel": "diesel", "setor": "Transporte",
+        "obra": "BR-040 (DNIT)", "km_atual": 312_055,
+        "status": STATUS_MANUTENCAO,
+    },
+    {
+        "placa": "RTE1D78", "marca": "Toyota", "modelo": "Hilux CD SRV",
+        "ano_fabricacao": 2023, "ano_modelo": 2023, "cor": "Prata",
+        "tipo": "leve", "combustivel": "diesel", "setor": "Fiscalizacao",
+        "obra": "SRP PBH", "km_atual": 41_230,
+        "status": STATUS_ATIVO,
+    },
+    {
+        "placa": "RUF3E90", "marca": "Randon", "modelo": "Cacamba Basculante",
+        "ano_fabricacao": 2020, "ano_modelo": 2020, "cor": "Cinza",
+        "tipo": "implemento", "combustivel": "nao_aplica", "setor": "Terraplenagem",
+        "obra": "GO-070 (AGETOP)", "km_atual": 0,
+        "status": STATUS_ATIVO,
+    },
+)
+
+# (placa, tipo, dias_para_vencer). Negativo = ja vencido.
+_DOCS_VEICULO: tuple[tuple[str, str, int], ...] = (
+    ("RPZ4A12", DOC_CRLV, 210),
+    ("RPZ4A12", DOC_SEGURO, 18),        # VENCENDO -- alerta na tela
+    ("RQC7B34", DOC_CRLV, 150),
+    ("RSD9C56", DOC_CRLV, -37),         # VENCIDO -- alerta na tela
+    ("RSD9C56", DOC_IPVA, 95),
+    ("RTE1D78", DOC_CRLV, 280),
+    ("RTE1D78", DOC_SEGURO, 240),
+    ("RUF3E90", DOC_CRLV, 60),
+)
+
+_CONTRATOS: tuple[dict, ...] = (
+    {
+        "titulo": "Locacao de retroescavadeira - Av. Cristiano Machado",
+        "contraparte_nome": "TratorMax Locacoes LTDA",
+        "contraparte_documento": "12345678000190",
+        "tipo": "locacao", "status": "vigente",
+        "valor": Decimal("9000.00"), "dias_inicio": -120, "dias_fim": 25,
+    },
+    {
+        "titulo": "Fornecimento de brita e areia - BR-040",
+        "contraparte_nome": "Mineradora Serra Azul S/A",
+        "contraparte_documento": "98765432000155",
+        "tipo": "fornecedor", "status": "vigente",
+        "valor": Decimal("148500.00"), "dias_inicio": -200, "dias_fim": 160,
+    },
+    {
+        "titulo": "Execucao de pavimentacao - MG-010",
+        "contraparte_nome": "DER/MG",
+        "contraparte_documento": "18715516000129",
+        "tipo": "cliente", "status": "vigente",
+        "valor": Decimal("2350000.00"), "dias_inicio": -365, "dias_fim": 420,
+    },
+    {
+        "titulo": "Locacao de container de obra - GO-070",
+        "contraparte_nome": "Modular Containers ME",
+        "contraparte_documento": "22333444000166",
+        "tipo": "locacao", "status": "encerrado",
+        "valor": Decimal("4200.00"), "dias_inicio": -400, "dias_fim": -30,
+    },
+)
+
+
+async def _upsert_veiculos() -> int:
+    """Veiculos + documentos (CRLV/seguro/IPVA) por placa."""
+    created = 0
+    async with SessionLocal() as db:
+        por_placa: dict[str, Veiculo] = {}
+        for entry in _VEICULOS:
+            existing = (
+                await db.execute(
+                    select(Veiculo).where(Veiculo.placa == entry["placa"])
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                por_placa[entry["placa"]] = existing
+                continue
+            veiculo = Veiculo(**entry)
+            db.add(veiculo)
+            por_placa[entry["placa"]] = veiculo
+            created += 1
+        await db.flush()
+
+        for placa, tipo, dias in _DOCS_VEICULO:
+            veiculo = por_placa.get(placa)
+            if veiculo is None:
+                continue
+            ja_tem = (
+                await db.execute(
+                    select(DocumentoVeiculo).where(
+                        DocumentoVeiculo.veiculo_id == veiculo.id,
+                        DocumentoVeiculo.tipo == tipo,
+                    )
+                )
+            ).scalar_one_or_none()
+            if ja_tem is not None:
+                continue
+            validade = _TODAY + timedelta(days=dias)
+            db.add(
+                DocumentoVeiculo(
+                    veiculo_id=veiculo.id,
+                    tipo=tipo,
+                    numero=f"{tipo.upper()}-{placa}",
+                    emissao=validade - timedelta(days=365),
+                    validade=validade,
+                )
+            )
+            created += 1
+        await db.commit()
+    return created
+
+
+async def _upsert_partes_diarias() -> int:
+    """Partes diarias em varios estagios do OCR (B.2).
+
+    Inclui uma `pendente` de proposito: sem o worker Celery no ar ela
+    fica assim mesmo, e a tela mostra o estado real do pipeline em vez
+    de sugerir que tudo foi processado.
+    """
+    created = 0
+    async with SessionLocal() as db:
+        veiculos = {
+            v.placa: v
+            for v in (await db.execute(select(Veiculo))).scalars().all()
+        }
+        plano = (
+            ("RPZ4A12", "Jose da Silva", 3, PARTE_REVISADO, 412, 187_400),
+            ("RQC7B34", "Carlos Santos", 2, PARTE_PROCESSADO, None, None),
+            ("RSD9C56", "Joao Pereira", 1, PARTE_PROCESSADO, 338, 312_055),
+            ("RTE1D78", "Paulo Henrique", 0, PARTE_PENDENTE, None, None),
+        )
+        for placa, operador, dias_atras, status, km_i, km_f in plano:
+            veiculo = veiculos.get(placa)
+            if veiculo is None:
+                continue
+            data = _TODAY - timedelta(days=dias_atras)
+            ja_tem = (
+                await db.execute(
+                    select(ParteDiaria).where(
+                        ParteDiaria.placa == placa, ParteDiaria.data == data
+                    )
+                )
+            ).scalar_one_or_none()
+            if ja_tem is not None:
+                continue
+            db.add(
+                ParteDiaria(
+                    veiculo_id=veiculo.id,
+                    placa=placa,
+                    data=data,
+                    operador=operador,
+                    obra=veiculo.obra,
+                    equipamento=veiculo.modelo,
+                    km_inicio=km_i,
+                    km_fim=km_f,
+                    ocr_status=status,
+                    filename_original=f"parte-diaria-{placa}-{data}.pdf",
+                )
+            )
+            created += 1
+        await db.commit()
+    return created
+
+
+async def _upsert_contratos() -> int:
+    created = 0
+    async with SessionLocal() as db:
+        for entry in _CONTRATOS:
+            existing = (
+                await db.execute(
+                    select(Contrato).where(Contrato.titulo == entry["titulo"])
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                continue
+            db.add(
+                Contrato(
+                    titulo=entry["titulo"],
+                    contraparte_nome=entry["contraparte_nome"],
+                    contraparte_documento=entry["contraparte_documento"],
+                    tipo=entry["tipo"],
+                    status=entry["status"],
+                    valor=entry["valor"],
+                    data_inicio=_TODAY + timedelta(days=entry["dias_inicio"]),
+                    data_fim=_TODAY + timedelta(days=entry["dias_fim"]),
+                )
+            )
+            created += 1
+        await db.commit()
+    return created
+
+
 async def main() -> None:
     logger.info("seed_dossie: starting")
 
@@ -910,6 +1146,9 @@ async def main() -> None:
         "docs_empresa": await _upsert_documentos_empresa(),
         "saved_queries": await _upsert_saved_queries(),
         "licitacoes": await _upsert_licitacoes(),
+        "veiculos_e_docs": await _upsert_veiculos(),
+        "partes_diarias": await _upsert_partes_diarias(),
+        "contratos": await _upsert_contratos(),
     }
     logger.info("seed_dossie: done", **counts)
     total = sum(counts.values())
