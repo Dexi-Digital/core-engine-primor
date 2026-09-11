@@ -48,6 +48,10 @@ COPY apps/api/app ./app
 RUN pip install --upgrade pip && pip install -e "."
 COPY apps/api/alembic ./alembic
 COPY apps/api/alembic.ini ./
+# Seed de demo (`SEED_DEMO=1` no start). Sem isso o banco sobe com
+# schema e ZERO linhas -- toda tela fica vazia, que e o estado com
+# que o primeiro deploy foi ao ar.
+COPY apps/api/scripts ./scripts
 
 # Next standalone: server.js + node_modules minimos, static e public.
 COPY --from=web-builder /web/.next/standalone ./web/

@@ -21,6 +21,14 @@ echo "[start] aplicando migrations (alembic upgrade head)..."
 alembic upgrade head
 echo "[start] migrations OK"
 
+# Seed opcional de demonstracao. Idempotente (upsert por chave
+# natural), entao pode ficar ligado entre deploys sem duplicar.
+if [ "${SEED_DEMO:-}" = "1" ] || [ "${SEED_DEMO:-}" = "true" ]; then
+  echo "[start] SEED_DEMO ligado -- populando dados de demonstracao..."
+  python -m scripts.seed_dossie
+  echo "[start] seed OK"
+fi
+
 echo "[start] API em 127.0.0.1:${API_PORT}"
 uvicorn app.main:app --host 127.0.0.1 --port "$API_PORT" &
 api_pid=$!

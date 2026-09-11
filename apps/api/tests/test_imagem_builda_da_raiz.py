@@ -82,6 +82,25 @@ def test_start_roda_migrations_antes_dos_servidores():
     )
 
 
+def test_imagem_unica_carrega_o_seed_de_demo():
+    """Sem `scripts/` na imagem, `python -m scripts.seed_dossie` nao
+    existe no container -- e foi assim que o primeiro deploy foi ao ar
+    com schema criado e ZERO linhas, com todas as telas vazias."""
+    conteudo = _DOCKERFILE_UNICA.read_text()
+    assert "apps/api/scripts" in conteudo
+
+
+def test_seed_e_opt_in_e_roda_depois_das_migrations():
+    """Seed depende das tabelas existirem, e nao pode disparar sozinho
+    em ambiente que nao seja de demonstracao."""
+    conteudo = _START.read_text()
+    assert "SEED_DEMO" in conteudo
+    pos_alembic = conteudo.find("alembic upgrade head")
+    pos_seed = conteudo.find("scripts.seed_dossie")
+    pos_uvicorn = conteudo.find("uvicorn")
+    assert pos_alembic < pos_seed < pos_uvicorn
+
+
 def test_start_evita_colisao_de_porta():
     """A API interna usa 8000. Se `PORT=8000` sobrar de uma config
     antiga, os dois processos disputariam a mesma porta."""
