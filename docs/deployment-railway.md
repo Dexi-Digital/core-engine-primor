@@ -25,7 +25,41 @@ cobrado** — dá para desligar entre demos.
 > Vercel, mas não dispensa o VPS. É o candidato para quando a Primor tiver o
 > servidor definitivo, não para a demo.
 
-## Escopo mínimo vs completo
+## Imagem única (1 serviço) — caminho da demo
+
+`Dockerfile.allinone` + `infra/start-allinone.sh` põem **migrations, API e
+web no mesmo container**. O `railway.json` da raiz aponta para ele, então o
+serviço sobe **sem configurar Root Directory nem Config File**.
+
+Funciona sem CORS e sem mudar código porque **o front é server-side**:
+`src/lib/api.ts` usa cookie HTTP-only e roda em Server Components / Route
+Handlers, e o navegador só chama rotas do próprio Next (`/m/api/...`). Quem
+fala com a API é o Node, de dentro do container — por isso
+`NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000` (inlined no build) resolve.
+
+As migrations rodam no start, antes de qualquer processo aceitar tráfego, e
+falha derruba o boot — foi o que faltava quando a API subiu com
+`relation "auth_users" does not exist`.
+
+**O que essa imagem NÃO tem: o worker Celery.** Os 5 crons não rodam; use os
+disparos manuais e `POST /dp-sesmt/onsafety/pull?inline=true`. Para o VPS,
+continue com `infra/docker-compose.prod.yml`, que separa api/workers/web.
+
+**Variáveis mínimas:**
+
+```ini
+ENVIRONMENT=staging
+SECRET_KEY=<openssl rand -hex 32>
+DATABASE_URL=postgresql+asyncpg://...
+ADMIN_EMAIL=...
+ADMIN_PASSWORD=...
+```
+
+Se sobrou `PORT=8000` de uma configuração anterior, pode remover — a API agora
+é interna nessa porta, e o start script desvia a web para 3000 se houver
+colisão.
+
+## Escopo mínimo vs completo (serviços separados)
 
 | | Serviços | O que funciona |
 |---|---|---|

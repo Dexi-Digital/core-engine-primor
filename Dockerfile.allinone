@@ -1,0 +1,60 @@
+# Imagem UNICA: API (FastAPI) + web (Next.js) + migrations no mesmo
+# container. Serve o deploy de demo no Railway com UM servico so.
+#
+# NAO e o desenho de producao -- para VPS continue usando
+# `infra/docker-compose.prod.yml`, que separa api/workers/web e roda o
+# Celery (esta imagem NAO tem worker, entao os 5 crons nao rodam).
+#
+# Por que isso funciona sem CORS nem rewrite: o front e server-side
+# (`src/lib/api.ts` usa cookie HTTP-only e roda em Server Components /
+# Route Handlers). O navegador so chama rotas do proprio Next
+# (`/m/api/...`); quem fala com a API e o Node, de dentro do container.
+# Por isso `NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000` resolve.
+#
+#   docker build -f Dockerfile.allinone -t motor-central .
+
+# ---------- 1. build do Next.js ----------
+FROM node:22-slim AS web-builder
+WORKDIR /web
+COPY apps/web/package.json apps/web/package-lock.json* ./
+RUN npm ci
+COPY apps/web/ ./
+# Inlined no bundle em build time: aponta para a API do proprio container.
+ENV NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN npm run build
+
+# ---------- 2. runtime: Python + Node ----------
+FROM python:3.12-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    NEXT_TELEMETRY_DISABLED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential libpq-dev curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Só o binario do node -- o build standalone do Next ja empacota as
+# dependencias que precisa. Mesma base Debian, entao o binario casa.
+COPY --from=node:22-slim /usr/local/bin/node /usr/local/bin/node
+
+WORKDIR /app
+
+# Codigo ANTES do install (o editable install do setuptools congela o
+# mapa de pacotes descobertos no momento da instalacao).
+COPY apps/api/pyproject.toml ./
+COPY apps/api/app ./app
+RUN pip install --upgrade pip && pip install -e "."
+COPY apps/api/alembic ./alembic
+COPY apps/api/alembic.ini ./
+
+# Next standalone: server.js + node_modules minimos, static e public.
+COPY --from=web-builder /web/.next/standalone ./web/
+COPY --from=web-builder /web/.next/static ./web/.next/static
+COPY --from=web-builder /web/public ./web/public
+
+COPY infra/start-allinone.sh /usr/local/bin/start-allinone
+RUN chmod +x /usr/local/bin/start-allinone
+
+CMD ["start-allinone"]
