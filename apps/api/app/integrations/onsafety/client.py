@@ -86,17 +86,28 @@ FIELDS_CONTROLES_EPI = (
 # 08/09/2026). `dataVencimento`/`validadeDias` NAO sao opcionais para
 # nos: sem validade o documento de NR entra perene no dossie e o
 # diagnostico o trata como conforme (ver `pull_treinamentos`).
+# `/v2/treinamentos_realizados` -- a fonte boa dos treinamentos.
+# Confirmado contra a base REAL em 11/09/2026: em
+# `/v2/treinamentos_realizados_trabalhadores` a relacao
+# `treinamentoRealizado` volta VAZIA (zero chaves, mesmo pedindo o
+# objeto inteiro), entao descricao/sigla/validade sao inalcancaveis por
+# la. Aqui vem tudo, com os participantes aninhados.
+FIELDS_TREINAMENTOS_REALIZADOS = (
+    "id,sigla,descricao,situacao,dataFim,dataVencimento,validadeDias,"
+    "treinamentoCodigo.grupo,"
+    "establishment.id,establishment.nome,establishment.codigoExterno,"
+    "trabalhadores.id,trabalhadores.aprovado,trabalhadores.renovado,"
+    "trabalhadores.certificateId,"
+    "trabalhadores.trabalhador.id,trabalhadores.trabalhador.nome,"
+    "trabalhadores.trabalhador.cpf"
+)
 FIELDS_TREINAMENTOS = (
+    # SO os campos da propria participacao: a relacao
+    # `treinamentoRealizado` volta vazia por este endpoint (medido na
+    # base real em 11/09/2026), entao pedi-la aqui so gera ruido.
+    # Quem precisa de sigla/validade usa `list_treinamentos_realizados`.
     "id,aprovado,renovado,certificateId,ativo,"
-    "trabalhador.id,trabalhador.nome,trabalhador.cpf,"
-    "treinamentoRealizado.id,treinamentoRealizado.descricao,"
-    "treinamentoRealizado.sigla,treinamentoRealizado.situacao,"
-    "treinamentoRealizado.dataFim,treinamentoRealizado.dataVencimento,"
-    "treinamentoRealizado.validadeDias,"
-    "treinamentoRealizado.treinamentoCodigo.grupo,"
-    "treinamentoRealizado.establishment.id,"
-    "treinamentoRealizado.establishment.nome,"
-    "treinamentoRealizado.establishment.codigoExterno"
+    "trabalhador.id,trabalhador.nome,trabalhador.cpf"
 )
 
 def _mock_cpf(digest: str) -> str:
@@ -337,28 +348,59 @@ class OnsafetyClient(IntegrationClient):
         *,
         page: int = 0,
         size: int = 100,
-        ativo: bool | None = True,
     ) -> dict[str, Any]:
-        """Lista participacoes de trabalhadores em treinamentos (NRs).
+        """Participacoes de trabalhadores em treinamentos.
 
-        `ativo=True` por default (soft-delete, ver docstring do modulo).
+        **Nao aceita filtro `ativo`**: a entidade nao tem essa coluna e
+        a API responde 409 com erro do Hibernate
+        (`could not resolve property: ativo`). Descoberto contra a base
+        real em 11/09/2026 -- o default `ativo=True` que existia aqui
+        quebrava toda chamada.
 
-        Item: {id, descricao, aprovado, renovado, certificado_id, ativo,
+        Use `list_treinamentos_realizados` para o pull: a relacao
+        `treinamentoRealizado` volta vazia por este caminho, entao
+        descricao/sigla/validade nao chegam.
+
+        Item: {id, aprovado, renovado, certificado_id,
                trabalhador: {id, nome, cpf}}
         """
         if self.is_mock:
-            return self._mock_page("treinamentos", page, size, ativo=ativo)
-        params: dict[str, Any] = {}
-        if ativo is not None:
-            params["ativo"] = ativo
+            return self._mock_page("treinamentos", page, size)
         raw = await self._get_page(
             "/v2/treinamentos_realizados_trabalhadores",
             fields=FIELDS_TREINAMENTOS,
             page=page,
             size=size,
-            **params,
         )
         return self._envelope(raw, page, size, self._normalize_treinamento)
+
+    async def list_treinamentos_realizados(
+        self,
+        *,
+        page: int = 0,
+        size: int = 100,
+    ) -> dict[str, Any]:
+        """Treinamentos realizados, COM os participantes aninhados.
+
+        Fonte do pull de NRs: traz `sigla`, `descricao`, `validadeDias`
+        e `dataVencimento` -- tudo que o outro endpoint nao entrega.
+
+        Item: {id, sigla, descricao, grupo, situacao, data_fim,
+               data_vencimento, validade_dias, projeto,
+               participantes: [{id, aprovado, renovado, certificado_id,
+                                trabalhador: {id, nome, cpf}}]}
+        """
+        if self.is_mock:
+            return self._mock_page("treinamentos_realizados", page, size)
+        raw = await self._get_page(
+            "/v2/treinamentos_realizados",
+            fields=FIELDS_TREINAMENTOS_REALIZADOS,
+            page=page,
+            size=size,
+        )
+        return self._envelope(
+            raw, page, size, self._normalize_treinamento_realizado
+        )
 
     # ------------------------------ push ---------------------------------
 
@@ -625,6 +667,39 @@ class OnsafetyClient(IntegrationClient):
             ),
         }
 
+    def _normalize_treinamento_realizado(
+        self, raw: dict[str, Any]
+    ) -> dict[str, Any]:
+        codigo = raw.get("treinamentoCodigo") or {}
+        participantes = [
+            {
+                "id": p.get("id"),
+                "aprovado": p.get("aprovado"),
+                "renovado": p.get("renovado"),
+                "certificado_id": p.get("certificateId"),
+                "trabalhador": self._normalize_sub_trabalhador(
+                    p.get("trabalhador")
+                ),
+            }
+            for p in (raw.get("trabalhadores") or [])
+        ]
+        return {
+            "id": raw.get("id"),
+            "sigla": raw.get("sigla"),
+            "descricao": raw.get("descricao"),
+            # Na base real o `grupo` e uma CATEGORIA descritiva
+            # ("TREINAMENTOS, CAPACITACOES E EXERCICIOS SIMULADOS..."),
+            # nao o rotulo da NR -- quem identifica a norma e a `sigla`
+            # ("NR 6"). Mantido no payload para auditoria.
+            "grupo": codigo.get("grupo"),
+            "situacao": raw.get("situacao"),
+            "data_fim": _date10(raw.get("dataFim")),
+            "data_vencimento": _date10(raw.get("dataVencimento")),
+            "validade_dias": raw.get("validadeDias"),
+            "projeto": self._normalize_sub_projeto(raw.get("establishment")),
+            "participantes": participantes,
+        }
+
     def _normalize_sub_projeto(
         self, raw: dict[str, Any] | None
     ) -> dict[str, Any] | None:
@@ -650,6 +725,7 @@ class OnsafetyClient(IntegrationClient):
         "exames": 8,
         "controles_epi": 15,
         "treinamentos": 6,
+        "treinamentos_realizados": 4,
     }
     _MOCK_NOMES = [
         "JOSE DA SILVA",
@@ -804,6 +880,52 @@ class OnsafetyClient(IntegrationClient):
                 },
                 "ativo": True,
                 "trabalhador": trabalhador,
+            }
+        if recurso == "treinamentos_realizados":
+            # Shape espelha a base real: sigla e quem identifica a NR,
+            # `grupo` e categoria descritiva, participantes aninhados.
+            nrs = [
+                ("NR 35", "Trabalho em Altura"),
+                ("NR 18", "Construcao Civil"),
+                ("NR 6", "Protecao Auditiva"),
+                ("NR 12", "Maquinas e Equipamentos"),
+            ]
+            sigla, descricao = nrs[i % len(nrs)]
+            mes = 1 + (idx % 12)
+            participantes = [
+                {
+                    "id": f"{uid[:8]}-part-{j}",
+                    "aprovado": not (i == 1 and j == 0),
+                    "renovado": False,
+                    "certificado_id": f"{uid[:8]}-cert-{j}",
+                    "trabalhador": self._mock_item(
+                        "trabalhadores",
+                        (i * 2 + j) % self._MOCK_TOTAIS["trabalhadores"],
+                    ),
+                }
+                for j in range(2)
+            ]
+            return {
+                "id": uid,
+                "sigla": sigla,
+                "descricao": descricao,
+                "grupo": "TREINAMENTOS, CAPACITACOES E EXERCICIOS SIMULADOS",
+                "situacao": "CONCLUIDO",
+                "data_fim": f"2025-{mes:02d}-20",
+                # O ultimo e uma NR MAPEADA e sem validade -- exercita o
+                # descarte que protege o diagnostico de ler NR vencida
+                # como perene. (Se fosse NR nao mapeada, a checagem de
+                # tipo barraria antes e esse caminho nunca rodaria.)
+                "data_vencimento": (
+                    None if i == len(nrs) - 1 else f"2027-{mes:02d}-20"
+                ),
+                "validade_dias": None if i == len(nrs) - 1 else 730,
+                "projeto": {
+                    "id": uid,
+                    "nome": f"OBRA {240 + (i % 3)} - TESTE",
+                    "codigo_externo": str(240 + (i % 3)),
+                },
+                "participantes": participantes,
             }
         raise ValueError(f"recurso mock desconhecido: {recurso!r}")
 

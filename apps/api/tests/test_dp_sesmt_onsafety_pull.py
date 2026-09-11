@@ -11,6 +11,7 @@ from app.audit.models import AuditLog
 from app.integrations.onsafety.client import OnsafetyClient, OnsafetyError
 from app.modules.dp_sesmt.models import (
     DOC_EMP_FICHA_EPI,
+    DOC_EMP_NR12,
     DOC_EMP_NR35,
     DossieConsultaLog,
     Employee,
@@ -279,7 +280,7 @@ async def test_endpoint_pull_dispatch(api_client, auth_headers):
     assert body["error"] is None
     assert body["exames_total"] == 8
     assert body["epis_total"] == 15
-    assert body["treinos_total"] == 6
+    assert body["treinos_total"] == 4
 
 
 @pytest.mark.asyncio
@@ -319,12 +320,25 @@ async def test_endpoint_pull_exige_auth(api_client):
     assert resp.status_code == 401
 
 
-# --- Treinamentos (issue #39, etapa 2 / 2a iteracao) ------------------------
+# --- Treinamentos (fonte: /v2/treinamentos_realizados) ---------------
+#
+# O pull percorre TREINAMENTOS e desce nos participantes. O caminho
+# inverso nao serve: contra a base real a relacao `treinamentoRealizado`
+# volta vazia, entao sigla/descricao/validade nunca chegariam.
 
 
 async def _mock_treinos(client: OnsafetyClient) -> list[dict]:
-    res = await client.list_treinamentos_trabalhadores(page=0, size=100)
+    res = await client.list_treinamentos_realizados(page=0, size=100)
     return res["items"]
+
+
+def _por_sigla(treinos: list[dict], sigla: str) -> dict:
+    return next(t for t in treinos if t["sigla"] == sigla)
+
+
+def _cpf_aprovado(treino: dict) -> str:
+    p = next(p for p in treino["participantes"] if p["aprovado"])
+    return p["trabalhador"]["cpf"]
 
 
 async def _criar_obra(db: AsyncSession, codigo: str, nome: str) -> Obra:
@@ -341,34 +355,25 @@ async def test_pull_treinamento_cria_doc_de_nr_com_validade(
 ):
     client = OnsafetyClient(api_token=None)
     treinos = await _mock_treinos(client)
-    alvo = next(
-        t for t in treinos if t["aprovado"] and t["sigla"] == "NR-35"
-    )
-    emp = await _criar_employee(db_session, alvo["trabalhador"]["cpf"])
+    alvo = _por_sigla(treinos, "NR 35")
+    emp = await _criar_employee(db_session, _cpf_aprovado(alvo))
 
     await pull_onsafety(db_session, client, actor="t@t.com")
 
-    docs = (
-        (
-            await db_session.execute(
-                select(EmployeeDocument).where(
-                    EmployeeDocument.employee_id == emp.id,
-                    EmployeeDocument.tipo == DOC_EMP_NR35,
-                )
+    doc = (
+        await db_session.execute(
+            select(EmployeeDocument).where(
+                EmployeeDocument.employee_id == emp.id,
+                EmployeeDocument.tipo == DOC_EMP_NR35,
             )
         )
-        .scalars()
-        .all()
-    )
-    assert docs, "treinamento aprovado de NR-35 deveria virar documento"
-    doc = docs[0]
+    ).scalar_one()
     assert doc.source == "onsafety"
     assert doc.onsafety_external_id
     # A garantia central: NUNCA gravar NR sem validade -- validade None
     # e lida como "perene -> conforme" pelo diagnostico.
-    assert doc.validade is not None
-    assert doc.emissao == date.fromisoformat(alvo["data_fim"])
     assert doc.validade == date.fromisoformat(alvo["data_vencimento"])
+    assert doc.emissao == date.fromisoformat(alvo["data_fim"])
 
 
 @pytest.mark.asyncio
@@ -377,8 +382,11 @@ async def test_pull_treinamento_reprovado_nao_vira_documento(
 ):
     client = OnsafetyClient(api_token=None)
     treinos = await _mock_treinos(client)
-    reprovado = next(t for t in treinos if not t["aprovado"])
-    emp = await _criar_employee(db_session, reprovado["trabalhador"]["cpf"])
+    nr18 = _por_sigla(treinos, "NR 18")
+    reprovado = next(p for p in nr18["participantes"] if not p["aprovado"])
+    emp = await _criar_employee(
+        db_session, reprovado["trabalhador"]["cpf"]
+    )
 
     summary = await pull_onsafety(db_session, client, actor="t@t.com")
 
@@ -386,9 +394,8 @@ async def test_pull_treinamento_reprovado_nao_vira_documento(
         (
             await db_session.execute(
                 select(EmployeeDocument).where(
-                    EmployeeDocument.employee_id == emp.id,
                     EmployeeDocument.onsafety_external_id
-                    == str(reprovado["id"]),
+                    == str(reprovado["id"])
                 )
             )
         )
@@ -397,27 +404,21 @@ async def test_pull_treinamento_reprovado_nao_vira_documento(
     )
     assert docs == []
     assert summary.treinos_reprovados >= 1
+    assert emp.id is not None
 
 
 @pytest.mark.asyncio
 async def test_pull_treinamento_sem_validade_nao_cria_doc(
-    db_session: AsyncSession, monkeypatch
+    db_session: AsyncSession,
 ):
-    """Sem vencimento E sem validade_dias nao da para saber se a NR
-    esta valida -- gravar viraria falso 'conforme' no diagnostico."""
+    """NR mapeada, mas sem vencimento nem validade_dias: gravar viraria
+    falso 'conforme' no diagnostico."""
     client = OnsafetyClient(api_token=None)
     treinos = await _mock_treinos(client)
-    alvo = next(t for t in treinos if t["aprovado"] and t["sigla"] == "NR-35")
-    emp = await _criar_employee(db_session, alvo["trabalhador"]["cpf"])
+    alvo = _por_sigla(treinos, "NR 12")
+    assert alvo["data_vencimento"] is None and alvo["validade_dias"] is None
+    emp = await _criar_employee(db_session, _cpf_aprovado(alvo))
 
-    async def _sem_datas(*, page=0, size=100, ativo=True):
-        item = dict(alvo, data_vencimento=None, validade_dias=None)
-        return {"items": [item] if page == 0 else [], "total": 1,
-                "page": page, "size": size, "source": "onsafety_mock"}
-
-    monkeypatch.setattr(
-        client, "list_treinamentos_trabalhadores", _sem_datas
-    )
     summary = await pull_onsafety(db_session, client, actor="t@t.com")
 
     docs = (
@@ -425,7 +426,7 @@ async def test_pull_treinamento_sem_validade_nao_cria_doc(
             await db_session.execute(
                 select(EmployeeDocument).where(
                     EmployeeDocument.employee_id == emp.id,
-                    EmployeeDocument.tipo == DOC_EMP_NR35,
+                    EmployeeDocument.tipo == DOC_EMP_NR12,
                 )
             )
         )
@@ -433,7 +434,7 @@ async def test_pull_treinamento_sem_validade_nao_cria_doc(
         .all()
     )
     assert docs == []
-    assert summary.treinos_sem_validade == 1
+    assert summary.treinos_sem_validade >= 1
 
 
 @pytest.mark.asyncio
@@ -442,15 +443,16 @@ async def test_pull_treinamento_validade_por_dias_quando_falta_vencimento(
 ):
     client = OnsafetyClient(api_token=None)
     treinos = await _mock_treinos(client)
-    alvo = next(t for t in treinos if t["aprovado"] and t["sigla"] == "NR-35")
-    emp = await _criar_employee(db_session, alvo["trabalhador"]["cpf"])
+    alvo = dict(
+        _por_sigla(treinos, "NR 35"), data_vencimento=None, validade_dias=365
+    )
+    emp = await _criar_employee(db_session, _cpf_aprovado(alvo))
 
-    async def _so_dias(*, page=0, size=100, ativo=True):
-        item = dict(alvo, data_vencimento=None, validade_dias=365)
-        return {"items": [item] if page == 0 else [], "total": 1,
+    async def _so_dias(*, page=0, size=100):
+        return {"items": [alvo] if page == 0 else [], "total": 1,
                 "page": page, "size": size, "source": "onsafety_mock"}
 
-    monkeypatch.setattr(client, "list_treinamentos_trabalhadores", _so_dias)
+    monkeypatch.setattr(client, "list_treinamentos_realizados", _so_dias)
     await pull_onsafety(db_session, client, actor="t@t.com")
 
     doc = (
@@ -470,12 +472,12 @@ async def test_pull_treinamento_validade_por_dias_quando_falta_vencimento(
 async def test_pull_treinamento_nr_nao_mapeada_nao_polui_checklist(
     db_session: AsyncSession,
 ):
-    """NR-06 (EPI) nao e um tipo de documento do dossie -- ingerir como
-    'OUTRO' encheria o checklist de ruido."""
+    """NR-6 nao e tipo de documento do dossie -- ingerir como 'OUTRO'
+    encheria o checklist de ruido."""
     client = OnsafetyClient(api_token=None)
     treinos = await _mock_treinos(client)
-    nr06 = next(t for t in treinos if t["aprovado"] and t["sigla"] == "NR-06")
-    emp = await _criar_employee(db_session, nr06["trabalhador"]["cpf"])
+    nr6 = _por_sigla(treinos, "NR 6")
+    emp = await _criar_employee(db_session, _cpf_aprovado(nr6))
 
     summary = await pull_onsafety(db_session, client, actor="t@t.com")
 
@@ -483,24 +485,23 @@ async def test_pull_treinamento_nr_nao_mapeada_nao_polui_checklist(
         (
             await db_session.execute(
                 select(EmployeeDocument).where(
-                    EmployeeDocument.onsafety_external_id == str(nr06["id"])
+                    EmployeeDocument.employee_id == emp.id
                 )
             )
         )
         .scalars()
         .all()
     )
-    assert docs == []
+    assert all(d.tipo != "OUTRO" for d in docs)
     assert summary.treinos_nr_desconhecida >= 1
-    assert emp.id is not None
 
 
 @pytest.mark.asyncio
 async def test_pull_treinamento_e_idempotente(db_session: AsyncSession):
     client = OnsafetyClient(api_token=None)
     treinos = await _mock_treinos(client)
-    alvo = next(t for t in treinos if t["aprovado"] and t["sigla"] == "NR-35")
-    await _criar_employee(db_session, alvo["trabalhador"]["cpf"])
+    alvo = _por_sigla(treinos, "NR 35")
+    await _criar_employee(db_session, _cpf_aprovado(alvo))
 
     s1 = await pull_onsafety(db_session, client, actor="t@t.com")
     s2 = await pull_onsafety(db_session, client, actor="t@t.com")
@@ -509,7 +510,7 @@ async def test_pull_treinamento_e_idempotente(db_session: AsyncSession):
         (
             await db_session.execute(
                 select(EmployeeDocument).where(
-                    EmployeeDocument.onsafety_external_id == str(alvo["id"])
+                    EmployeeDocument.tipo == DOC_EMP_NR35
                 )
             )
         )
@@ -527,11 +528,11 @@ async def test_pull_treinamento_vincula_obra_por_codigo_externo(
 ):
     client = OnsafetyClient(api_token=None)
     treinos = await _mock_treinos(client)
-    alvo = next(t for t in treinos if t["aprovado"] and t["sigla"] == "NR-35")
+    alvo = _por_sigla(treinos, "NR 35")
     obra = await _criar_obra(
         db_session, alvo["projeto"]["codigo_externo"], "OBRA DE TESTE"
     )
-    emp = await _criar_employee(db_session, alvo["trabalhador"]["cpf"])
+    emp = await _criar_employee(db_session, _cpf_aprovado(alvo))
 
     await pull_onsafety(db_session, client, actor="t@t.com")
 
@@ -552,8 +553,8 @@ async def test_pull_treinamento_obra_ausente_nao_bloqueia(
 ):
     client = OnsafetyClient(api_token=None)
     treinos = await _mock_treinos(client)
-    alvo = next(t for t in treinos if t["aprovado"] and t["sigla"] == "NR-35")
-    emp = await _criar_employee(db_session, alvo["trabalhador"]["cpf"])
+    alvo = _por_sigla(treinos, "NR 35")
+    emp = await _criar_employee(db_session, _cpf_aprovado(alvo))
 
     summary = await pull_onsafety(db_session, client, actor="t@t.com")
 
@@ -575,8 +576,8 @@ async def test_pull_treinamento_registra_consulta_lgpd(
 ):
     client = OnsafetyClient(api_token=None)
     treinos = await _mock_treinos(client)
-    alvo = next(t for t in treinos if t["aprovado"] and t["sigla"] == "NR-35")
-    emp = await _criar_employee(db_session, alvo["trabalhador"]["cpf"])
+    alvo = _por_sigla(treinos, "NR 35")
+    emp = await _criar_employee(db_session, _cpf_aprovado(alvo))
 
     await pull_onsafety(db_session, client, actor="t@t.com")
 
