@@ -402,6 +402,18 @@ Env vars:
 | `ONSAFETY_ALLOW_PROD_WRITE` | não         | Default: `false`. **Guard-rail**: `create_or_update` contra `api.onsafety.com.br` levanta `OnsafetyProdWriteBlockedError` sem este opt-in (o token disponível hoje é o de produção — ADR-001). Leitura não é afetada. |
 | `ONSAFETY_PROJETO_ID`       | p/ push     | Estabelecimento/projeto OnSafety ao qual o push vincula o trabalhador. Sem ele a API deles recusa com 403. Em homolog: obra de teste "OBRA TESTE MOTOR CENTRAL". |
 
+**Importação de cadastro (`scripts/import_trabalhadores_onsafety.py`):**
+traz os trabalhadores da OnSafety para `dp_employees`. **Fora do pull
+diário de propósito** — o ADR-001 decidiu que o pull nunca cria
+funcionário (cadastro é do RH/onboarding), e um cron criando pessoa em
+silêncio suja a base sem ninguém perceber. Idempotente: funcionário
+existente **não é sobrescrito**, só campos vazios são preenchidos — o
+que o RH digitou vence o espelho da OnSafety. `cargo` vem de
+`ocupacaoProjeto.descricao` e a obra de `ocupacaoProjeto.projeto.nome`
+(`"ZAG - OBRA 224 - MUZAMBINHO"`); sem ocupação na origem entra
+`(nao informado)` e o caso conta em `sem_cargo`. No deploy de demo, o
+gatilho é `IMPORT_ONSAFETY=1`.
+
 **Pull SST (Squad 2):** `POST /api/v1/dp-sesmt/onsafety/pull` (manual —
 **enfileira** a task na fila `dp_sesmt`; `?inline=true` roda no request e
 devolve o summary, só para base pequena) e cron 07h30

@@ -81,6 +81,11 @@ _PAGE_SIZE = 200
 # "desconhecido" em vez de um rotulo possivelmente invertido.
 _RESULTADO_MAP = {1: "apto"}
 
+# Nem todo trabalhador tem ocupacao preenchida na OnSafety, e `cargo` e
+# NOT NULL aqui. Marcador explicito > cargo inventado: quem olhar a
+# tela sabe que o dado falta na origem.
+_CARGO_NAO_INFORMADO = "(nao informado)"
+
 # Treinamentos da OnSafety -> tipos de documento do dossie. So as NRs
 # que o checklist do diagnostico conhece: um treinamento fora deste
 # mapa (NR-06, integracao, brigada...) NAO vira documento -- ingerir
@@ -505,6 +510,123 @@ async def pull_treinamentos(
                     setattr(doc, k, v)
                 summary.treinos_updated += 1
     await db.commit()
+
+
+@dataclass
+class ImportSummary:
+    """Resultado da importacao de cadastro (separada do pull diario)."""
+
+    source: str = "onsafety"
+    lidos: int = 0
+    criados: int = 0
+    completados: int = 0
+    ja_completos: int = 0
+    cpfs_invalidos: int = 0
+    sem_cargo: int = 0
+    error: str | None = None
+
+
+async def import_trabalhadores(
+    db: AsyncSession,
+    client: OnsafetyClient,
+    *,
+    actor: str = _AUDIT_ACTOR_SYSTEM,
+) -> ImportSummary:
+    """Importa o CADASTRO de trabalhadores da OnSafety para `dp_employees`.
+
+    **Deliberadamente fora do pull diario.** O ADR-001 decidiu que o
+    pull nunca cria funcionario -- cadastro e responsabilidade do
+    RH/onboarding, e um cron criando pessoa silenciosamente e o tipo de
+    efeito que ninguem percebe ate a base estar suja. Esta funcao e uma
+    operacao EXPLICITA, rodada quando alguem decide popular a base.
+
+    Regras:
+
+    - So trabalhador `ativo` com CPF valido. CPF e a chave natural.
+    - Funcionario que ja existe NAO e sobrescrito: preenchemos apenas
+      campos VAZIOS (cargo, matricula, obra, admissao). Dado digitado
+      pelo RH vence o espelho da OnSafety.
+    - `cargo` e NOT NULL no modelo e nem todo trabalhador tem ocupacao
+      preenchida na OnSafety -- nesse caso entra um marcador explicito
+      em vez de inventar cargo, e o caso e contado em `sem_cargo`.
+    """
+    summary = ImportSummary()
+    try:
+        trabalhadores = await _iter_paginado(client.list_trabalhadores)
+    except OnsafetyError as exc:
+        logger.warning("import onsafety interrompido: %s", exc)
+        summary.error = str(exc)[:500]
+        return summary
+
+    summary.lidos = len(trabalhadores)
+    existentes = {
+        e.cpf: e
+        for e in (await db.execute(select(Employee))).scalars().all()
+        if e.cpf
+    }
+
+    for item in trabalhadores:
+        cpf = item.get("cpf") or ""
+        if not is_valid_cpf(cpf):
+            summary.cpfs_invalidos += 1
+            continue
+
+        cargo = (item.get("cargo") or "").strip()
+        if not cargo:
+            summary.sem_cargo += 1
+            cargo = _CARGO_NAO_INFORMADO
+
+        admissao = _parse_date(item.get("data_admissao"))
+        matricula = item.get("matricula")
+        obra = item.get("obra")
+
+        existente = existentes.get(cpf)
+        if existente is None:
+            novo = Employee(
+                cpf=cpf,
+                nome_completo=(item.get("nome") or "").strip()[:255],
+                cargo=cargo[:100],
+                matricula=str(matricula)[:64] if matricula else None,
+                obra=str(obra)[:128] if obra else None,
+                data_admissao=admissao,
+            )
+            db.add(novo)
+            existentes[cpf] = novo
+            summary.criados += 1
+            continue
+
+        # Só completa buraco -- nunca sobrescreve o que o RH ja digitou.
+        mudou = False
+        for campo, valor in (
+            ("matricula", str(matricula)[:64] if matricula else None),
+            ("obra", str(obra)[:128] if obra else None),
+            ("data_admissao", admissao),
+        ):
+            if valor and not getattr(existente, campo, None):
+                setattr(existente, campo, valor)
+                mudou = True
+        if cargo != _CARGO_NAO_INFORMADO and (
+            not existente.cargo or existente.cargo == _CARGO_NAO_INFORMADO
+        ):
+            existente.cargo = cargo[:100]
+            mudou = True
+        if mudou:
+            summary.completados += 1
+        else:
+            summary.ja_completos += 1
+
+    await db.commit()
+    db.add(
+        AuditLog(
+            actor=actor,
+            action="import_trabalhadores",
+            resource=_AUDIT_RESOURCE,
+            resource_id=None,
+            metadata_json=json.dumps(asdict(summary), default=str),
+        )
+    )
+    await db.commit()
+    return summary
 
 
 async def pull_onsafety(

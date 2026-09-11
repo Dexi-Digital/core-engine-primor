@@ -70,7 +70,14 @@ ONSAFETY_PROD_HOST = "api.onsafety.com.br"
 # (`trabalhador.cpf`) seguem a sintaxe de projection do Spring, a
 # validar em homologacao quando o token dev chegar -- se a API nao
 # aceitar nested fields, ajustar apenas estas constantes.
-FIELDS_TRABALHADORES = "id,nome,cpf,matricula,dataAdmissao,codigoExterno,ativo"
+# `ocupacaoProjeto.descricao` e o CARGO do trabalhador ("Vigia",
+# "AJUDANTE GERAL"). O `ocupacao.descricao` aninhado vem nulo na base
+# real -- confirmado em 11/09/2026. `projeto.nome` traz a obra
+# ("ZAG - OBRA 224 - MUZAMBINHO").
+FIELDS_TRABALHADORES = (
+    "id,nome,cpf,matricula,dataAdmissao,codigoExterno,ativo,"
+    "ocupacaoProjeto.descricao,ocupacaoProjeto.projeto.nome"
+)
 FIELDS_EXAMES = (
     "id,tipoExameString,dataAso,dataVencimentoAso,resultadoAso,situacao,"
     "ativo,trabalhador.id,trabalhador.nome,trabalhador.cpf"
@@ -595,6 +602,10 @@ class OnsafetyClient(IntegrationClient):
             "data_admissao": _date10(raw.get("dataAdmissao")),
             "codigo_externo": raw.get("codigoExterno"),
             "ativo": raw.get("ativo"),
+            "cargo": (raw.get("ocupacaoProjeto") or {}).get("descricao"),
+            "obra": (
+                (raw.get("ocupacaoProjeto") or {}).get("projeto") or {}
+            ).get("nome"),
         }
 
     @staticmethod
@@ -808,6 +819,8 @@ class OnsafetyClient(IntegrationClient):
                 "matricula": f"MAT{1000 + i}",
                 "data_admissao": f"202{i % 5}-{1 + (idx % 12):02d}-15",
                 "codigo_externo": None,
+                "cargo": ["Operador", "Vigia", "Ajudante Geral"][i % 3],
+                "obra": f"ZAG - OBRA {240 + (i % 3)} - TESTE",
                 "ativo": i % 5 != 4,  # ~80% ativos
             }
         if recurso == "exames":
