@@ -22,7 +22,7 @@ import pytest
 _RAIZ = Path(__file__).resolve().parents[3]
 _DOCKERFILE_API = _RAIZ / "apps" / "api" / "Dockerfile"
 _DOCKERFILE_UNICA = _RAIZ / "Dockerfile.allinone"
-_START = _RAIZ / "infra" / "start-allinone.sh"
+_START = _RAIZ / "start-allinone.sh"
 _RAILWAY_RAIZ = _RAIZ / "railway.json"
 _COMPOSES = (
     _RAIZ / "infra" / "docker-compose.yml",
@@ -109,17 +109,24 @@ def test_start_evita_colisao_de_porta():
     assert 'if [ "$WEB_PORT" = "$API_PORT" ]' in conteudo
 
 
-def test_dockerignore_deixa_o_start_script_entrar():
-    """`infra` e ignorado no contexto, mas o COPY do script precisa
-    dele -- a negacao tem que vir DEPOIS da regra que exclui."""
+def test_start_script_fora_de_diretorio_ignorado():
+    """O script MOROU em `infra/` (ignorado no contexto) e era
+    reincluido com `!infra/start-allinone.sh`. Em 11/09/2026 o build
+    serviu uma versao DEFASADA dele: o bloco novo simplesmente nao
+    executava, sem erro nenhum -- reinclusao de arquivo dentro de
+    diretorio excluido nao e confiavel. Ele vive na raiz agora.
+    """
+    assert _START.exists(), "start-allinone.sh precisa estar na raiz"
     linhas = [
         ln.strip()
         for ln in (_RAIZ / ".dockerignore").read_text().splitlines()
         if ln.strip() and not ln.strip().startswith("#")
     ]
     assert "infra" in linhas
-    assert "!infra/start-allinone.sh" in linhas
-    assert linhas.index("infra") < linhas.index("!infra/start-allinone.sh")
+    assert not [ln for ln in linhas if ln.startswith("!")], (
+        "sem negacoes no .dockerignore -- foi o que escondeu o bug"
+    )
+    assert "start-allinone.sh" not in linhas
 
 
 # --- imagem da API (compose / VPS) -----------------------------------

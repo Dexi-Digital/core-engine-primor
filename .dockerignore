@@ -44,10 +44,13 @@
 
 # Nao servem ao runtime do worker
 docs
+# `infra` inteiro fica de fora. O start script da imagem unica MOROU
+# aqui e era reincluido com `!infra/start-allinone.sh` -- mas a
+# reinclusao de arquivo dentro de diretorio excluido nao e confiavel:
+# em 11/09/2026 o build serviu uma versao DEFASADA do script (o bloco
+# novo simplesmente nao executava, sem erro nenhum). Por isso ele
+# passou a morar na raiz.
 infra
-# ...mas o start script da imagem unica precisa entrar (COPY em
-# Dockerfile.allinone). Negacao vem DEPOIS da regra que exclui.
-!infra/start-allinone.sh
 scripts
 **/tests
 **/test_*.py

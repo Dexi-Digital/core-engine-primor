@@ -58,7 +58,7 @@ COPY --from=web-builder /web/.next/standalone ./web/
 COPY --from=web-builder /web/.next/static ./web/.next/static
 COPY --from=web-builder /web/public ./web/public
 
-COPY infra/start-allinone.sh /usr/local/bin/start-allinone
+COPY start-allinone.sh /usr/local/bin/start-allinone
 RUN chmod +x /usr/local/bin/start-allinone
 
 CMD ["start-allinone"]
