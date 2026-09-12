@@ -27,7 +27,7 @@ cobrado** — dá para desligar entre demos.
 
 ## Imagem única (1 serviço) — caminho da demo
 
-`Dockerfile.allinone` + `infra/start-allinone.sh` põem **migrations, API e
+`Dockerfile.allinone` + `start-allinone.sh` (na raiz) põem **migrations, API e
 web no mesmo container**. O `railway.json` da raiz aponta para ele, então o
 serviço sobe **sem configurar Root Directory nem Config File**.
 
@@ -36,6 +36,12 @@ Funciona sem CORS e sem mudar código porque **o front é server-side**:
 Handlers, e o navegador só chama rotas do próprio Next (`/m/api/...`). Quem
 fala com a API é o Node, de dentro do container — por isso
 `NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8000` (inlined no build) resolve.
+
+> **Por que o script fica na raiz, e não em `infra/`:** `infra` é ignorado no
+> contexto de build. Reincluí-lo com `!infra/start-allinone.sh` parecia
+> funcionar — mas em 11/09/2026 o build serviu uma versão **defasada** do
+> script: o bloco novo simplesmente não executava, sem erro nenhum.
+> Reinclusão de arquivo dentro de diretório excluído não é confiável.
 
 As migrations rodam no start, antes de qualquer processo aceitar tráfego, e
 falha derruba o boot — foi o que faltava quando a API subiu com
