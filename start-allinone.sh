@@ -38,6 +38,14 @@ if [ "${IMPORT_ONSAFETY:-}" = "1" ] || [ "${IMPORT_ONSAFETY:-}" = "true" ]; then
   echo "[start] import OK"
 fi
 
+# Pull SST sob demanda (mesma operacao do cron das 07h30). Opt-in:
+# com token de producao grava DADO DE SAUDE vinculado a pessoas reais.
+if [ "${PULL_ONSAFETY:-}" = "1" ] || [ "${PULL_ONSAFETY:-}" = "true" ]; then
+  echo "[start] PULL_ONSAFETY ligado -- puxando ASO/EPI/treinamentos..."
+  python -m scripts.pull_onsafety
+  echo "[start] pull OK"
+fi
+
 echo "[start] API em 127.0.0.1:${API_PORT}"
 uvicorn app.main:app --host 127.0.0.1 --port "$API_PORT" &
 api_pid=$!

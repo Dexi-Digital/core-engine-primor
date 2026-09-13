@@ -101,6 +101,23 @@ def test_seed_e_opt_in_e_roda_depois_das_migrations():
     assert pos_alembic < pos_seed < pos_uvicorn
 
 
+def test_pull_e_import_sao_opt_in_e_rodam_depois_das_migrations():
+    """As duas operacoes gravam dado REAL quando o token e de producao
+    (cadastro de pessoas e ASO, que e dado de saude). Nenhuma pode
+    disparar sozinha, e ambas dependem do schema ja existir."""
+    conteudo = _START.read_text()
+    pos_alembic = conteudo.find("alembic upgrade head")
+    for flag, modulo in (
+        ("IMPORT_ONSAFETY", "scripts.import_trabalhadores_onsafety"),
+        ("PULL_ONSAFETY", "scripts.pull_onsafety"),
+    ):
+        assert flag in conteudo, flag
+        pos = conteudo.find(modulo)
+        assert pos != -1, modulo
+        assert pos_alembic < pos, f"{modulo} antes das migrations"
+        assert pos < conteudo.find("uvicorn"), f"{modulo} depois da API"
+
+
 def test_start_evita_colisao_de_porta():
     """A API interna usa 8000. Se `PORT=8000` sobrar de uma config
     antiga, os dois processos disputariam a mesma porta."""
