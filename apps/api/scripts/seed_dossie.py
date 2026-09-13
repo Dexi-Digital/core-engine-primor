@@ -49,6 +49,10 @@ import app.modules.licitacoes.models  # noqa: F401
 import app.modules.manutencao_frota.models  # noqa: F401
 import app.modules.obras.models  # noqa: F401
 import app.modules.onedrive_sync.models  # noqa: F401
+
+# Registra TODOS os models: sem isso o SQLAlchemy nao resolve as
+# FKs entre tabelas de modulos nao importados (ver docstring).
+from app.core import models_registry as _models  # noqa: F401
 from app.core.db import SessionLocal
 from app.modules.dp_sesmt.models import (
     STATUS_AFASTADO,

@@ -17,6 +17,21 @@ if [ "$WEB_PORT" = "$API_PORT" ]; then
   WEB_PORT=3000
 fi
 
+# Operacao auxiliar: falha e ALTA no log mas NAO derruba o container.
+# Em 13/09/2026 o pull quebrou por FK nao resolvida e o `set -e` levou
+# o site inteiro junto (502). Seed, import e pull sao acessorios --
+# quem nao pode falhar e a migration, que fica fora daqui.
+auxiliar() {
+  local nome="$1"; shift
+  if "$@"; then
+    echo "[start] ${nome} OK"
+  else
+    local code=$?
+    echo "[start] AVISO: ${nome} FALHOU (exit ${code}) -- a aplicacao sobe" >&2
+    echo "[start] AVISO: corrija e rode de novo; nada foi interrompido" >&2
+  fi
+}
+
 echo "[start] aplicando migrations (alembic upgrade head)..."
 alembic upgrade head
 echo "[start] migrations OK"
@@ -25,8 +40,7 @@ echo "[start] migrations OK"
 # natural), entao pode ficar ligado entre deploys sem duplicar.
 if [ "${SEED_DEMO:-}" = "1" ] || [ "${SEED_DEMO:-}" = "true" ]; then
   echo "[start] SEED_DEMO ligado -- populando dados de demonstracao..."
-  python -m scripts.seed_dossie
-  echo "[start] seed OK"
+  auxiliar "seed" python -m scripts.seed_dossie
 fi
 
 # Importacao do cadastro real da OnSafety. Opt-in e idempotente, mas
@@ -34,16 +48,14 @@ fi
 # roda sozinha.
 if [ "${IMPORT_ONSAFETY:-}" = "1" ] || [ "${IMPORT_ONSAFETY:-}" = "true" ]; then
   echo "[start] IMPORT_ONSAFETY ligado -- importando cadastro de trabalhadores..."
-  python -m scripts.import_trabalhadores_onsafety
-  echo "[start] import OK"
+  auxiliar "import" python -m scripts.import_trabalhadores_onsafety
 fi
 
 # Pull SST sob demanda (mesma operacao do cron das 07h30). Opt-in:
 # com token de producao grava DADO DE SAUDE vinculado a pessoas reais.
 if [ "${PULL_ONSAFETY:-}" = "1" ] || [ "${PULL_ONSAFETY:-}" = "true" ]; then
   echo "[start] PULL_ONSAFETY ligado -- puxando ASO/EPI/treinamentos..."
-  python -m scripts.pull_onsafety
-  echo "[start] pull OK"
+  auxiliar "pull" python -m scripts.pull_onsafety
 fi
 
 echo "[start] API em 127.0.0.1:${API_PORT}"
