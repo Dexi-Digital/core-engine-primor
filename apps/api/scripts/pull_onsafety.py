@@ -18,6 +18,9 @@ from dataclasses import asdict
 
 import structlog
 
+# Registra TODOS os models: sem isso o SQLAlchemy nao resolve as
+# FKs entre tabelas de modulos nao importados (ver docstring).
+from app.core import models_registry as _models  # noqa: F401
 from app.core.config import get_settings
 from app.core.db import SessionLocal
 from app.integrations.onsafety.client import OnsafetyClient
