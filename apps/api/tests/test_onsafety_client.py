@@ -593,3 +593,42 @@ async def test_mock_cpfs_cruzam_entre_datasets():
         res = await chamada(page=0, size=100)
         cpfs = {i["trabalhador"]["cpf"] for i in res["items"]}
         assert cpfs and cpfs <= base, chamada.__name__
+
+
+# --- validade do EPI vem em BR (medido na base real, 16/09/2026) -----
+
+
+def test_validade_epi_converte_formato_br():
+    """`validade` de `/v2/controles_epi` e string LIVRE no spec e vem
+    em BR na base real ("14/03/2027") -- 0 de 110 valores preenchidos
+    estavam em ISO.
+
+    Sem converter, os 5.558 documentos de EPI entram SEM validade, e o
+    diagnostico le validade nula como "perene -> conforme": ficha
+    vencida aparecendo como OK.
+    """
+    from app.integrations.onsafety.client import _date10_br_ou_iso
+
+    assert _date10_br_ou_iso("14/03/2027") == "2027-03-14"
+    assert _date10_br_ou_iso("09/01/2028") == "2028-01-09"
+    # ISO continua funcionando
+    assert _date10_br_ou_iso("2027-03-14") == "2027-03-14"
+    assert _date10_br_ou_iso("2027-03-14T00:00:00.000-0300") == "2027-03-14"
+    assert _date10_br_ou_iso(None) is None
+    assert _date10_br_ou_iso("") is None
+    # Lixo NAO vira None: passa adiante para o `datas_invalidas` do
+    # pull continuar enxergando o problema em vez de engolir.
+    assert _date10_br_ou_iso("sem data") == "sem data"
+
+
+@pytest.mark.asyncio
+async def test_mock_epi_entrega_validade_ja_em_iso():
+    """O mock guarda o formato BR da origem, mas o adapter entrega ISO
+    -- e o que o pull consome."""
+    c = OnsafetyClient(api_token=None)
+    epis = await c.list_controles_epi(page=0, size=100)
+    validades = [i["validade"] for i in epis["items"] if i.get("validade")]
+    assert validades
+    assert all(
+        v[:4].isdigit() and v[4] == "-" for v in validades
+    ), f"esperado ISO, veio {validades[:3]}"
