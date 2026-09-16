@@ -54,6 +54,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -137,6 +138,31 @@ def _date10(value: Any) -> str | None:
     if not value or not isinstance(value, str):
         return None
     return value[:10]
+
+
+_RE_DATA_BR = re.compile(r"^(\d{2})/(\d{2})/(\d{4})")
+
+
+def _date10_br_ou_iso(value: Any) -> str | None:
+    """Como `_date10`, mas aceita tambem o formato BR (DD/MM/AAAA).
+
+    O `validade` de `/v2/controles_epi` e string LIVRE no spec (nao
+    date-time) e vem em BR na base real: "14/03/2027". Medido em
+    16/09/2026 -- 0 de 110 valores preenchidos estavam em ISO.
+
+    Sem esta conversao os 5.558 documentos de EPI entravam SEM
+    validade, e o diagnostico documental le validade nula como
+    "documento perene -> conforme". Ou seja: ficha de EPI vencida
+    aparecendo como OK, exatamente o falso-conforme que as NRs tomam o
+    cuidado de evitar.
+    """
+    if not value or not isinstance(value, str):
+        return None
+    achado = _RE_DATA_BR.match(value.strip())
+    if achado:
+        dia, mes, ano = achado.groups()
+        return f"{ano}-{mes}-{dia}"
+    return _date10(value)
 
 
 class OnsafetyError(RuntimeError):
@@ -641,7 +667,9 @@ class OnsafetyClient(IntegrationClient):
             "nome_equipamento": raw.get("nomeEquipamento"),
             "ca": raw.get("ca"),
             "quantidade": raw.get("quantidade"),
-            "validade": raw.get("validade"),
+            # String LIVRE no spec e em BR na base real -- ver
+            # `_date10_br_ou_iso`.
+            "validade": _date10_br_ou_iso(raw.get("validade")),
             "previsao_devolucao": _date10(raw.get("previsaoDevolucao")),
             "data_devolucao": _date10(raw.get("dataDevolucao")),
             "status_entrega": raw.get("statusEntrega"),
@@ -850,7 +878,9 @@ class OnsafetyClient(IntegrationClient):
                 "nome_equipamento": equipamentos[i % len(equipamentos)],
                 "ca": 10000 + idx * 37,
                 "quantidade": 1 + (idx % 3),
-                "validade": f"2026-{1 + (idx % 12):02d}-05",
+                # BR de proposito: e o formato da base real, e o mock
+                # so serve se reproduzir o que quebra em producao.
+                "validade": _date10_br_ou_iso(f"05/{1 + (idx % 12):02d}/2026"),
                 "previsao_devolucao": None,
                 "data_devolucao": None,
                 "status_entrega": "ENTREGUE",
