@@ -866,15 +866,24 @@ async def create_parte_diaria_manual(
     return parte, True
 
 
-# Janela do gatilho de manutencao preventiva. 250h e padrao de OEM
-# (CAT/Komatsu/Volvo) para troca de oleo motor de equipamento pesado.
-MANUTENCAO_PREVENTIVA_HORAS_INTERVALO = Decimal("250")
+# Gatilhos de manutencao preventiva -- REGRA DO CLIENTE, nao padrao de
+# OEM. Informada pelo Bruno (responsavel pela frota da PRIMOR) em
+# 11/09/2026: "Por ex caminhoes e carro 3000km / Maquinas 50 hrs".
+#
+# O valor anterior aqui era 250h, tirado do padrao CAT/Komatsu/Volvo de
+# troca de oleo -- suposicao razoavel enquanto o requisito nao existia,
+# mas 5x mais tarde do que a regra real. E nao havia gatilho por
+# QUILOMETRAGEM nenhum, ou seja, caminhao e carro (que a frota mede em
+# km) nunca geravam alerta.
+MANUTENCAO_PREVENTIVA_HORAS_INTERVALO = Decimal("50")
+MANUTENCAO_PREVENTIVA_KM_INTERVALO = 3000
 
 
 def calcular_consumo_parte_diaria(
     parte: ParteDiaria,
     *,
     horimetro_anterior: Decimal | None = None,
+    km_anterior: int | None = None,
 ) -> dict[str, Any]:
     """Deriva metricas de consumo a partir dos campos brutos da parte.
 
@@ -883,10 +892,16 @@ def calcular_consumo_parte_diaria(
     independente: ausencia de combustivel zera so o consumo, nao
     invalida horas_trabalhadas.
 
-    `horimetro_anterior` e o `horimetro_fim` do ultimo apontamento
-    do mesmo veiculo -- usado para detectar travessia de multiplo de
-    250h (gatilho de manutencao preventiva). Se None, nao dispara
-    alerta (primeira parte ou veiculo sem historico).
+    `horimetro_anterior` e `km_anterior` sao os valores finais do
+    ultimo apontamento do mesmo veiculo -- usados para detectar
+    travessia de multiplo de 50h (maquinas) ou 3.000 km (caminhoes e
+    carros), os gatilhos de manutencao preventiva informados pelo
+    cliente. Se ambos None, nao dispara alerta (primeira parte ou
+    veiculo sem historico).
+
+    Os dois gatilhos coexistem porque a frota e mista: maquina tem
+    horimetro, caminhao tem odometro, e alguns equipamentos registram
+    os dois.
     """
     horas: Decimal | None = None
     km_rodados: int | None = None
@@ -928,18 +943,32 @@ def calcular_consumo_parte_diaria(
     ):
         custo_h = (parte.combustivel_custo / horas).quantize(Decimal("0.01"))
 
+    # Maquinas: cruzou multiplo de 50h desde o ultimo apontamento?
     if (
         horimetro_anterior is not None
         and parte.horimetro_fim is not None
         and parte.horimetro_fim > horimetro_anterior
     ):
-        # Cruzou um multiplo de 250h desde o ultimo apontamento?
         marco_anterior = (
             horimetro_anterior // MANUTENCAO_PREVENTIVA_HORAS_INTERVALO
         )
-        marco_atual = parte.horimetro_fim // MANUTENCAO_PREVENTIVA_HORAS_INTERVALO
+        marco_atual = (
+            parte.horimetro_fim // MANUTENCAO_PREVENTIVA_HORAS_INTERVALO
+        )
         if marco_atual > marco_anterior:
             alerta = True
+
+    # Caminhoes e carros: cruzou multiplo de 3.000 km?
+    if (
+        km_anterior is not None
+        and parte.km_fim is not None
+        and parte.km_fim > km_anterior
+        and (
+            parte.km_fim // MANUTENCAO_PREVENTIVA_KM_INTERVALO
+            > km_anterior // MANUTENCAO_PREVENTIVA_KM_INTERVALO
+        )
+    ):
+        alerta = True
 
     return {
         "parte_diaria_id": parte.id,
@@ -961,21 +990,30 @@ async def get_consumo_parte_diaria(
         return None
 
     horim_anterior: Decimal | None = None
+    km_anterior: int | None = None
     if parte.veiculo_id is not None and parte.data is not None:
         # Ultimo horimetro_fim antes desta data, para o mesmo veiculo.
         # Trabalhamos so com partes ja revisadas (ocr_status='revisado'
         # ou 'processado') -- pendentes/erro nao contam para gatilho.
         res = await db.execute(
-            select(ParteDiaria.horimetro_fim)
+            select(ParteDiaria.horimetro_fim, ParteDiaria.km_fim)
             .where(ParteDiaria.veiculo_id == parte.veiculo_id)
             .where(ParteDiaria.id != parte.id)
-            .where(ParteDiaria.horimetro_fim.is_not(None))
+            # Serve como predecessora quem tem horimetro OU km -- a
+            # frota e mista, e exigir horimetro descartaria os
+            # caminhoes, que so registram odometro.
+            .where(
+                or_(
+                    ParteDiaria.horimetro_fim.is_not(None),
+                    ParteDiaria.km_fim.is_not(None),
+                )
+            )
             .where(ParteDiaria.data.is_not(None))
             # Predecessora = quem veio ANTES no tempo, ordem
             # lexicografica (data, id). Aceitamos same-day se
             # tiver id menor (manha precede tarde) -- sem isso,
-            # tarde acha predecessora 2 dias antes e gatilho de
-            # 250h dispara duas vezes. Mas NAO aceitamos same-day
+            # tarde acha predecessora 2 dias antes e gatilho
+            # preventivo dispara duas vezes. Mas NAO aceitamos same-day
             # com id maior -- senao manha pegaria tarde como
             # predecessora (que existe so porque inserimos
             # primeiro a manha) e horimetro_anterior ficaria
@@ -990,22 +1028,26 @@ async def get_consumo_parte_diaria(
                 )
             )
             # Pendente/erro tem horimetro_fim cru de OCR ainda nao
-            # validado -- usar isso como base do gatilho de 250h
+            # validado -- usar isso como base do gatilho preventivo
             # geraria alerta espurio (ou perderia um real). So
             # contam revisado/processado.
             .where(ParteDiaria.ocr_status.in_([PARTE_REVISADO, PARTE_PROCESSADO]))
             # Tiebreaker por id quando ha varias partes na mesma
             # data (ex.: turno manha + tarde). Sem isso, o DB
-            # poderia escolher qualquer uma e o gatilho de 250h
-            # ficaria nao-deterministico.
+            # poderia escolher qualquer uma e o gatilho
+            # preventivo ficaria nao-deterministico.
             .order_by(ParteDiaria.data.desc(), ParteDiaria.id.desc())
             .limit(1)
         )
-        row = res.scalar_one_or_none()
+        row = res.one_or_none()
         if row is not None:
-            horim_anterior = row
+            horim_anterior, km_anterior = row
 
-    return calcular_consumo_parte_diaria(parte, horimetro_anterior=horim_anterior)
+    return calcular_consumo_parte_diaria(
+        parte,
+        horimetro_anterior=horim_anterior,
+        km_anterior=km_anterior,
+    )
 
 
 async def mark_parte_diaria_erro(
