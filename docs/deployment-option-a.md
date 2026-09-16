@@ -14,7 +14,7 @@ MinIO, sem volume persistente para anexos.
 | Processo | CPU | RAM | Notas |
 |---|---|---|---|
 | `api` (FastAPI/uvicorn) | 2 vCPU | 2 GB | 1 instancia |
-| `workers` (Celery + beat embutido) | 2 vCPU | 2 GB | 1 instancia. **Nao escale para >1**: o `-B` (beat) duplicaria os 5 cron jobs |
+| `workers` (Celery + beat embutido) | 2 vCPU | 2 GB | 1 instancia. **Nao escale para >1**: o `-B` (beat) duplicaria os cron jobs. O `--concurrency=2` no CMD tambem e obrigatorio: sem ele o Celery forka 1 processo por CPU da maquina (no Railway deu 48) e o container morre por memoria antes de ficar pronto |
 | `web` (Next.js standalone) | 1 vCPU | 1 GB | Pode ir pra Vercel free/pro tambem |
 | Postgres managed | 2 vCPU | 4 GB | 25 GB SSD, extensao `pg_trgm` habilitada |
 | Redis managed | — | 256 MB | broker Celery + cache |

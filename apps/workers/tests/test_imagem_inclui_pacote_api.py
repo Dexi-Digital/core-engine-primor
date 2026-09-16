@@ -110,3 +110,28 @@ def test_dockerignore_da_raiz_existe_e_corta_o_peso():
     conteudo = ignore.read_text()
     for padrao in (".venv", "node_modules", ".git"):
         assert padrao in conteudo, f"{padrao} deveria estar no .dockerignore"
+
+
+# --- concorrencia do Celery (incidente 16/09/2026) -------------------
+
+
+def test_worker_limita_concurrency():
+    """Sem `--concurrency`, o Celery forka UM PROCESSO POR CPU.
+
+    No Railway isso deu `concurrency: 48` -- ~48 x 100 MB -- e o
+    container era morto por memoria ANTES de ficar pronto: 9 tentativas
+    em 18 segundos, sem traceback nenhum (SIGKILL nao deixa rastro), e
+    os 11 crons simplesmente nunca rodaram.
+
+    O sintoma e traicoeiro porque o log parece saudavel: o banner do
+    Celery imprime tudo, inclusive a lista de tasks, e so nao aparece o
+    `ready.`
+    """
+    import re
+
+    conteudo = _DOCKERFILE.read_text()
+    achado = re.search(r"--concurrency=(\d+)", conteudo)
+    assert achado, "sem --concurrency o Celery usa o numero de CPUs da maquina"
+    assert 1 <= int(achado.group(1)) <= 8, (
+        "concorrencia alta demais para a carga (11 crons espacados)"
+    )

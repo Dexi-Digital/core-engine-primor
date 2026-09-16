@@ -45,4 +45,11 @@ RUN pip install --upgrade pip \
 # evitar duplicar cron jobs). `-s /tmp/celerybeat-schedule` mantem o
 # schedule file em tmpfs (ok porque o conteudo e regenerado a cada
 # boot a partir do `celery_app.conf.beat_schedule`).
-CMD ["celery", "-A", "worker.main.celery_app", "worker", "-B", "-s", "/tmp/celerybeat-schedule", "--loglevel=info", "-Q", "default,dp_sesmt,manutencao,financeiro,licitacoes,ia"]
+# `--concurrency=2` NAO e ajuste fino: sem ele o Celery forka um
+# processo por CPU da maquina. No Railway isso deu `concurrency: 48`,
+# ~48 x 100 MB, e o container era morto por memoria ANTES de ficar
+# pronto -- 9 tentativas em 18 segundos, sem traceback (SIGKILL nao
+# deixa rastro). Medido em 16/09/2026.
+#
+# 2 basta: a carga sao 11 crons espacados, nao fila de alto volume.
+CMD ["celery", "-A", "worker.main.celery_app", "worker", "-B", "-s", "/tmp/celerybeat-schedule", "--loglevel=info", "--concurrency=2", "-Q", "default,dp_sesmt,manutencao,financeiro,licitacoes,ia"]
