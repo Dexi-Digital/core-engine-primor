@@ -9,12 +9,43 @@ export default function ManutencaoPage() {
         title="Manutenção & Frota"
         backendPath="/api/v1/manutencao-frota"
         scope={[
-          "Cadastro de veículos com validação local (placa Mercosul/antiga, Renavam DV, chassi ISO 3779).",
-          "OCR de partes diárias manuscritas (fotos de campo).",
-          "Cruzamento telemetria × NF (combustível, locação, descontos em medição).",
-          "RPA despachante: IPVA, CRLV, certidões negativas, multas.",
-          "Integração com Sistema 90 para apropriação de custo por equipamento.",
-          "Alertas preventivos por horas/km e plano de manutenção.",
+          {
+            label:
+              "Cadastro de veículos com validação local (placa Mercosul/antiga, Renavam DV, chassi ISO 3779).",
+            status: "pronto",
+          },
+          {
+            label: "OCR de partes diárias manuscritas (fotos de campo).",
+            status: "mock",
+            nota: "Pipeline pronto; falta a credencial do Google Document AI.",
+          },
+          {
+            label: "Alertas preventivos por horas/km.",
+            status: "pronto",
+            nota: "Regra do cliente: 50h para máquinas, 3.000 km para caminhões e carros.",
+          },
+          {
+            label: "Plano de manutenção (revisões programadas por equipamento).",
+            status: "nao_iniciado",
+            nota: "Hoje vive na planilha do SharePoint (documentos → controle de revisões).",
+          },
+          {
+            label: "Consulta de IPVA, CRLV e multas.",
+            status: "mock",
+            nota: "Via Detran/Infosimples; falta o token. Resolve a multa que chega fora do prazo de identificação.",
+          },
+          {
+            label:
+              "Integração com Sistema 90 para apropriação de custo por equipamento.",
+            status: "nao_iniciado",
+            nota: "Adapter é stub; falta acesso e documentação da API.",
+          },
+          {
+            label:
+              "Cruzamento telemetria × NF (combustível, locação, descontos em medição).",
+            status: "nao_iniciado",
+            nota: "Falta definir a origem da telemetria.",
+          },
         ]}
       />
       <nav className="flex flex-wrap gap-3">
