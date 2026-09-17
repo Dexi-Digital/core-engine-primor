@@ -1100,3 +1100,45 @@ TOTVS_CONSULTASQL_COD_SISTEMA=F
 TOTVS_CONSULTASQL_COD_COLIGADA=<coligada da Primor>
 TOTVS_COLIGADAS_ESPERADAS=<lista das coligadas, ex.: 1,2>
 ```
+
+
+---
+
+## EasyJur — jurídico (adapter pronto, aguardando credencial válida)
+
+**Adapter:** `app/integrations/easyjur/client.py`
+
+**Não é RPA de navegador.** A ideia inicial era dirigir o Chromium, mas a
+inspeção do login (17/09/2026) mostrou algo melhor: o formulário é
+interceptado por jQuery e faz `POST /acesso/api/login.php`, devolvendo
+**JSON estruturado**. Sem captcha e sem segundo fator.
+
+Isso permite falar HTTP direto, como os demais adapters — sem Chromium
+(+400 MB na imagem), sem serviço separado e sem quebrar a cada mudança de
+layout. Um robô de tela seria pior em todos os eixos.
+
+| Item | Valor |
+|---|---|
+| Base | `https://app.easyjur.com` |
+| Login | `POST /acesso/api/login.php` com `email` e `password` |
+| Sessão | cookie `PHPSESSID` |
+| Resposta | JSON: `{"status": 200}` ou `{"status": 400, "erros": {...}}` |
+
+**⚠️ O login bloqueia a conta após 5 tentativas consecutivas erradas**, e a
+resposta informa quantas restam (`tentativas_restantes`, contadas por email
+**e** por IP — vale o menor). O adapter guarda esse contador e **se recusa a
+tentar** quando resta 1, levantando `EasyjurBloqueioIminenteError`. Melhor
+falhar dizendo "não vou tentar" do que bloquear a conta de quem usa o sistema
+para trabalhar. Pelo mesmo motivo, o `health_check` **não autentica**.
+
+**Estado em 17/09/2026:** a senha fornecida foi **recusada** pelo servidor
+(`"Você digitou a senha incorreta"`), com 4 tentativas restantes. Não há hash
+no cliente — a senha vai em texto puro, exatamente como enviada. Hipótese mais
+provável: a conta entra pelo **login do Google** (a página carrega
+`accounts.google.com/gsi/client` e existe `api/login_google.php`), caso em que
+não há senha a usar por aqui.
+
+| Variável | Obrigatória | Descrição |
+|---|---|---|
+| `EASYJUR_EMAIL` | opcional | Sem ela o adapter não autentica. |
+| `EASYJUR_PASSWORD` | opcional | Idem. Guardar em gerenciador de segredos. |
