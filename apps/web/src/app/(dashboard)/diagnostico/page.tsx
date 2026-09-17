@@ -3,6 +3,13 @@ import Link from "next/link";
 
 import { apiFetch } from "@/lib/api";
 
+type VersaoServicos = {
+  api_fingerprint: string;
+  worker_fingerprint: string | null;
+  worker_boot_em: string | null;
+  em_sincronia: boolean | null;
+};
+
 type DiagnosticoRun = {
   id: number;
   started_at: string;
@@ -101,16 +108,54 @@ function pctConformidade(run: DiagnosticoRun): number {
   return Math.round((run.ok_count / run.total_findings) * 100);
 }
 
+async function fetchVersao(): Promise<VersaoServicos | null> {
+  try {
+    return await apiFetch<VersaoServicos>("/api/v1/observability/versao");
+  } catch {
+    // Diagnostico de infraestrutura nao pode derrubar a pagina.
+    return null;
+  }
+}
+
 export default async function DiagnosticoPage() {
-  const [runs, oneDriveRuns] = await Promise.all([
+  const [runs, oneDriveRuns, versao] = await Promise.all([
     fetchRuns(),
     fetchOneDriveRuns(),
+    fetchVersao(),
   ]);
   const lastRun = runs[0];
   const lastOneDriveRun = oneDriveRuns[0];
 
   return (
     <div className="flex flex-col gap-8">
+      {versao && versao.em_sincronia === false ? (
+        <div className="rounded-lg border border-rose-300 bg-rose-50 p-4 text-sm">
+          <p className="font-semibold text-rose-900">
+            API e worker estão em versões diferentes
+          </p>
+          <p className="mt-1 text-rose-800">
+            Os dois rodam o mesmo código-fonte, então um deles não foi
+            reimplantado. Não causa erro — causa comportamento diferente
+            (regras e cálculos divergentes entre a tela e as rotinas
+            automáticas). Reimplante o serviço defasado.
+          </p>
+          <p className="mt-2 font-mono text-xs text-rose-700">
+            API {versao.api_fingerprint} · worker{" "}
+            {versao.worker_fingerprint ?? "—"}
+          </p>
+        </div>
+      ) : null}
+      {versao && versao.em_sincronia === null ? (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 p-4 text-sm">
+          <p className="font-semibold text-amber-900">
+            O worker nunca registrou boot
+          </p>
+          <p className="mt-1 text-amber-800">
+            Sem isso não dá para saber se ele está na mesma versão da API — e
+            as rotinas automáticas (crons) podem não estar rodando.
+          </p>
+        </div>
+      ) : null}
       <header className="flex items-baseline justify-between">
         <div>
           <h1 className="text-2xl font-semibold">Diagnóstico Documental</h1>
