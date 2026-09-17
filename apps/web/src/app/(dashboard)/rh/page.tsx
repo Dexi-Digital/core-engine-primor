@@ -9,16 +9,9 @@ import {
   StatusBadge,
 } from "@/components/ui/primitives";
 import { apiFetch } from "@/lib/api";
-import { SubNav, type SubNavItem } from "@/components/ui/sub-nav";
+import { SubNav } from "@/components/ui/sub-nav";
+import { RH_SUBNAV } from "./subnav";
 
-// Mesmas secoes da tela de Ponto -- manter as duas listas em sincronia.
-const RH_SUBNAV: SubNavItem[] = [
-  { href: "/rh", label: "Visão geral" },
-  { href: "/rh/funcionarios", label: "Funcionários" },
-  { href: "/rh/equipe-administrativa", label: "Equipe administrativa" },
-  { href: "/rh/afastamentos", label: "Afastamentos" },
-  { href: "/rh/ponto", label: "Ponto" },
-];
 
 type Employee = {
   id: number;
@@ -101,6 +94,12 @@ export default async function RHPage() {
             label: "Cadastro de funcionários (manual + dossiê via APIs públicas).",
             status: "pronto",
             nota: "930 pessoas reais importadas da OnSafety.",
+          },
+          {
+            label:
+              "Jornada de admissão: verifica pendências, gera o kit para a contabilidade (inclusive em lote por obra) e registra entrega e confirmação.",
+            status: "pronto",
+            nota: "POST /dp-sesmt/onboarding era um stub que descartava o payload; agora abre a jornada de verdade.",
           },
           {
             label: "Acompanhamento de INSS para afastados (alertas e documentos periódicos).",

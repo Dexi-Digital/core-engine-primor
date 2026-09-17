@@ -159,6 +159,12 @@ class Settings(BaseSettings):
     # inteiro, entao o pull pode demorar.
     totvs_pull_lock_ttl_s: int = Field(default=3600)
 
+    # EasyJur (juridico). Vazio -> adapter nao autentica. O login deles
+    # BLOQUEIA a conta apos 5 tentativas consecutivas erradas, entao o
+    # adapter se recusa a tentar perto do limite -- ver client.py.
+    easyjur_email: str | None = Field(default=None)
+    easyjur_password: str | None = Field(default=None)
+
     infosimples_token: str | None = Field(default=None)
     infosimples_base_url: str = Field(default="https://api.infosimples.com")
 

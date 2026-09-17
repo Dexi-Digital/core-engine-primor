@@ -36,15 +36,21 @@ export default function ManutencaoPage() {
           },
           {
             label:
-              "Integração com Sistema 90 para apropriação de custo por equipamento.",
-            status: "nao_iniciado",
-            nota: "Adapter é stub; falta acesso e documentação da API.",
+              "Apropriação e custo por equipamento: consumo (L/h e km/L), custo por hora e por km, e quem está fora da curva da própria frota.",
+            status: "pronto",
+            nota: "Calculado a partir das partes diárias. A referência é a mediana dos equipamentos do mesmo tipo — não um número de catálogo, que ignoraria terreno e operador.",
           },
           {
             label:
-              "Cruzamento telemetria × NF (combustível, locação, descontos em medição).",
-            status: "nao_iniciado",
-            nota: "Falta definir a origem da telemetria.",
+              "Cruzamento do abastecimento apontado × nota fiscal (combustível, locação, descontos em medição).",
+            status: "parcial",
+            nota: "O lado apontado em campo já é lido e comparado entre equipamentos. Falta o lado fiscal: as notas de combustível estão na planilha do SharePoint, ainda sem liberação.",
+          },
+          {
+            label:
+              "Integração com o Sistema 90 como fonte adicional de apropriação.",
+            status: "bloqueado",
+            nota: "O adapter é um stub — nada foi construído. Depende de acesso e documentação da API. O objetivo deste item (custo por equipamento) já é entregue pelas partes diárias, acima.",
           },
         ]}
       />
@@ -54,6 +60,12 @@ export default function ManutencaoPage() {
           className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-400 hover:text-slate-900"
         >
           → Cadastro de veículos
+        </Link>
+        <Link
+          href="/manutencao/custos"
+          className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-400 hover:text-slate-900"
+        >
+          Custo por equipamento
         </Link>
         <Link
           href="/manutencao/partes-diarias"

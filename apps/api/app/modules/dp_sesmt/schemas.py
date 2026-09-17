@@ -376,3 +376,59 @@ class OnboardingSyncRead(BaseModel):
     source: str | None = None
     error_msg: str | None = None
     executed_at: datetime | None = None
+
+
+# --- Jornada de admissao ----------------------------------------------------
+
+
+class AdmissaoJornadaRead(BaseModel):
+    """Estado de uma admissao.
+
+    `pendencias` e `etapa_label` vem calculados: a tela precisa dizer o
+    que falta, e recalcular isso no front duplicaria a regra em dois
+    lugares -- que e como as duas versoes acabam divergindo.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    employee_id: int
+    nome: str | None = None
+    obra: str | None = None
+    etapa: str
+    etapa_label: str | None = None
+    pendencias: list[str] = Field(default_factory=list)
+    kit_path: str | None = None
+    kit_gerado_em: datetime | None = None
+    kit_entregue_em: datetime | None = None
+    kit_entregue_para: str | None = None
+    confirmado_em: datetime | None = None
+    confirmado_por: str | None = None
+    observacoes: str | None = None
+
+
+class AdmissaoAvancarPayload(BaseModel):
+    """`entregue_para` so e usado no salto para `kit_entregue`."""
+
+    entregue_para: str | None = Field(
+        None,
+        max_length=255,
+        description="Quem recebeu o kit (contabilidade/escritorio)",
+    )
+
+
+class AdmissaoCancelarPayload(BaseModel):
+    motivo: str = Field(..., min_length=3, max_length=500)
+
+
+class AdmissaoLoteSummary(BaseModel):
+    """Resultado de um lote por obra.
+
+    `ignoradas` nao e detalhe de log: e a lista de quem ficou de fora e
+    por que. Omitir mandaria a pessoa acreditar que a obra inteira saiu.
+    """
+
+    obra: str
+    incluidas: int
+    ignoradas: list[dict] = Field(default_factory=list)
+    kit_path: str | None = None

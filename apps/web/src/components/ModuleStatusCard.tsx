@@ -14,6 +14,7 @@ export type ItemStatus =
   | "pronto"
   | "parcial"
   | "mock"
+  | "bloqueado"
   | "nao_iniciado"
   | "sem_status";
 
@@ -36,6 +37,14 @@ const ESTILO: Record<ItemStatus, { rotulo: string; classe: string }> = {
   mock: {
     rotulo: "Aguarda credencial",
     classe: "bg-sky-100 text-sky-800",
+  },
+  // Distinto de "nao_iniciado" de proposito: "não iniciado" faz parecer
+  // que a escolha foi nossa. Quando o que falta e acesso, documentacao
+  // ou uma decisao do cliente, dizer isso e mais preciso -- e a nota
+  // continua obrigada a declarar o que existe de codigo.
+  bloqueado: {
+    rotulo: "Depende do cliente",
+    classe: "bg-orange-100 text-orange-800",
   },
   nao_iniciado: {
     rotulo: "Não iniciado",
