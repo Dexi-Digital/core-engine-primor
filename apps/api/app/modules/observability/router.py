@@ -18,12 +18,13 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.db import SessionLocal
+from app.core.db import SessionLocal, get_db
 
 logger = structlog.get_logger(__name__)
 
@@ -248,6 +249,19 @@ async def _check_storage() -> dict[str, Any]:
             "path": str(base),
             "error": str(exc)[:256],
         }
+
+
+@router.get("/versao", response_model=dict)
+async def versao_endpoint(db: AsyncSession = Depends(get_db)) -> dict:
+    """Versao da API x ultimo boot do worker.
+
+    Existe porque a imagem do worker carrega o pacote da API dentro
+    dela: alteracao em `apps/api` exige redeploy dos DOIS servicos, e
+    a defasagem nao produz erro -- so comportamento diferente.
+    """
+    from app.modules.observability.versao import comparar_versoes
+
+    return await comparar_versoes(db)
 
 
 @router.get("/health")

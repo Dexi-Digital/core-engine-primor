@@ -19,6 +19,7 @@ from celery.signals import (
     task_postrun,
     task_prerun,
     worker_process_init,
+    worker_ready,
 )
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
@@ -232,3 +233,40 @@ def _clear_correlation_id_after_task(**_: object) -> None:
     proxima task que rodar no mesmo worker process.
     """
     structlog.contextvars.clear_contextvars()
+
+
+@worker_ready.connect
+def registrar_versao_do_worker(**_kwargs: object) -> None:
+    """Registra no banco a impressao digital do codigo deste worker.
+
+    A imagem do worker carrega o pacote da API dentro dela, entao
+    alteracao em `apps/api` exige redeploy dos DOIS servicos. Quando
+    so um sobe, nada quebra -- os dois apenas passam a rodar regras
+    diferentes, em silencio. Aconteceu em 16/09/2026 com o gatilho de
+    manutencao preventiva (API com 50h, worker com 250h).
+
+    Com o boot registrado, `GET /api/v1/observability/versao` compara
+    e a defasagem fica VISIVEL em vez de depender de alguem lembrar.
+
+    Falha aqui nao derruba o worker: e telemetria, nao funcao.
+    """
+    import asyncio
+
+    async def _registrar() -> None:
+        from app.core.db import SessionLocal
+        from app.core.version import code_fingerprint
+        from app.modules.observability.versao import registrar_boot_worker
+
+        fingerprint = code_fingerprint()
+        async with SessionLocal() as db:
+            await registrar_boot_worker(db, fingerprint=fingerprint)
+        structlog.get_logger(__name__).info(
+            "worker.versao_registrada", fingerprint=fingerprint
+        )
+
+    try:
+        asyncio.run(_registrar())
+    except Exception as exc:  # noqa: BLE001 -- telemetria nao pode derrubar boot
+        structlog.get_logger(__name__).warning(
+            "worker.versao_nao_registrada", erro=str(exc)[:200]
+        )
