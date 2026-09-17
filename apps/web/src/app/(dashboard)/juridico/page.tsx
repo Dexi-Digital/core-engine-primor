@@ -6,10 +6,26 @@ export default function JuridicoPage() {
       title="Jurídico"
       backendPath="/api/v1/ia"
       scope={[
-        "Integração com EasyJur (relatórios e tramitação processual).",
-        "Reconhecimento facial (foto Tangerino × fotos de obra) — prova trabalhista.",
-        "Alertas de vencimento de contratos e locações.",
-        "Auditoria de acesso a documentos sensíveis (LGPD).",
+        {
+          label: "Alertas de vencimento de contratos e locações.",
+          status: "pronto",
+          nota: "Cron diário; vive no módulo Financeiro.",
+        },
+        {
+          label: "Auditoria de acesso a documentos sensíveis (LGPD).",
+          status: "pronto",
+          nota: "Registro por (funcionário, fonte) a cada consulta — 764 registrados no último pull.",
+        },
+        {
+          label: "Integração com EasyJur (relatórios e tramitação processual).",
+          status: "nao_iniciado",
+          nota: "Adapter é stub. API não liberada; avaliando RPA como alternativa.",
+        },
+        {
+          label: "Reconhecimento facial (foto Tangerino × fotos de obra).",
+          status: "nao_iniciado",
+          nota: "A task é stub.",
+        },
       ]}
     />
   );
