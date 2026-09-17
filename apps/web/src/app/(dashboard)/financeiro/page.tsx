@@ -9,11 +9,36 @@ export default function FinanceiroPage() {
         title="Financeiro & Contratos"
         backendPath="/api/v1/financeiro"
         scope={[
-          "Ingestão de NF-e (XML parser + OCR de PDFs) e lançamento no TOTVS.",
-          "Conciliação automática de remessas e retornos bancários.",
-          "Ciclo de contratos (emissão, assinatura digital, AP, alertas de vencimento).",
-          "Encaminhamento de NFs das obras para o financeiro com rastreabilidade.",
-          "Cruzamento combustível × alimentação × aluguel × descontos em medição.",
+          {
+            label: "Ciclo de contratos (cadastro, AP, alertas de vencimento).",
+            status: "pronto",
+            nota: "Assinatura digital ficou fora do escopo por decisão de 04/08/2026.",
+          },
+          {
+            label: "Ingestão de NF-e (parser de XML) e envio à contabilidade.",
+            status: "parcial",
+            nota: "Parser e módulo fiscal prontos (1.894 linhas); envio pelo Onvio autentica, mas ONVIO_ALLOW_SEND está desligado.",
+          },
+          {
+            label: "Lançamentos financeiros do TOTVS RM.",
+            status: "parcial",
+            nota: "Adapter pronto contra mock; falta liberação de portas/IP pelo time Cloud da TOTVS.",
+          },
+          {
+            label: "OCR de PDFs de nota fiscal.",
+            status: "nao_iniciado",
+            nota: "A task de parse é stub.",
+          },
+          {
+            label: "Conciliação automática de remessas e retornos bancários.",
+            status: "nao_iniciado",
+            nota: "A task é stub.",
+          },
+          {
+            label: "Cruzamento combustível × alimentação × aluguel × descontos em medição.",
+            status: "nao_iniciado",
+            nota: "Depende dos percentuais de encargos, ainda não recebidos.",
+          },
         ]}
       />
       <nav className="flex flex-wrap gap-3">

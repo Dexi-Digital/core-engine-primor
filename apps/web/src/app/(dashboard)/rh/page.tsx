@@ -97,11 +97,35 @@ export default async function RHPage() {
         title="RH / DP & SESMT"
         backendPath="/api/v1/dp-sesmt"
         scope={[
-          "Cadastro de funcionarios (manual + dossie via APIs publicas).",
-          "Dossie de admissao (CEP via ViaCEP, CNPJ via BrasilAPI, CPF via DirectData).",
-          "Onboarding sync: push para OnSafety disponivel (mock ate o token de homologacao; escrita em prod bloqueada por guard). Dominio/Onvio/Tangerino aguardando credenciais.",
-          "Varredura documental OCR do OneDrive (ASOs e docs faltantes).",
-          "Acompanhamento de INSS para afastados (alertas e documentos periodicos).",
+          {
+            label: "Cadastro de funcionários (manual + dossiê via APIs públicas).",
+            status: "pronto",
+            nota: "930 pessoas reais importadas da OnSafety.",
+          },
+          {
+            label: "Acompanhamento de INSS para afastados (alertas e documentos periódicos).",
+            status: "pronto",
+          },
+          {
+            label: "Dossiê de admissão (CEP, CNPJ, CPF).",
+            status: "parcial",
+            nota: "ViaCEP e BrasilAPI funcionam (APIs públicas). Consulta de CPF pela DirectData aguarda token.",
+          },
+          {
+            label: "Pull de ASO, EPI e treinamentos da OnSafety.",
+            status: "pronto",
+            nota: "374 ASOs e 5.558 fichas de EPI no ar, com validade.",
+          },
+          {
+            label: "Onboarding sync: push de funcionário para a OnSafety.",
+            status: "parcial",
+            nota: "Código pronto, mas o token é de PRODUÇÃO e a escrita está bloqueada por guard — ligar significa criar trabalhador na base real do cliente.",
+          },
+          {
+            label: "Varredura documental OCR do OneDrive (ASOs e docs faltantes).",
+            status: "nao_iniciado",
+            nota: "A task é stub. O resultado equivalente hoje vem do pull da OnSafety + diagnóstico documental.",
+          },
         ]}
       />
 
