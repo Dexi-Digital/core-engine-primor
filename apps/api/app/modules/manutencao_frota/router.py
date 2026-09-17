@@ -38,7 +38,9 @@ from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.licitacoes.storage import EditaisStorage
 from app.modules.manutencao_frota import custo_equipamento as custo_svc
+from app.modules.manutencao_frota import planos as planos_svc
 from app.modules.manutencao_frota import service
+from app.modules.manutencao_frota.models import PlanoManutencao
 from app.modules.manutencao_frota.schemas import (
     ConsultaDetranListResponse,
     ConsultaDetranRead,
@@ -52,6 +54,10 @@ from app.modules.manutencao_frota.schemas import (
     ParteDiariaManualCreate,
     ParteDiariaRead,
     ParteDiariaUpdate,
+    PlanoManutencaoCreate,
+    PlanoManutencaoRead,
+    PlanoManutencaoUpdate,
+    PlanoRevisaoRegistrar,
     VeiculoCreate,
     VeiculoListResponse,
     VeiculoRead,
@@ -499,7 +505,8 @@ async def get_consumo_parte_diaria_endpoint(
     horas_trabalhadas = horimetro_fim - horimetro_inicio
     consumo_l/h = combustivel_litros / horas_trabalhadas
     consumo_km/l = km_rodados / combustivel_litros
-    alerta_manutencao_preventiva = atravessou multiplo de 250h?
+    alerta_manutencao_preventiva = cruzou 3.000 km / 50 h?
+      (regra do cliente, informada pelo Bruno -- nao padrao OEM)
 
     Calculado on-the-fly -- nao gravado no banco para nao
     inconsistir se operador editar campos depois.
@@ -605,3 +612,87 @@ async def custo_equipamento(
     return await custo_svc.apropriacao_por_equipamento(
         db, inicio=inicio, fim=fim, obra=obra
     )
+
+
+# --- Planos de manutencao (revisoes programadas) ----------------------------
+
+
+async def _get_plano(db: AsyncSession, plano_id: int) -> PlanoManutencao:
+    plano = await db.get(PlanoManutencao, plano_id)
+    if plano is None:
+        raise HTTPException(status_code=404, detail="Plano nao encontrado")
+    return plano
+
+
+@router.get("/planos-manutencao", response_model=dict)
+async def listar_planos(
+    veiculo_id: int | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    """Estado de cada plano, o que vence primeiro no topo.
+
+    Inclui `sem_plano`: equipamento ativo sem plano nenhum. Sem essa
+    lista, "nenhum alerta" seria lido como "tudo em dia".
+    """
+    resultado = await planos_svc.status_dos_planos(db, veiculo_id=veiculo_id)
+    resultado["sem_plano"] = await planos_svc.veiculos_sem_plano(db)
+    return resultado
+
+
+@router.post(
+    "/planos-manutencao", response_model=PlanoManutencaoRead, status_code=201
+)
+async def criar_plano_endpoint(
+    payload: PlanoManutencaoCreate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PlanoManutencaoRead:
+    return PlanoManutencaoRead.model_validate(
+        await planos_svc.criar_plano(
+            db, payload.model_dump(), actor=current_user.email
+        )
+    )
+
+
+@router.patch(
+    "/planos-manutencao/{plano_id}", response_model=PlanoManutencaoRead
+)
+async def atualizar_plano_endpoint(
+    plano_id: int,
+    payload: PlanoManutencaoUpdate,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PlanoManutencaoRead:
+    campos = payload.model_dump(exclude_unset=True)
+    plano = await _get_plano(db, plano_id)
+    return PlanoManutencaoRead.model_validate(
+        await planos_svc.atualizar_plano(
+            db, plano, campos, actor=current_user.email
+        )
+    )
+
+
+@router.post(
+    "/planos-manutencao/{plano_id}/revisao", response_model=PlanoManutencaoRead
+)
+async def registrar_revisao_endpoint(
+    plano_id: int,
+    payload: PlanoRevisaoRegistrar,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> PlanoManutencaoRead:
+    """Registra revisao feita e recomeca a contagem a partir dali."""
+    plano = await _get_plano(db, plano_id)
+    try:
+        plano = await planos_svc.registrar_revisao(
+            db,
+            plano,
+            marcador=payload.marcador,
+            data_revisao=payload.data,
+            observacoes=payload.observacoes,
+            actor=current_user.email,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return PlanoManutencaoRead.model_validate(plano)

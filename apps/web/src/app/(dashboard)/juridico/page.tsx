@@ -18,13 +18,13 @@ export default function JuridicoPage() {
         },
         {
           label: "Integração com EasyJur (relatórios e tramitação processual).",
-          status: "nao_iniciado",
-          nota: "Adapter é stub. API não liberada; avaliando RPA como alternativa.",
+          status: "parcial",
+          nota: "Adapter autentica no sistema real por usuário e senha (a API é paga). Medido em 17/09: 1.974 cadastros de pessoas legíveis e 0 processos na base — confirmar com o cliente se o EasyJur é usado para acompanhamento processual antes de construir o pull.",
         },
         {
           label: "Reconhecimento facial (foto Tangerino × fotos de obra).",
-          status: "nao_iniciado",
-          nota: "A task é stub.",
+          status: "bloqueado",
+          nota: "A task é stub. Biometria é dado pessoal sensível (LGPD art. 11) e exige consentimento específico dos funcionários e base legal definida — precisa de decisão do cliente antes de qualquer código, não de desenvolvimento.",
         },
       ]}
     />

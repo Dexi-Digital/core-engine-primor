@@ -14,6 +14,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     Date,
     DateTime,
     ForeignKey,
@@ -22,6 +23,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -316,3 +318,69 @@ class ParteDiaria(Base):
     )
 
     veiculo: Mapped[Veiculo | None] = relationship(back_populates="partes_diarias")
+
+
+# --- Planos de manutencao (revisoes programadas por equipamento) ------------
+#
+# O gatilho global (`MANUTENCAO_PREVENTIVA_*` no service) responde "cruzou
+# 3.000 km / 50 h?" para a frota inteira. E a regra do Bruno e um bom
+# default, mas plano de manutencao real nao e um numero so: o mesmo
+# equipamento tem troca de oleo num intervalo, filtro noutro, correia
+# noutro. Hoje isso vive na planilha do SharePoint (documentos ->
+# controle de manutencao -> controle de revisoes), fora do sistema.
+
+# Base de contagem do intervalo. A frota e mista: maquina conta hora,
+# caminhao conta quilometro.
+PLANO_BASE_KM = "km"
+PLANO_BASE_HORAS = "horas"
+PLANO_BASES_VALIDAS = frozenset({PLANO_BASE_KM, PLANO_BASE_HORAS})
+
+# Estados derivados -- nunca gravados. Ver `planos.py`.
+PLANO_OK = "ok"
+PLANO_PROXIMA = "proxima"
+PLANO_VENCIDA = "vencida"
+PLANO_SEM_LEITURA = "sem_leitura"
+
+
+class PlanoManutencao(Base):
+    """Uma revisao programada de um equipamento.
+
+    Varias rows por veiculo de proposito: "oleo a cada 250 h" e "filtro
+    a cada 500 h" sao dois planos do mesmo equipamento, com marcadores
+    de ultima execucao independentes.
+
+    `ultima_revisao_marcador` e o horimetro/odometro NO MOMENTO da
+    ultima revisao -- nao a data. Plano de manutencao de equipamento se
+    mede em uso, nao em calendario: uma maquina parada tres meses nao
+    precisa de troca de oleo por causa do tempo.
+    """
+
+    __tablename__ = "frota_planos_manutencao"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    veiculo_id: Mapped[int] = mapped_column(
+        ForeignKey("frota_veiculos.id", ondelete="CASCADE"), index=True
+    )
+    descricao: Mapped[str] = mapped_column(String(200))
+    base: Mapped[str] = mapped_column(String(8), index=True)
+    # Numeric e nao Integer: intervalo em horas pode ser fracionado
+    # (50,5 h), e km cabe inteiro nesse mesmo campo sem perder nada.
+    intervalo: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+
+    ultima_revisao_em: Mapped[date | None] = mapped_column(Date, nullable=True)
+    ultima_revisao_marcador: Mapped[Decimal | None] = mapped_column(
+        Numeric(12, 2), nullable=True
+    )
+    observacoes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    ativo: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true"), index=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    veiculo: Mapped[Veiculo] = relationship()
