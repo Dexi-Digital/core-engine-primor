@@ -558,3 +558,108 @@ class OnboardingSyncRun(Base):
     executed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+# ---------------------------------------------------------------------
+# Jornada de admissao (ADR-003 D4)
+# ---------------------------------------------------------------------
+#
+# O sistema era PASSIVO: CRUD de funcionario, adapters que trazem dado e
+# crons que avisam vencimento. Faltava o que a dor original pedia --
+# conduzir a admissao do inicio ao fim, sabendo em que etapa cada pessoa
+# esta, o que falta e produzindo o artefato que destrava o proximo passo.
+#
+# As etapas NAO sao campo livre de status. Cada avanco exige que os
+# requisitos daquela etapa estejam satisfeitos (ver `admissao.py`): a
+# jornada verifica, nao apenas registra.
+
+ADM_RASCUNHO = "rascunho"
+ADM_DADOS_OK = "dados_ok"
+ADM_DOCS_OK = "documentos_ok"
+ADM_KIT_GERADO = "kit_gerado"
+ADM_KIT_ENTREGUE = "kit_entregue"
+ADM_CONCLUIDA = "concluida"
+ADM_CANCELADA = "cancelada"
+
+ADMISSAO_ETAPAS: tuple[str, ...] = (
+    ADM_RASCUNHO,
+    ADM_DADOS_OK,
+    ADM_DOCS_OK,
+    ADM_KIT_GERADO,
+    ADM_KIT_ENTREGUE,
+    ADM_CONCLUIDA,
+)
+ADMISSAO_ETAPAS_VALIDAS: frozenset[str] = frozenset(
+    ADMISSAO_ETAPAS + (ADM_CANCELADA,)
+)
+
+ADMISSAO_ETAPA_LABELS: dict[str, str] = {
+    ADM_RASCUNHO: "Rascunho",
+    ADM_DADOS_OK: "Dados completos",
+    ADM_DOCS_OK: "Documentos conferidos",
+    ADM_KIT_GERADO: "Kit gerado",
+    ADM_KIT_ENTREGUE: "Kit entregue a contabilidade",
+    ADM_CONCLUIDA: "Concluida",
+    ADM_CANCELADA: "Cancelada",
+}
+
+
+class AdmissaoJornada(Base):
+    """Uma admissao em andamento, com etapa e rastro.
+
+    Uma jornada por funcionario (`employee_id` unico): admitir duas
+    vezes a mesma pessoa e erro de operacao, nao caso de uso.
+
+    `obra` e desnormalizada de proposito -- a geracao do kit e POR OBRA
+    e em LOTE (ADR-003 D4: os picos sao na abertura de frente de obra,
+    uma leva de admissoes na mesma semana). Guardar a obra aqui permite
+    lotear sem depender de o cadastro mudar depois.
+    """
+
+    __tablename__ = "dp_admissao_jornadas"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    employee_id: Mapped[int] = mapped_column(
+        ForeignKey("dp_employees.id", ondelete="CASCADE"),
+        unique=True,
+        index=True,
+    )
+    obra: Mapped[str | None] = mapped_column(
+        String(128), nullable=True, index=True
+    )
+    etapa: Mapped[str] = mapped_column(
+        String(32),
+        default=ADM_RASCUNHO,
+        server_default=ADM_RASCUNHO,
+        index=True,
+    )
+
+    kit_path: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    kit_gerado_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    kit_entregue_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    kit_entregue_para: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+    # Quem confirmou a digitacao no Dominio, e quando. Sem isso a
+    # admissao fica "entregue" para sempre e ninguem sabe se entrou.
+    confirmado_em: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    confirmado_por: Mapped[str | None] = mapped_column(
+        String(255), nullable=True
+    )
+
+    observacoes: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    employee: Mapped[Employee] = relationship()
+

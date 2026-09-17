@@ -6,15 +6,9 @@ import {
   Section,
   StatCard,
 } from "@/components/ui/primitives";
-import { SubNav, type SubNavItem } from "@/components/ui/sub-nav";
+import { SubNav } from "@/components/ui/sub-nav";
+import { RH_SUBNAV } from "../subnav";
 
-const RH_SUBNAV: SubNavItem[] = [
-  { href: "/rh", label: "Visão geral" },
-  { href: "/rh/funcionarios", label: "Funcionários" },
-  { href: "/rh/equipe-administrativa", label: "Equipe administrativa" },
-  { href: "/rh/afastamentos", label: "Afastamentos" },
-  { href: "/rh/ponto", label: "Ponto" },
-];
 
 type Resumo = {
   locais: {

@@ -11,6 +11,8 @@ import os
 from datetime import date as _date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import Response
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
@@ -29,6 +31,7 @@ from app.integrations.viacep.client import (
 )
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
+from app.modules.dp_sesmt import admissao as admissao_svc
 from app.modules.dp_sesmt import afastamentos as afastamentos_svc
 from app.modules.dp_sesmt import onboarding as onboarding_svc
 from app.modules.dp_sesmt import service
@@ -37,7 +40,17 @@ from app.modules.dp_sesmt.afastamentos import (
     compute_pericia_status,
 )
 from app.modules.dp_sesmt.aso_alerts import compute_aso_status
+from app.modules.dp_sesmt.cpf import normalize_cpf
+from app.modules.dp_sesmt.models import (
+    ADMISSAO_ETAPA_LABELS,
+    AdmissaoJornada,
+    Employee,
+)
 from app.modules.dp_sesmt.schemas import (
+    AdmissaoAvancarPayload,
+    AdmissaoCancelarPayload,
+    AdmissaoJornadaRead,
+    AdmissaoLoteSummary,
     AfastamentoCreate,
     AfastamentoRead,
     AfastamentoUpdate,
@@ -65,10 +78,39 @@ async def status() -> ModuleStatus:
     return ModuleStatus(module="dp_sesmt", implemented=True)
 
 
-@router.post("/onboarding", response_model=ModuleStatus)
-async def onboarding(payload: EmployeeOnboardingRequest) -> ModuleStatus:
-    _ = payload
-    return ModuleStatus(module="dp_sesmt", implemented=True, stub=True)
+@router.post("/onboarding", response_model=AdmissaoJornadaRead)
+async def onboarding(
+    payload: EmployeeOnboardingRequest,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> AdmissaoJornadaRead:
+    """Abre (ou recupera) a jornada de admissao de um CPF.
+
+    Era um stub que descartava o payload e respondia `implemented=True`
+    -- a origem concreta de "o sistema e muito passivo". Agora abre a
+    jornada de verdade e ja devolve o que falta para admitir.
+
+    Nao cria o funcionario: o cadastro tem seu proprio endpoint com
+    validacao de CPF e enriquecimento. Aqui exigimos que ele exista,
+    para nao haver dois caminhos de criacao divergindo.
+    """
+    cpf = normalize_cpf(payload.cpf)
+    employee = (
+        await db.execute(select(Employee).where(Employee.cpf == cpf))
+    ).scalar_one_or_none()
+    if employee is None:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Funcionario com CPF {payload.cpf} nao cadastrado. "
+                "Cadastre em POST /dp-sesmt/employees antes de abrir a "
+                "jornada de admissao."
+            ),
+        )
+    jornada = await admissao_svc.iniciar(
+        db, employee, actor=current_user.email
+    )
+    return await _jornada_out(db, jornada)
 
 
 # --- Employees CRUD ---------------------------------------------------------
@@ -557,3 +599,233 @@ async def dispatch_afastamento_alerts_endpoint(
         "skipped": summary.skipped,
         "failed": summary.failed,
     }
+
+
+# --- Jornada de admissao ----------------------------------------------------
+#
+# O modulo tinha cadastro, dossie e alertas, mas nenhum fluxo que
+# CONDUZISSE a admissao: quem admitia precisava saber de cabeca o que
+# faltava. Estes endpoints expoem a jornada de `admissao.py`.
+
+
+async def _jornada_out(
+    db: AsyncSession, jornada: AdmissaoJornada
+) -> AdmissaoJornadaRead:
+    """Serializa incluindo o que falta -- calculado, nunca armazenado."""
+    employee = await db.get(Employee, jornada.employee_id)
+    pend = (
+        await admissao_svc.calcular_pendencias(db, employee)
+        if employee is not None
+        else admissao_svc.Pendencias()
+    )
+    return AdmissaoJornadaRead(
+        id=jornada.id,
+        employee_id=jornada.employee_id,
+        nome=employee.nome_completo if employee else None,
+        obra=jornada.obra,
+        etapa=jornada.etapa,
+        etapa_label=ADMISSAO_ETAPA_LABELS.get(jornada.etapa),
+        pendencias=pend.como_lista(),
+        kit_path=jornada.kit_path,
+        kit_gerado_em=jornada.kit_gerado_em,
+        kit_entregue_em=jornada.kit_entregue_em,
+        kit_entregue_para=jornada.kit_entregue_para,
+        confirmado_em=jornada.confirmado_em,
+        confirmado_por=jornada.confirmado_por,
+        observacoes=jornada.observacoes,
+    )
+
+
+async def _get_jornada(db: AsyncSession, jornada_id: int) -> AdmissaoJornada:
+    jornada = await db.get(AdmissaoJornada, jornada_id)
+    if jornada is None:
+        raise HTTPException(status_code=404, detail="Jornada nao encontrada")
+    return jornada
+
+
+@router.get("/admissao/painel", response_model=dict)
+async def admissao_painel(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    """Onde cada admissao parou e o que a destrava."""
+    return await admissao_svc.painel(db)
+
+
+@router.get(
+    "/admissao/{jornada_id}", response_model=AdmissaoJornadaRead
+)
+async def admissao_detalhe(
+    jornada_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> AdmissaoJornadaRead:
+    return await _jornada_out(db, await _get_jornada(db, jornada_id))
+
+
+@router.post(
+    "/admissao/{jornada_id}/avancar", response_model=AdmissaoJornadaRead
+)
+async def admissao_avancar(
+    jornada_id: int,
+    payload: AdmissaoAvancarPayload | None = None,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> AdmissaoJornadaRead:
+    """Avanca uma etapa SE os requisitos estiverem atendidos.
+
+    Recusa vem como 409 com a lista do que falta -- um 400 generico
+    devolveria a pessoa ao problema original de adivinhar.
+    """
+    jornada = await _get_jornada(db, jornada_id)
+    try:
+        jornada = await admissao_svc.avancar(
+            db,
+            jornada,
+            actor=current_user.email,
+            entregue_para=payload.entregue_para if payload else None,
+        )
+    except admissao_svc.RequisitosNaoAtendidosError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "erro": "requisitos_nao_atendidos",
+                "etapa_alvo": exc.etapa_alvo,
+                "pendencias": exc.pendencias,
+            },
+        ) from exc
+    except admissao_svc.AdmissaoError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return await _jornada_out(db, jornada)
+
+
+@router.post("/admissao/{jornada_id}/kit")
+async def admissao_gerar_kit(
+    jornada_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> Response:
+    """Emite o kit desta admissao e devolve o CSV para download."""
+    jornada = await _get_jornada(db, jornada_id)
+    try:
+        jornada, conteudo = await admissao_svc.gerar_kit(
+            db, jornada, actor=current_user.email
+        )
+    except admissao_svc.RequisitosNaoAtendidosError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "erro": "requisitos_nao_atendidos",
+                "pendencias": exc.pendencias,
+            },
+        ) from exc
+    return Response(
+        content=conteudo,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{jornada.kit_path}"'
+            )
+        },
+    )
+
+
+@router.get("/admissao/{jornada_id}/kit")
+async def admissao_baixar_kit(
+    jornada_id: int,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> Response:
+    """Rebaixa o kit ja gerado, SEM avancar etapa.
+
+    Existe separado do POST porque baixar de novo nao pode mover a
+    jornada de ninguem -- um GET com efeito colateral dispara sozinho
+    em prefetch do browser, em crawler e num simples refresh.
+    """
+    jornada = await _get_jornada(db, jornada_id)
+    if jornada.kit_gerado_em is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Kit ainda nao foi gerado para esta jornada",
+        )
+    linha = await admissao_svc.linha_do_kit(db, jornada)
+    return Response(
+        content=admissao_svc.montar_kit_csv([linha]),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="{jornada.kit_path}"'
+            )
+        },
+    )
+
+
+@router.post("/admissao/kit-lote", response_model=AdmissaoLoteSummary)
+async def admissao_kit_lote(
+    obra: str = Query(..., max_length=128),
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> AdmissaoLoteSummary:
+    """Gera o kit de TODA a obra de uma vez.
+
+    Devolve o resumo (com quem ficou de fora e por que); o CSV sai em
+    `GET /dp-sesmt/admissao/kit-lote?obra=...`. Separado de proposito:
+    a tela precisa MOSTRAR os ignorados antes de alguem mandar o
+    arquivo para a contabilidade.
+    """
+    incluidas, _conteudo, ignoradas = await admissao_svc.gerar_kits_da_obra(
+        db, obra, actor=current_user.email
+    )
+    return AdmissaoLoteSummary(
+        obra=obra,
+        incluidas=len(incluidas),
+        ignoradas=ignoradas,
+        kit_path=incluidas[0].kit_path if incluidas else None,
+    )
+
+
+@router.get("/admissao/kit-lote/download")
+async def admissao_kit_lote_download(
+    obra: str = Query(..., max_length=128),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> Response:
+    """CSV das jornadas ja com kit gerado nesta obra.
+
+    So relê o que `kit-lote` produziu -- nao avanca etapa nenhuma, para
+    que baixar de novo nao mude o estado de ninguem.
+    """
+    linhas = await admissao_svc.linhas_do_lote(db, obra)
+    if not linhas:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Nenhum kit gerado para a obra '{obra}'",
+        )
+    return Response(
+        content=admissao_svc.montar_kit_csv(linhas),
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="kit-admissao-obra-{obra}.csv"'
+            )
+        },
+    )
+
+
+@router.post(
+    "/admissao/{jornada_id}/cancelar", response_model=AdmissaoJornadaRead
+)
+async def admissao_cancelar(
+    jornada_id: int,
+    payload: AdmissaoCancelarPayload,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> AdmissaoJornadaRead:
+    jornada = await _get_jornada(db, jornada_id)
+    try:
+        jornada = await admissao_svc.cancelar(
+            db, jornada, motivo=payload.motivo, actor=current_user.email
+        )
+    except admissao_svc.AdmissaoError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return await _jornada_out(db, jornada)
