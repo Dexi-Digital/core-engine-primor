@@ -26,18 +26,18 @@ export default function FinanceiroPage() {
           },
           {
             label: "OCR de PDFs de nota fiscal.",
-            status: "nao_iniciado",
-            nota: "A task de parse é stub.",
+            status: "bloqueado",
+            nota: "A task de parse é stub. Depende da credencial do Google Document AI — o mesmo bloqueio do OCR das partes diárias. NF-e em XML já é lida pelo módulo fiscal; aqui é o caso de nota em PDF escaneado.",
           },
           {
             label: "Conciliação automática de remessas e retornos bancários.",
-            status: "nao_iniciado",
-            nota: "A task é stub.",
+            status: "bloqueado",
+            nota: "A task é stub. CNAB é formato aberto e não exige credencial, mas o layout varia por banco — precisamos de um arquivo de retorno real de exemplo para construir o parser sem adivinhar.",
           },
           {
             label: "Cruzamento combustível × alimentação × aluguel × descontos em medição.",
-            status: "nao_iniciado",
-            nota: "Depende dos percentuais de encargos, ainda não recebidos.",
+            status: "bloqueado",
+            nota: "Duas das três peças existem (adapter Tangerino e parser de NF-e). Falta o somatório por obra, que depende dos percentuais de encargos — é decisão do cliente, não desenvolvimento.",
           },
         ]}
       />

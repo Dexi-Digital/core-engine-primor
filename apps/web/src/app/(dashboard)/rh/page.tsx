@@ -122,8 +122,8 @@ export default async function RHPage() {
           },
           {
             label: "Varredura documental OCR do OneDrive (ASOs e docs faltantes).",
-            status: "nao_iniciado",
-            nota: "A task é stub. O resultado equivalente hoje vem do pull da OnSafety + diagnóstico documental.",
+            status: "bloqueado",
+            nota: "A task é stub. Depende da credencial do Document AI e da liberação dos sites do SharePoint. O resultado equivalente hoje já vem do pull da OnSafety + diagnóstico documental, então isto é redundância de fonte, não lacuna de função.",
           },
         ]}
       />

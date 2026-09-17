@@ -8,6 +8,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.manutencao_frota.models import (
+    PLANO_BASES_VALIDAS,
     STATUSES_VALIDOS,
     TIPOS_DOC_VALIDOS,
     UFS_DETRAN_SUPORTADAS,
@@ -392,3 +393,71 @@ class ParteDiariaConsumo(BaseModel):
             "desde o ultimo apontamento -- gatilho de manutencao."
         ),
     )
+
+
+# --- Planos de manutencao ---------------------------------------------------
+
+
+def _ensure_plano_base(v: str) -> str:
+    if v not in PLANO_BASES_VALIDAS:
+        raise ValueError(
+            "base deve ser 'km' (caminhoes e carros) ou 'horas' (maquinas)"
+        )
+    return v
+
+
+class PlanoManutencaoBase(BaseModel):
+    veiculo_id: int
+    descricao: str = Field(..., min_length=3, max_length=200)
+    base: str = Field(..., max_length=8)
+    intervalo: Decimal = Field(..., gt=0)
+    ultima_revisao_em: date | None = None
+    ultima_revisao_marcador: Decimal | None = Field(None, ge=0)
+    observacoes: str | None = None
+    ativo: bool = True
+
+    @field_validator("base")
+    @classmethod
+    def _validate_base(cls, v: str) -> str:
+        return _ensure_plano_base(v)
+
+
+class PlanoManutencaoCreate(PlanoManutencaoBase):
+    pass
+
+
+class PlanoManutencaoUpdate(BaseModel):
+    descricao: str | None = Field(None, min_length=3, max_length=200)
+    base: str | None = Field(None, max_length=8)
+    intervalo: Decimal | None = Field(None, gt=0)
+    ultima_revisao_em: date | None = None
+    ultima_revisao_marcador: Decimal | None = Field(None, ge=0)
+    observacoes: str | None = None
+    ativo: bool | None = None
+
+    @field_validator("base")
+    @classmethod
+    def _validate_base(cls, v: str | None) -> str | None:
+        return _ensure_plano_base(v) if v is not None else v
+
+
+class PlanoManutencaoRead(PlanoManutencaoBase):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    created_at: datetime
+    updated_at: datetime
+
+
+class PlanoRevisaoRegistrar(BaseModel):
+    """Registro de uma revisao executada.
+
+    `marcador` e o horimetro/odometro no momento da revisao -- e dele
+    que o proximo vencimento e contado. Opcional porque o sistema sabe
+    cair na leitura corrente do equipamento quando quem registra nao
+    tem o numero na mao.
+    """
+
+    marcador: Decimal | None = Field(None, ge=0)
+    data: date | None = None
+    observacoes: str | None = Field(None, max_length=500)

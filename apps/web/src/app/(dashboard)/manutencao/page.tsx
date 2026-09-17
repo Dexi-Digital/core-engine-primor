@@ -26,8 +26,8 @@ export default function ManutencaoPage() {
           },
           {
             label: "Plano de manutenção (revisões programadas por equipamento).",
-            status: "nao_iniciado",
-            nota: "Hoje vive na planilha do SharePoint (documentos → controle de revisões).",
+            status: "pronto",
+            nota: "Intervalo por equipamento, vencimento medido em uso (horímetro/odômetro) e registro de revisão feita. Equipamento sem plano aparece na tela — ausência de alerta não é sinal de estar em dia.",
           },
           {
             label: "Consulta de IPVA, CRLV e multas.",
@@ -60,6 +60,12 @@ export default function ManutencaoPage() {
           className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-400 hover:text-slate-900"
         >
           → Cadastro de veículos
+        </Link>
+        <Link
+          href="/manutencao/planos"
+          className="rounded-md border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:border-slate-400 hover:text-slate-900"
+        >
+          Planos de manutenção
         </Link>
         <Link
           href="/manutencao/custos"
