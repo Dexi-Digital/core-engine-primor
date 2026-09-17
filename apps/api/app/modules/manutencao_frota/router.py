@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import date
 from typing import Annotated, Any
 
 from fastapi import (
@@ -36,6 +37,7 @@ from app.core.db import get_db
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.licitacoes.storage import EditaisStorage
+from app.modules.manutencao_frota import custo_equipamento as custo_svc
 from app.modules.manutencao_frota import service
 from app.modules.manutencao_frota.schemas import (
     ConsultaDetranListResponse,
@@ -580,3 +582,26 @@ async def reprocessar_parte_diaria_endpoint(
         )
     parte = await service.get_parte_diaria(db, parte_id)
     return ParteDiariaRead.model_validate(parte)
+
+
+# --- Apropriacao e custo por equipamento (roadmap B#7) ----------------------
+
+
+@router.get("/custo-equipamento", response_model=dict)
+async def custo_equipamento(
+    inicio: date | None = Query(
+        None, description="Primeiro dia do periodo (YYYY-MM-DD)"
+    ),
+    fim: date | None = Query(None, description="Ultimo dia do periodo"),
+    obra: str | None = Query(None, max_length=128),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    """Consumo e custo de cada equipamento, com quem esta fora da curva.
+
+    A referencia e a mediana dos pares do mesmo tipo na propria frota
+    -- nao um numero de catalogo, que ignoraria terreno e operador.
+    """
+    return await custo_svc.apropriacao_por_equipamento(
+        db, inicio=inicio, fim=fim, obra=obra
+    )
