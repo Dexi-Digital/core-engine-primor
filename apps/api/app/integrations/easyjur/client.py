@@ -21,9 +21,19 @@ novo quando esta perto do limite (`_MARGEM_SEGURANCA`). Melhor falhar
 dizendo "nao vou tentar" do que bloquear a conta de quem usa o sistema
 para trabalhar.
 
-Descoberto tambem: a pagina carrega `accounts.google.com/gsi/client` e
-existe `api/login_google.php`. Se a conta do escritorio entra pelo
-botao do Google, nao ha senha para usar aqui -- o caminho seria outro.
+A conta de integracao e `sistemas@primorsolucoes.srv.br` e autentica
+por email e senha (medido em 19/09/2026). A pagina tambem carrega
+`accounts.google.com/gsi/client` e existe `api/login_google.php`, mas
+**esse caminho nao e necessario** -- a hipotese de que a conta entrava
+por SSO do Google veio de uma senha recusada de OUTRO dominio
+(`construtorazag.com.br`) e esta descartada.
+
+**Leitura ainda nao construida.** O login e o que existe aqui. Os
+endpoints de processos (453), andamentos (12.109) e pessoas (1.974) ja
+foram mapeados, com uma armadilha que vale repetir: o de processos so
+lista com `acao_listagem=enviar` -- sem esse parametro devolve 200 com
+"0 Registros Encontrados", que parece base vazia e nao e. Desenho do
+pull em `docs/superpowers/specs/2026-09-20-easyjur-processos-design.md`.
 """
 from __future__ import annotations
 
