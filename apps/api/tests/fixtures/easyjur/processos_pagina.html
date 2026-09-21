@@ -1,0 +1,137 @@
+	<input name="acao" type="hidden" value="excluir_selecionados">
+	<table cellspacing="0" width="100%" id="processos_lista" class="content-table">
+		<thead>
+			<tr>
+				<td class="header_checkbox_select_all">
+					<input type="checkbox" id="marcar_todos" onclick="SelectAll	();">
+					<span class="d-none">Selecionar todos</span>
+				</td>
+				<td>ID</td>
+				<td>Processo</td>
+				<td>Dados</td>
+				<td>Informações</td>
+				<td class="tc">Ações</td>
+			</tr>
+		</thead>
+		<tbody>
+<tr>
+						<td>
+							<input type="checkbox" name="toChange" id="check_sel" class="check_sel"  onclick='verifica_todos()' value="90000001"/>
+						</td>
+						<td label-row="ID:&nbsp;" >
+							90000001						</td>
+						<td>
+															<b class="table-link">Número: </b>
+								<a class="linklist" style="color: var(--ds-link, #2784b1)!important;" onclick="ativa_modal(CADASTRO_processos); alterar_processos(90000001);">0000001-01.2025.5.03.0001</a>
+								<span class="table-item"><b>Risco: </b>REMOTO (Até 30%)</span><span class="table-item"><b>Fase atual: </b>Decisão</span><span class="table-item"><b>Resultado: </b>Procedente</span><span class="table-item"><b>Advogado: </b>CICLANO PEREIRA ALVES</span>								<span class="table-item">
+									<b class="table-link">Cliente: </b>
+																			<a class="linklist" style="color: var(--ds-link, #2784b1)!important;" onclick="ativa_modal(CADASTRO_pessoas); alterar_pessoa(910000);">FULANO DE TAL DA SILVA</a><br/>
+																	</span>
+															<b class="table-link">Contrário: </b>
+																	<a class="linklist" style="color: var(--ds-custom-7, #f65b74)!important;" onclick="ativa_modal(CADASTRO_pessoas); alterar_pessoa(910000);">BELTRANA SOUZA LIMA</a>
+																									<a class="table-item" onclick="ativa_modal(CADASTRO_pessoas); alterar_pessoa(910000, $(this).position().top - 300);"><b>Juiz: </b>JUIZ EXEMPLO</a>
+																<span class="table-item"><b>Tipo: </b>judicial</span><span class="table-item"><b>Título: </b>ACAO TRABALHISTA - RITO ORDINARIO</span>						</td>
+						<td>
+							<span class="table-item"><b>Status: </b><span class="table-item__active">Ativo</span></span><span class="table-item"><b>Área: </b>Trabalhista</span><span class="table-item"><b>Tipo da Ação: </b>Adicional de Periculosidade</span><span class="table-item"><b>Tribunal: </b>TRT03 - Tribunal Regional do Trabalho da 3ª Região - VARA DO TRABALHO DE JANUARIA</span><span class="table-item"><b>Instância: </b>1º Grau</span><span class="table-item"><b>Comarca: </b>Januária - MG</span><span class="table-item"><b>Tipo da Vara: </b>VARA DO TRABALHO DE JANUARIA</span><span class="table-item"><b>Pasta: </b>1 </span><div class="seguraGrupos" style="white-space: pre-line;"><span class="table-item" style=" display: contents;padding-bottom:3px;padding-right:5px;padding-top:0px;"> <span class="table-item__grupo" style=" border-bottom-right-radius: 0; border-top-right-radius: 0; background-color:rgb(153, 51, 0)">OBRAS </span><span class="table-item__grupo" style=" border-bottom-left-radius: 0; border-top-left-radius: 0; background-color:rgb(153, 51, 0)" >Januária - z231</span></span> <b class="separa" style="padding-right: 5px;"> || </b><span class="table-item" style=" display: contents;padding-bottom:3px;padding-right:5px;padding-top:0px;"> <span class="table-item__grupo" style="background-color:rgb(255, 0, 0)" >Equipe Exemplo </span></span> <b class="separa" style="padding-right: 5px;"> || </b><span class="table-item" style=" display: contents;padding-bottom:3px;padding-right:5px;padding-top:0px;"> <span class="table-item__grupo" style=" border-bottom-right-radius: 0; border-top-right-radius: 0; background-color:rgb(153, 204, 255)">Equipe Exemplo </span><span class="table-item__grupo" style=" border-bottom-left-radius: 0; border-top-left-radius: 0; background-color:rgb(0, 204, 255)" >Equipe Exemplo </span></span></div>						</td>
+						<td>
+							<span class="table-item"><b>Parte(s) no Processo: </b></span><b class="table-link">Parte: </b>																							<a class="linklist" style="color: var(--ds-link, #2784b1)!important;" onclick="ativa_modal(CADASTRO_pessoas); alterar_pessoa(910000)">
+												BELTRANA SOUZA LIMA</a><br/>
+											
+											<b class="table-link">Parte: </b>																							<a class="linklist" style="color: var(--ds-link, #2784b1)!important;" onclick="ativa_modal(CADASTRO_pessoas); alterar_pessoa(910000)">
+												FULANO DE TAL DA SILVA</a><br/>
+											
+											<b class="table-link">Advogado Responsável: </b><span class="table-item">ADVOGADO EXEMPLO</span><br/><span class="table-item"><b>Valor da Causa: </b>R$10.000,00</span><span class='table-item'><b>Sem Movimentação há 4 mês(es) e 16 dia(s)<br /></b></span><span class="table-item"><b>Último Andamento: </b>01/01/2026 - Andamento de exemplo</span>						</td>
+						<td class="tc action_btns_col">
+							<a title="Editar Processo" class="table-btn table-btn--edit" onclick="ativa_modal(CADASTRO_processos); alterar_processos(90000001, 'processos');">
+								<i class="fa fa-edit"></i>
+							</a>
+							<!-- Funcionalidade desabilitada, existe a mesma no canto superior direito -->
+							<!-- <a class="table-btn table-btn--print" target="_blank" onclick="window.open('advogados/scripts/mpdf/examples/processos_analitico.php?id_processo=14508921&blocos[]=partes_vinculadas&blocos[]=alvaras_depositos_vinculados&blocos[]=agendas_vinculadas&blocos[]=andamentos_vinculados&blocos[]=honorarios_vinculados&blocos[]=custas_vinculadas&blocos[]=incidentes_vinculados&blocos[]=processos_vinculados_apensados&blocos[]=pedidos_vinculados&blocos[]=documentos_anexados&blocos[]=campos_personalizados&blocosSubAgenda[]=ATENDIMENTO&blocosSubAgenda[]=AUDIENCIA&blocosSubAgenda[]=AUDITORIA&blocosSubAgenda[]=PARTICULAR&blocosSubAgenda[]=PRIVADO&blocosSubAgenda[]=CONSULTORIA&blocosSubAgenda[]=DILIGENCIA&blocosSubAgenda[]=EVENTOS&blocosSubAgenda[]=OUTROS&blocosSubAgenda[]=PRAZO&blocosSubAgenda[]=PERICIA&blocosSubAgenda[]=REUNIAO&blocosSubAgenda[]=JULGAMENTO&blocosSubAgenda[]=TAREFA&blocosSubAgenda[]=VIAGEM', 'janela', 'toolbar=no, location=no, directories=no, status=no, menubar=no, scrollbars=no, resizable=no, left=300, top=20, width=960, height=768'); return false;">
+								<i class="fa fa-print"></i>
+							</a> -->
+																<a class="table-btn table-btn--trash" onClick="apaga_processo(14508921,2,'0000001-01.2025.5.03.0001')">
+										<i class="fa fa-trash-o"></i>
+									</a>
+														</td>
+					</tr>
+<tr>
+						<td>
+							<input type="checkbox" name="toChange" id="check_sel" class="check_sel"  onclick='verifica_todos()' value="90000002"/>
+						</td>
+						<td label-row="ID:&nbsp;" >
+							90000002						</td>
+						<td>
+															<b class="table-link">Número: </b>
+								<a class="linklist" style="color: var(--ds-link, #2784b1)!important;" onclick="ativa_modal(CADASTRO_processos); alterar_processos(90000002);">0000002-02.2023.4.06.0002</a>
+								<span class="table-item"><b>Advogado: </b>CICLANO PEREIRA ALVES</span>								<span class="table-item">
+									<b class="table-link">Cliente: </b>
+																			<a class="linklist" style="color: var(--ds-link, #2784b1)!important;" onclick="ativa_modal(CADASTRO_pessoas); alterar_pessoa(920000);">FULANO DE TAL DA SILVA</a><br/>
+																	</span>
+							<span class="table-item"><b>Tipo: </b>judicial</span><span class="table-item"><b>Título: </b>AGRAVO DE INSTRUMENTO</span>						</td>
+						<td>
+							<span class="table-item"><b>Status: </b><span class="table-item__active">Ativo</span></span><span class="table-item"><b>Área: </b>Cível</span><span class="table-item"><b>Tribunal: </b>TRF6 - Tribunal Regional Federal da 6ª Região - 4ª TURMA</span><span class="table-item"><b>Instância: </b>2º Grau</span><span class="table-item"><b>Tipo da Vara: </b>4ª TURMA</span><span class="table-item"><b>Pasta: </b>32 </span><div class="seguraGrupos" style="white-space: pre-line;"><span class="table-item" style=" display: contents;padding-bottom:3px;padding-right:5px;padding-top:0px;"> <span class="table-item__grupo" style="background-color:rgb(255, 0, 255)" >Equipe Exemplo </span></span></div>						</td>
+						<td>
+							<span class='table-item'><b>Sem Movimentação há 7 mês(es) e 30 dia(s)<br /></b></span><span class="table-item"><b>Último Andamento: </b>01/01/2026 - Andamento de exemplo</span>						</td>
+						<td class="tc action_btns_col">
+							<a title="Editar Processo" class="table-btn table-btn--edit" onclick="ativa_modal(CADASTRO_processos); alterar_processos(90000002, 'processos');">
+								<i class="fa fa-edit"></i>
+							</a>
+							<!-- Funcionalidade desabilitada, existe a mesma no canto superior direito -->
+							<!-- <a class="table-btn table-btn--print" target="_blank" onclick="window.open('advogados/scripts/mpdf/examples/processos_analitico.php?id_processo=14508952&blocos[]=partes_vinculadas&blocos[]=alvaras_depositos_vinculados&blocos[]=agendas_vinculadas&blocos[]=andamentos_vinculados&blocos[]=honorarios_vinculados&blocos[]=custas_vinculadas&blocos[]=incidentes_vinculados&blocos[]=processos_vinculados_apensados&blocos[]=pedidos_vinculados&blocos[]=documentos_anexados&blocos[]=campos_personalizados&blocosSubAgenda[]=ATENDIMENTO&blocosSubAgenda[]=AUDIENCIA&blocosSubAgenda[]=AUDITORIA&blocosSubAgenda[]=PARTICULAR&blocosSubAgenda[]=PRIVADO&blocosSubAgenda[]=CONSULTORIA&blocosSubAgenda[]=DILIGENCIA&blocosSubAgenda[]=EVENTOS&blocosSubAgenda[]=OUTROS&blocosSubAgenda[]=PRAZO&blocosSubAgenda[]=PERICIA&blocosSubAgenda[]=REUNIAO&blocosSubAgenda[]=JULGAMENTO&blocosSubAgenda[]=TAREFA&blocosSubAgenda[]=VIAGEM', 'janela', 'toolbar=no, location=no, directories=no, status=no, menubar=no, scrollbars=no, resizable=no, left=300, top=20, width=960, height=768'); return false;">
+								<i class="fa fa-print"></i>
+							</a> -->
+																<a class="table-btn table-btn--trash" onClick="apaga_processo(14508952,2,'0000002-02.2023.4.06.0002')">
+										<i class="fa fa-trash-o"></i>
+									</a>
+														</td>
+					</tr>
+<tr>
+						<td>
+							<input type="checkbox" name="toChange" id="check_sel" class="check_sel"  onclick='verifica_todos()' value="90000003"/>
+						</td>
+						<td label-row="ID:&nbsp;" >
+							90000003						</td>
+						<td>
+															<b class="table-link">Número: </b>
+								<a class="linklist" style="color: var(--ds-link, #2784b1)!important;" onclick="ativa_modal(CADASTRO_processos); alterar_processos(90000003);">0000003-03.2022.5.03.0003</a>
+								<span class="table-item"><b>Risco: </b>REMOTO (Até 30%)</span><span class="table-item"><b>Fase atual: </b>Aguardando o Arquivamento</span><span class="table-item"><b>Resultado: </b>Improcedente</span><span class="table-item"><b>Advogado: </b>CICLANO PEREIRA ALVES</span>								<span class="table-item">
+									<b class="table-link">Cliente: </b>
+																			<a class="linklist" style="color: var(--ds-link, #2784b1)!important;" onclick="ativa_modal(CADASTRO_pessoas); alterar_pessoa(930000);">FULANO DE TAL DA SILVA</a><br/>
+																	</span>
+															<b class="table-link">Contrário: </b>
+																	<a class="linklist" style="color: var(--ds-custom-7, #f65b74)!important;" onclick="ativa_modal(CADASTRO_pessoas); alterar_pessoa(930000);">EMPRESA FICTICIA ALFA LTDA</a>
+																									<a class="table-item" onclick="ativa_modal(CADASTRO_pessoas); alterar_pessoa(930000, $(this).position().top - 300);"><b>Juiz: </b>JUIZ EXEMPLO</a>
+																<span class="table-item"><b>Tipo: </b>judicial</span><span class="table-item"><b>Título: </b>ACAO TRABALHISTA - RITO ORDINARIO</span>						</td>
+						<td>
+							<span class="table-item"><b>Status: </b><span class="table-item__other">Arquivado Definitivo</span></span><span class="table-item"><b>Área: </b>Trabalhista</span><span class="table-item"><b>Tipo da Ação: </b>Agravo de Instrumento em Recurso de Revista</span><span class="table-item"><b>Tribunal: </b>TRT03 - Tribunal Regional do Trabalho da 3ª Região - 47ª VARA DO TRABALHO DE BELO HORIZONTE</span><span class="table-item"><b>Instância: </b>2º Grau</span><span class="table-item"><b>Comarca: </b>Belo Horizonte - MG</span><span class="table-item"><b>Tipo da Vara: </b>47ª VARA DO TRABALHO DE BELO HORIZONTE</span><span class="table-item"><b>Pasta: </b>37 </span><div class="seguraGrupos" style="white-space: pre-line;"><span class="table-item" style=" display: contents;padding-bottom:3px;padding-right:5px;padding-top:0px;"> <span class="table-item__grupo" style="background-color:rgb(255, 0, 0)" >Equipe Exemplo </span></span> <b class="separa" style="padding-right: 5px;"> || </b><span class="table-item" style=" display: contents;padding-bottom:3px;padding-right:5px;padding-top:0px;"> <span class="table-item__grupo" style="background-color:rgb(51, 153, 102)" >Equipe Exemplo </span></span></div>						</td>
+						<td>
+							<span class="table-item"><b>Parte(s) no Processo: </b></span><b class="table-link">Parte: </b>																							<a class="linklist" style="color: var(--ds-link, #2784b1)!important;" onclick="ativa_modal(CADASTRO_pessoas); alterar_pessoa(930000)">
+												EMPRESA FICTICIA ALFA LTDA</a><br/>
+											
+											<b class="table-link">Parte: </b>																							<a class="linklist" style="color: var(--ds-link, #2784b1)!important;" onclick="ativa_modal(CADASTRO_pessoas); alterar_pessoa(930000)">
+												FULANO DE TAL DA SILVA</a><br/>
+											
+											<b class="table-link">Parte: </b>																							<a class="linklist" style="color: var(--ds-link, #2784b1)!important;" onclick="ativa_modal(CADASTRO_pessoas); alterar_pessoa(930000)">
+												MARIA EXEMPLO COSTA</a><br/>
+											
+											Outros...<br><span class="table-item"><b>Valor da Causa: </b>R$10.000,00</span><span class='table-item'><b>Sem Movimentação há 5 mês(es) e 11 dia(s)<br /></b></span><span class="table-item"><b>Último Andamento: </b>01/01/2026 - Andamento de exemplo</span>						</td>
+						<td class="tc action_btns_col">
+							<a title="Editar Processo" class="table-btn table-btn--edit" onclick="ativa_modal(CADASTRO_processos); alterar_processos(90000003, 'processos');">
+								<i class="fa fa-edit"></i>
+							</a>
+							<!-- Funcionalidade desabilitada, existe a mesma no canto superior direito -->
+							<!-- <a class="table-btn table-btn--print" target="_blank" onclick="window.open('advogados/scripts/mpdf/examples/processos_analitico.php?id_processo=14508957&blocos[]=partes_vinculadas&blocos[]=alvaras_depositos_vinculados&blocos[]=agendas_vinculadas&blocos[]=andamentos_vinculados&blocos[]=honorarios_vinculados&blocos[]=custas_vinculadas&blocos[]=incidentes_vinculados&blocos[]=processos_vinculados_apensados&blocos[]=pedidos_vinculados&blocos[]=documentos_anexados&blocos[]=campos_personalizados&blocosSubAgenda[]=ATENDIMENTO&blocosSubAgenda[]=AUDIENCIA&blocosSubAgenda[]=AUDITORIA&blocosSubAgenda[]=PARTICULAR&blocosSubAgenda[]=PRIVADO&blocosSubAgenda[]=CONSULTORIA&blocosSubAgenda[]=DILIGENCIA&blocosSubAgenda[]=EVENTOS&blocosSubAgenda[]=OUTROS&blocosSubAgenda[]=PRAZO&blocosSubAgenda[]=PERICIA&blocosSubAgenda[]=REUNIAO&blocosSubAgenda[]=JULGAMENTO&blocosSubAgenda[]=TAREFA&blocosSubAgenda[]=VIAGEM', 'janela', 'toolbar=no, location=no, directories=no, status=no, menubar=no, scrollbars=no, resizable=no, left=300, top=20, width=960, height=768'); return false;">
+								<i class="fa fa-print"></i>
+							</a> -->
+																<a class="table-btn table-btn--trash" onClick="apaga_processo(14508957,1,'0000003-03.2022.5.03.0003')">
+										<i class="fa fa-trash-o"></i>
+									</a>
+														</td>
+					</tr>
+</tbody>
+	</table>
+	<div class="table-footer" id="principalFooterAjaxProcessos">
+		<h3>50 de 453 Registros Encontrados</h3>
+		<ul class="table-footer__pagination">
+			<li><a href='#body' class='pagination__none'>Anterior</a></li><li><a href='#body' onclick='listar_processos(1)' class='current_page'>1</a></li>  <li><a href='#body' onclick='listar_processos(2)' >2</a></li> <li><a href='#body' onclick='listar_processos(3)' >3</a></li> <li><a href='#body' onclick='listar_processos(4)' >4</a></li> <li><a href='#body' onclick='listar_processos(5)' >5</a></li> <li><a href='#body' onclick='listar_processos(6)' >6</a></li><li><a href='#body' onclick='listar_processos(2)' class='pagination__page'>Pr&oacute;xima</a></li>		</ul>
+	</div>

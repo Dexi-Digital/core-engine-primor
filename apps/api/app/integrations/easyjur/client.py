@@ -28,12 +28,9 @@ por email e senha (medido em 19/09/2026). A pagina tambem carrega
 por SSO do Google veio de uma senha recusada de OUTRO dominio
 (`construtorazag.com.br`) e esta descartada.
 
-**Leitura ainda nao construida.** O login e o que existe aqui. Os
-endpoints de processos (453), andamentos (12.109) e pessoas (1.974) ja
-foram mapeados, com uma armadilha que vale repetir: o de processos so
-lista com `acao_listagem=enviar` -- sem esse parametro devolve 200 com
-"0 Registros Encontrados", que parece base vazia e nao e. Desenho do
-pull em `docs/superpowers/specs/2026-09-20-easyjur-processos-design.md`.
+**Leitura:** processos por HTML paginado, andamentos pelo export CSV.
+Este client devolve o conteudo cru; quem interpreta e o `parser.py`.
+Desenho em `docs/superpowers/specs/2026-09-20-easyjur-processos-design.md`.
 """
 from __future__ import annotations
 
@@ -49,6 +46,22 @@ logger = logging.getLogger(__name__)
 EASYJUR_BASE_URL = "https://app.easyjur.com"
 _ENDPOINT_LOGIN = "/acesso/api/login.php"
 _PAGINA_LOGIN = "/acesso/login.php"
+_PROCESSOS = "/sgr/advogados/scripts/processos/ajax_processos_lista.php"
+_ANDAMENTOS = "/sgr/advogados/scripts/andamentos/ajax_andamento_lista.php"
+_EXPORT_ANDAMENTOS = "/sgr/advogados/scripts/andamentos/exports/export_andamentos.php"
+_AJAX = {"X-Requested-With": "XMLHttpRequest"}
+
+# So as colunas de ANDAMENTO interessam do export; as de processo vem
+# do HTML, onde o acento chega inteiro. Mas o export precisa receber a
+# lista completa para o mapa posicional do parser valer.
+_CAMPOS_EXPORT = (
+    "numero_processo", "cliente", "contrario", "advogado", "grupo_processo",
+    "tipo", "titulo", "tipo_de_acao", "area", "pasta", "tribunal", "uf",
+    "comarca", "instancia", "vara", "juiz", "data_distribuicao",
+    "data_encerramento", "rito", "fase_atual", "resultado", "status_processo",
+    "responsavel_andamento", "tipo_andamento", "status_andamento",
+    "conteudo_andamento", "data_andamento", "data_leitura_andamento",
+)
 
 # Nao chegamos perto do bloqueio: com 1 tentativa restante, paramos.
 # O custo de errar aqui recai sobre uma pessoa que precisa do sistema
@@ -190,6 +203,61 @@ class EasyjurClient(IntegrationClient):
         # Login OK zera a contagem consecutiva no lado deles.
         self.tentativas_restantes = None
         logger.info("easyjur.login_ok email=%s", _mascarar(self._email))
+
+    # --- leitura ------------------------------------------------------------
+    #
+    # Devolvem o conteudo CRU. Interpretar e trabalho do `parser.py`: a
+    # unica camada que toca a rede fica livre da unica camada que quebra
+    # quando o layout deles muda.
+
+    async def listar_processos(self, page: int = 1) -> str:
+        """HTML de uma pagina de processos (50 por pagina).
+
+        `acao_listagem="enviar"` NAO e opcional. Sem ele o EasyJur
+        responde 200 com "0 Registros Encontrados" -- bem-formado e
+        indistinguivel de base vazia. Em 17/09/2026 isso fez 453
+        processos serem registrados como "0 na base".
+        """
+        await self.login()
+        try:
+            r = await self._client.post(
+                _PROCESSOS,
+                data={"page": page, "acao_listagem": "enviar"},
+                headers=_AJAX,
+            )
+            r.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise EasyjurError(
+                f"EasyJur processos p.{page}: {type(exc).__name__}: {exc}"
+            ) from exc
+        return r.text
+
+    async def exportar_andamentos_csv(self) -> bytes:
+        """CSV com TODOS os andamentos, numa requisicao (~6 MB, lento).
+
+        O export le o filtro da SESSAO PHP. Chamado direto devolve so o
+        cabecalho -- por isso a busca com `pesquisa=enviar` vem antes,
+        na mesma sessao. O resultado da busca e descartado: ela existe
+        so para armar o filtro.
+        """
+        await self.login()
+        try:
+            r = await self._client.post(
+                _ANDAMENTOS, data={"pesquisa": "enviar", "page": 1}, headers=_AJAX
+            )
+            r.raise_for_status()
+            r = await self._client.post(
+                _EXPORT_ANDAMENTOS,
+                data={"campos[]": list(_CAMPOS_EXPORT)},
+                headers=_AJAX,
+                timeout=300.0,
+            )
+            r.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise EasyjurError(
+                f"EasyJur export de andamentos: {type(exc).__name__}: {exc}"
+            ) from exc
+        return r.content
 
 
 def _extrair_tentativas(erros: dict[str, Any]) -> int | None:

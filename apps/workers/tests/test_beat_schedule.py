@@ -27,6 +27,7 @@ def tasks_registradas() -> set[str]:
     import worker.tasks.financeiro  # noqa: F401
     import worker.tasks.fiscal  # noqa: F401
     import worker.tasks.ia  # noqa: F401
+    import worker.tasks.juridico  # noqa: F401
     import worker.tasks.licitacoes  # noqa: F401
     import worker.tasks.manutencao  # noqa: F401
     import worker.tasks.onedrive_diagnostico  # noqa: F401
@@ -104,3 +105,15 @@ def test_falha_parcial_ou_dia_sem_publicacao_nao_e_erro() -> None:
 
     _falhar_se_nada_rodou({"total_fetched": 40, "failed_modalidades": [7]})
     _falhar_se_nada_rodou({"total_fetched": 0, "failed_modalidades": []})
+
+
+def test_toda_fila_roteada_e_consumida_pelo_worker() -> None:
+    """O CMD do worker lista as filas com `-Q`. Task roteada para fila
+    que nao esta la fica na fila para sempre -- sem erro, sem log."""
+    import re
+    from pathlib import Path
+
+    dockerfile = (Path(__file__).parents[1] / "Dockerfile").read_text()
+    consumidas = set(re.search(r'"-Q",\s*"([^"]+)"', dockerfile).group(1).split(","))
+    roteadas = {r["queue"] for r in celery_app.conf.task_routes.values()}
+    assert roteadas <= consumidas, f"filas sem consumidor: {roteadas - consumidas}"
