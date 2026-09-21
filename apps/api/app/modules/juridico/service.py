@@ -7,14 +7,23 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.easyjur import parser
-from app.modules.juridico.models import SOURCES_SYNC, Andamento, Processo, SyncLog
+from app.modules.juridico.models import (
+    SOURCES_SYNC,
+    SYNC_EM_ANDAMENTO,
+    SYNC_ERRO,
+    SYNC_OK,
+    Andamento,
+    Processo,
+    SyncLog,
+)
+from app.modules.manutencao_frota.service import get_celery_dispatcher
 from app.modules.obras.models import Obra
 
 logger = logging.getLogger(__name__)
@@ -22,6 +31,14 @@ logger = logging.getLogger(__name__)
 # 453 processos = 10 paginas. O teto existe para um bug de paginacao do
 # lado deles nao virar laco infinito contra um sistema de terceiro.
 _MAX_PAGINAS = 60
+
+# Uma carga leva ~2,5 min. Depois disto, "em_andamento" deixa de valer:
+# o worker provavelmente nao existe neste ambiente (ou morreu no meio),
+# e o botao volta a funcionar -- com a tela avisando.
+SYNC_TRAVADO_APOS = timedelta(minutes=30)
+
+TASK_PULL = "worker.tasks.juridico.pull_easyjur"
+FILA_PULL = "financeiro"  # fila EXISTENTE: o CMD do worker lista as filas com -Q
 
 # Campos que o escritorio preenche por excecao (medido em 19/09/2026:
 # tipo_acao 15%, risco 11%, resultado 8%, fase_atual 6%).
@@ -139,7 +156,7 @@ def _obra_id(obras: dict[str, int], codigo: str | None) -> int | None:
     return obras.get(codigo) or obras.get(codigo.zfill(3))
 
 
-async def _registrar(db: AsyncSession, source: str, r: ResultadoSync) -> None:
+async def _log_de_hoje(db: AsyncSession, source: str) -> SyncLog:
     hoje = date.today()
     log = (
         await db.execute(
@@ -151,11 +168,80 @@ async def _registrar(db: AsyncSession, source: str, r: ResultadoSync) -> None:
     if log is None:
         log = SyncLog(source=source, janela=hoje)
         db.add(log)
+    return log
+
+
+async def _registrar(db: AsyncSession, source: str, r: ResultadoSync) -> None:
+    log = await _log_de_hoje(db, source)
     log.processos = r.processos
     log.andamentos = r.andamentos
     log.total_declarado = r.total_declarado
     log.divergencia = r.divergencia
+    log.status = SYNC_OK
     log.erro = None
+
+
+# --- estado da carga (o que a tela mostra) ----------------------------------
+
+
+async def marcar_inicio(db: AsyncSession, *, source: str) -> None:
+    log = await _log_de_hoje(db, source)
+    log.status = SYNC_EM_ANDAMENTO
+    log.iniciado_em = datetime.now(UTC)
+    log.erro = None
+    await db.commit()
+
+
+async def marcar_erro(db: AsyncSession, *, source: str, mensagem: str) -> None:
+    log = await _log_de_hoje(db, source)
+    log.status = SYNC_ERRO
+    log.erro = mensagem[:1024]
+    await db.commit()
+
+
+async def em_andamento(db: AsyncSession, *, source: str) -> bool:
+    log = (
+        await db.execute(
+            select(SyncLog)
+            .where(SyncLog.source == source)
+            .where(SyncLog.status == SYNC_EM_ANDAMENTO)
+            .order_by(SyncLog.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    if log is None or log.iniciado_em is None:
+        return False
+    inicio = log.iniciado_em
+    if inicio.tzinfo is None:  # sqlite devolve naive
+        inicio = inicio.replace(tzinfo=UTC)
+    return datetime.now(UTC) - inicio < SYNC_TRAVADO_APOS
+
+
+class CargaJaEmAndamento(RuntimeError):
+    pass
+
+
+class FilaIndisponivel(RuntimeError):
+    pass
+
+
+async def enfileirar_carga(db: AsyncSession, *, source: str = "manual") -> None:
+    """Pede ao worker para rodar o pull. Nao toca no EasyJur daqui.
+
+    Marca "em_andamento" ANTES de enfileirar: se a fila falhar, o log
+    ja existe para receber o erro -- e a tela mostra o motivo em vez de
+    recarregar igual.
+    """
+    if await em_andamento(db, source=source):
+        raise CargaJaEmAndamento("ja ha uma carga em andamento")
+    await marcar_inicio(db, source=source)
+    try:
+        get_celery_dispatcher().send_task(TASK_PULL, args=[source], queue=FILA_PULL)
+    except Exception as exc:  # noqa: BLE001 -- kombu/redis levantam tipos variados
+        await marcar_erro(
+            db, source=source, mensagem=f"fila do worker indisponivel: {exc}"
+        )
+        raise FilaIndisponivel(str(exc)) from exc
 
 
 # --- consultas da tela ------------------------------------------------------
@@ -259,6 +345,11 @@ async def resumo(db: AsyncSession) -> dict[str, Any]:
                 "andamentos": ultimo.andamentos,
                 "total_declarado": ultimo.total_declarado,
                 "divergencia": ultimo.divergencia,
+                "status": ultimo.status,
+                "erro": ultimo.erro,
+                "iniciado_em": ultimo.iniciado_em.isoformat()
+                if ultimo.iniciado_em
+                else None,
             }
             if ultimo
             else None

@@ -1,7 +1,7 @@
 """API do modulo juridico (contencioso vindo do EasyJur)."""
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
@@ -9,12 +9,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.db import get_db
-from app.integrations.easyjur import parser
-from app.integrations.easyjur.client import (
-    EasyjurAuthError,
-    EasyjurClient,
-    EasyjurError,
-)
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.juridico import service as svc
@@ -62,11 +56,8 @@ class AndamentoRead(BaseModel):
 
 
 class SyncResponse(BaseModel):
-    processos: int
-    andamentos: int
-    total_declarado: int | None
-    divergencia: bool
-    executado_em: datetime
+    status: str
+    mensagem: str
 
 
 @router.get("/processos", response_model=ProcessoList)
@@ -113,41 +104,37 @@ async def resumo(
     return await svc.resumo(db)
 
 
-@router.post("/sync", response_model=SyncResponse)
+@router.post("/sync", response_model=SyncResponse, status_code=202)
 async def sincronizar_agora(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> SyncResponse:
-    """Pull sob demanda. Leva alguns minutos: o export de andamentos do
-    EasyJur e lento (~12 mil linhas numa requisicao)."""
+    """Enfileira a carga no worker e responde na hora.
+
+    Nao roda o pull aqui: sao ~2,5 min contra o EasyJur, e o proxy do
+    Railway cortaria a requisicao no meio -- com a carga seguindo ou
+    nao, sem ninguem saber. O estado fica no log e a tela acompanha.
+    """
     settings = get_settings()
-    client = EasyjurClient(
-        email=settings.easyjur_email, password=settings.easyjur_password
-    )
-    if client.is_mock:
-        await client.aclose()
+    if not (settings.easyjur_email and settings.easyjur_password):
+        await svc.marcar_erro(
+            db,
+            source="manual",
+            mensagem="EASYJUR_EMAIL/EASYJUR_PASSWORD nao configurados neste ambiente",
+        )
         raise HTTPException(
             status_code=503,
             detail="EASYJUR_EMAIL/EASYJUR_PASSWORD nao configurados neste ambiente.",
         )
     try:
-        r = await svc.sincronizar(db, client, source="manual")
-    except EasyjurAuthError as exc:
-        # 502 e nao 401: quem esta sem credencial valida e o SISTEMA
-        # diante do EasyJur, nao o usuario diante de nos.
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    except (
-        EasyjurError,
-        parser.FormatoInesperadoError,
-        parser.SessaoSemFiltroError,
-    ) as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    finally:
-        await client.aclose()
+        await svc.enfileirar_carga(db, source="manual")
+    except svc.CargaJaEmAndamento as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except svc.FilaIndisponivel as exc:
+        raise HTTPException(
+            status_code=503, detail=f"Fila do worker indisponivel: {exc}"
+        ) from exc
     return SyncResponse(
-        processos=r.processos,
-        andamentos=r.andamentos,
-        total_declarado=r.total_declarado,
-        divergencia=r.divergencia,
-        executado_em=datetime.now().astimezone(),
+        status="em_andamento",
+        mensagem="Carga enfileirada. Leva alguns minutos; a tela atualiza sozinha.",
     )
