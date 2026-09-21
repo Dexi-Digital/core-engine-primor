@@ -136,18 +136,12 @@ export default async function CaptacaoPage(props: {
     <div className="space-y-6">
       <header className="flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Tela de Captação</h1>
+          <h1 className="text-2xl font-bold">Captação</h1>
           <p className="mt-1 text-sm text-slate-500">
             Triagem de editais captados: aprovar dispara pasta + anexos +
             planilha orçamentária; rejeitar exige motivo.
           </p>
         </div>
-        <Link
-          href="/licitacoes"
-          className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-        >
-          ← Licitações
-        </Link>
       </header>
 
       <form className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">

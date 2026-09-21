@@ -216,6 +216,19 @@ class OnsafetyClient(IntegrationClient):
     def is_prod(self) -> bool:
         return self._client.base_url.host == ONSAFETY_PROD_HOST
 
+    @property
+    def escrita_bloqueada(self) -> bool:
+        """True quando um push real seria recusado pelo guard de producao."""
+        return (not self.is_mock) and self.is_prod and not self._allow_prod_write
+
+    def motivo_bloqueio_prod(self) -> str:
+        return (
+            "escrita contra PRODUCAO OnSafety bloqueada "
+            f"(base_url={self._client.base_url}). Use o ambiente de "
+            "homologacao, ou -- se a escrita em prod for intencional "
+            "-- setar ONSAFETY_ALLOW_PROD_WRITE=true."
+        )
+
     async def health_check(self) -> bool:
         if self.is_mock:
             return True
@@ -471,14 +484,12 @@ class OnsafetyClient(IntegrationClient):
           parametro `is_editing` existe para um futuro fluxo de edicao
           concorrencia-segura.
         """
-        cpf_norm = normalize_cpf(cpf)
-        if len(cpf_norm) != 11:
-            raise ValueError(f"cpf invalido: {cpf!r} (esperado 11 digitos)")
-        if not nome.strip():
-            raise ValueError("nome vazio")
-        if not codigo_externo.strip():
-            raise ValueError("codigo_externo vazio")
-
+        body = montar_body_trabalhador(
+            nome=nome, cpf=cpf, codigo_externo=codigo_externo,
+            projeto_id=projeto_id, matricula=matricula, email=email,
+            data_admissao=data_admissao, data_nascimento=data_nascimento,
+        )
+        cpf_norm = body["cpf"]
         if self.is_mock:
             digest = hashlib.sha1(cpf_norm.encode()).hexdigest()
             return {
@@ -488,33 +499,8 @@ class OnsafetyClient(IntegrationClient):
                 "codigo_externo": codigo_externo,
                 "source": "onsafety_mock",
             }
-
         if self.is_prod and not self._allow_prod_write:
-            raise OnsafetyProdWriteBlockedError(
-                "escrita contra PRODUCAO OnSafety bloqueada "
-                f"(base_url={self._client.base_url}). Use o ambiente de "
-                "homologacao, ou -- se a escrita em prod for intencional "
-                "-- setar ONSAFETY_ALLOW_PROD_WRITE=true."
-            )
-
-        body: dict[str, Any] = {
-            "nome": nome,
-            "cpf": cpf_norm,
-            "codigoExterno": codigo_externo,
-            "ativo": True,
-            "validateCpf": True,
-        }
-        if projeto_id:
-            body["projeto"] = {"id": projeto_id}
-        if matricula:
-            body["matricula"] = matricula
-        if email:
-            body["email"] = email
-        if data_admissao:
-            body["dataAdmissao"] = f"{data_admissao}T00:00:00"
-        if data_nascimento:
-            body["dataNascimento"] = f"{data_nascimento}T00:00:00"
-
+            raise OnsafetyProdWriteBlockedError(self.motivo_bloqueio_prod())
         try:
             r = await self._client.post(
                 "/v2/trabalhadores/create_or_update",
@@ -975,3 +961,47 @@ class OnsafetyClient(IntegrationClient):
     async def aclose(self) -> None:
         if self._own_client:
             await self._client.aclose()
+
+
+def montar_body_trabalhador(
+    *,
+    nome: str,
+    cpf: str,
+    codigo_externo: str,
+    projeto_id: str | None,
+    matricula: str | None,
+    email: str | None,
+    data_admissao: str | None,
+    data_nascimento: str | None,
+) -> dict[str, Any]:
+    """O corpo EXATO que `create_or_update_trabalhador` envia -- sem enviar.
+
+    Funcao pura de proposito: e o que a pre-visualizacao mostra na tela
+    ("isto seria enviado") e e o mesmo codigo que o push real usa. Duas
+    montagens diferentes seriam duas verdades diferentes.
+    """
+    cpf_norm = normalize_cpf(cpf)
+    if len(cpf_norm) != 11:
+        raise ValueError(f"cpf invalido: {cpf!r} (esperado 11 digitos)")
+    if not nome.strip():
+        raise ValueError("nome vazio")
+    if not codigo_externo.strip():
+        raise ValueError("codigo_externo vazio")
+    body: dict[str, Any] = {
+        "nome": nome,
+        "cpf": cpf_norm,
+        "codigoExterno": codigo_externo,
+        "ativo": True,
+        "validateCpf": True,
+    }
+    if projeto_id:
+        body["projeto"] = {"id": projeto_id}
+    if matricula:
+        body["matricula"] = matricula
+    if email:
+        body["email"] = email
+    if data_admissao:
+        body["dataAdmissao"] = f"{data_admissao}T00:00:00"
+    if data_nascimento:
+        body["dataNascimento"] = f"{data_nascimento}T00:00:00"
+    return body

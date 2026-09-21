@@ -127,10 +127,7 @@ export default async function TriagemPage(props: {
       ) : null}
       <div className="flex items-center justify-between">
         <div>
-          <Link href="/licitacoes" className="text-sm text-slate-500 hover:underline">
-            ← Licitações
-          </Link>
-          <h1 className="text-xl font-semibold">Aba de Triagem</h1>
+          <h1 className="text-2xl font-bold">Triagem</h1>
           <p className="text-sm text-slate-500">
             Editais aprovados com links diretos para pasta do projeto e
             planilha orçamentária.

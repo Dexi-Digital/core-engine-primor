@@ -363,6 +363,30 @@ async def onsafety_pull_endpoint(
     return asdict(summary)
 
 
+@router.get("/employees/{employee_id}/sync-onsafety/preview", response_model=dict)
+async def preview_sync_onsafety_endpoint(
+    employee_id: int,
+    db: AsyncSession = Depends(get_db),
+    client: OnsafetyClient = Depends(get_onsafety_dep),
+    _: User = Depends(get_current_user),
+) -> dict:
+    """As etapas do push e o corpo que SERIA enviado -- sem enviar.
+
+    Existe porque o token disponivel e de producao e a escrita esta
+    atras do guard: a jornada precisa ser vista de ponta a ponta antes
+    de alguem decidir liga-la. Nao toca na OnSafety.
+    """
+    employee = await service.get_employee(db, employee_id)
+    if employee is None:
+        raise HTTPException(404, f"Funcionario {employee_id} nao encontrado")
+    try:
+        return await onboarding_svc.previsualizar_sync_onsafety(
+            db, client, employee, projeto_id=get_settings().onsafety_projeto_id
+        )
+    finally:
+        await client.aclose()
+
+
 @router.get(
     "/employees/{employee_id}/sync-onsafety",
     response_model=list[OnboardingSyncRead],

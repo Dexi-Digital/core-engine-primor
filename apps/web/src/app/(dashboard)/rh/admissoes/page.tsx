@@ -25,6 +25,7 @@ type JornadaItem = {
   kit_gerado_em: string | null;
   kit_entregue_em: string | null;
   confirmado_em: string | null;
+  onsafety: { status: "ok" | "erro" | "nunca"; em: string | null; erro: string | null };
 };
 
 type Painel = {
@@ -323,13 +324,14 @@ export default async function AdmissoesPage() {
                 <th className="px-3 py-2">Etapa</th>
                 <th className="px-3 py-2">Pendências</th>
                 <th className="px-3 py-2">Kit</th>
+                <th className="px-3 py-2">OnSafety</th>
                 <th className="px-3 py-2">Ação</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {emAndamento.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-3 py-6 text-center text-slate-500">
+                  <td colSpan={7} className="px-3 py-6 text-center text-slate-500">
                     Nenhuma admissão em andamento.
                   </td>
                 </tr>
@@ -372,6 +374,29 @@ export default async function AdmissoesPage() {
                         </a>
                       ) : (
                         "—"
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-xs">
+                      {/* Reflexo no sistema de SST -- o que foi prometido:
+                          digita aqui, aparece la. "nunca" e estado real. */}
+                      {j.onsafety?.status === "ok" ? (
+                        <span className="rounded bg-emerald-100 px-2 py-0.5 text-emerald-800">
+                          refletido
+                        </span>
+                      ) : j.onsafety?.status === "erro" ? (
+                        <span
+                          className="rounded bg-red-100 px-2 py-0.5 text-red-800"
+                          title={j.onsafety.erro ?? undefined}
+                        >
+                          falhou
+                        </span>
+                      ) : (
+                        <Link
+                          href={`/rh/funcionarios/${j.employee_id}`}
+                          className="text-slate-500 underline"
+                        >
+                          ainda não
+                        </Link>
                       )}
                     </td>
                     <td className="px-3 py-2">
