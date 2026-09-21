@@ -1,4 +1,4 @@
-"""Boletins por email (D.3).
+"""Boletins de licitacao (D.3) -- notificacao na plataforma.
 
 Um `SavedQuery` representa um filtro cadastrado por um usuario (UF + modalidade
 + termo de busca). Tres vezes ao dia, o scheduler dispara `dispatch_boletins`
@@ -6,7 +6,8 @@ que, para cada query ativa:
 
 1. carrega o ultimo envio (`BoletimLog`) e pega `last_licitacao_id`;
 2. busca licitacoes NOVAS desde entao que batem com os filtros;
-3. se houver 1 ou mais, renderiza o digest HTML e envia via Resend;
+3. se houver 1 ou mais, cria uma NOTIFICACAO na plataforma por
+   destinatario (desde 21/09/2026; antes era email via Resend);
 4. registra um `BoletimLog` (sucesso, vazio ou falha) com o novo cursor.
 
 Esse servico NAO depende do FastAPI -- o Celery worker importa diretamente.
@@ -23,12 +24,13 @@ from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.integrations.resend.client import ResendClient, ResendError
 from app.modules.licitacoes.models import BoletimLog, Licitacao, SavedQuery
 from app.modules.licitacoes.schemas import (
     BoletimDispatchResult,
     BoletimDispatchSummary,
 )
+from app.modules.notificacoes.models import CATEGORIA_LICITACOES
+from app.modules.notificacoes.service import criar_notificacao
 
 logger = logging.getLogger(__name__)
 
@@ -160,21 +162,80 @@ def render_digest_html(
     """.strip()
 
 
+def _resumo_texto(query: SavedQuery, licitacoes: list[Licitacao]) -> str:
+    """Corpo da notificacao, em TEXTO.
+
+    De proposito nao e o `render_digest_html`: o objeto vem do PNCP --
+    texto de terceiro -- e o painel renderiza o corpo direto. Jogar HTML
+    de terceiro numa tela autenticada seria abrir XSS para economizar
+    formatacao.
+    """
+    linhas = [
+        f"{len(licitacoes)} nova(s) oportunidade(s) para a busca "
+        f"\u201c{query.nome}\u201d."
+    ]
+    for lic in licitacoes[:5]:
+        objeto = _so_texto(lic.objeto_compra or "(sem objeto)")
+        uf = lic.uf_sigla or "--"
+        linhas.append(f"- [{uf}] {objeto[:120]}")
+    if len(licitacoes) > 5:
+        linhas.append(f"... e mais {len(licitacoes) - 5}.")
+    return "\n".join(linhas)
+
+
+def _so_texto(valor: str) -> str:
+    """Remove marcacao do texto vindo do PNCP.
+
+    Nao e sanitizacao de HTML sofisticada porque nao precisa ser: aqui
+    nada de `<` pode sair, entao a regra e simplesmente descartar tudo
+    entre sinais de menor/maior e os proprios sinais.
+    """
+    saida, dentro = [], False
+    for ch in valor:
+        if ch == "<":
+            dentro = True
+        elif ch == ">":
+            dentro = False
+        elif not dentro:
+            saida.append(ch)
+    return " ".join("".join(saida).split())
+
+
+def _link_da_query(query: SavedQuery) -> str:
+    """Para onde o clique leva: a lista ja filtrada pela busca salva.
+
+    Notificacao sem link obriga a pessoa a reconstruir o filtro na mao
+    para descobrir o que mudou.
+    """
+    from urllib.parse import urlencode
+
+    filtros = {}
+    if query.uf:
+        filtros["uf"] = query.uf
+    if query.search:
+        filtros["search"] = query.search
+    return "/licitacoes" + (f"?{urlencode(filtros)}" if filtros else "")
+
+
 async def dispatch_boletins(
     db: AsyncSession,
-    resend: ResendClient,
     *,
     public_base_url: str | None = None,
-    from_email: str | None = None,
     saved_query_ids: list[int] | None = None,
 ) -> BoletimDispatchSummary:
-    """Dispatch pending boletins for all (or selected) active saved queries.
+    """Despacha boletins pendentes como NOTIFICACAO NA PLATAFORMA.
 
-    Each failure is isolated: one query failing does not abort the others.
+    Ate 21/09/2026 isto mandava email via Resend. O cliente pediu para
+    nao enviar email e mostrar o aviso dentro do sistema -- entao o
+    `ResendClient` saiu da assinatura, e nao apenas do corpo: deixar o
+    parametro deixaria religar o envio por engano.
+
+    O que NAO mudou, porque ja estava certo: o cursor por saved query
+    (`last_licitacao_id`) e o isolamento de falha -- uma query que
+    quebra nao aborta as outras.
     """
     settings = get_settings()
     public_base_url = public_base_url or settings.public_base_url
-    from_email = from_email or settings.resend_from_email
 
     stmt = select(SavedQuery).where(SavedQuery.active.is_(True))
     if saved_query_ids:
@@ -210,17 +271,25 @@ async def dispatch_boletins(
             continue
 
         last_id = max(lic.id for lic in licitacoes)
-        html = render_digest_html(query, licitacoes, public_base_url=public_base_url)
-        subject = f"[Motor Central] {len(licitacoes)} nova(s) licitação(ões) — {query.nome}"
+        titulo = f"{len(licitacoes)} nova(s) licitação(ões) — {query.nome}"
+        corpo = _resumo_texto(query, licitacoes)
+        link = _link_da_query(query)
+        # A chave inclui o cursor: mesma query com o mesmo topo nao gera
+        # notificacao nova, e o beat rodando 3x/dia fica inofensivo.
+        chave = f"boletim:{query.id}:{last_id}"
 
         try:
-            resp = await resend.send_email(
-                to=list(query.recipients),
-                subject=subject,
-                html=html,
-                from_=from_email,
-            )
-        except (ResendError, Exception) as exc:  # noqa: BLE001
+            for destinatario in query.recipients:
+                await criar_notificacao(
+                    db,
+                    destinatario=destinatario,
+                    titulo=titulo,
+                    corpo=corpo,
+                    categoria=CATEGORIA_LICITACOES,
+                    link=link,
+                    chave_idempotencia=chave,
+                )
+        except Exception as exc:  # noqa: BLE001
             logger.warning("boletim %s failed: %s", query.id, exc, exc_info=False)
             log = BoletimLog(
                 saved_query_id=query.id,
@@ -242,7 +311,7 @@ async def dispatch_boletins(
             )
             continue
 
-        message_id = resp.get("id") if isinstance(resp, dict) else None
+        message_id = None  # nao ha mais envio de email
         log = BoletimLog(
             saved_query_id=query.id,
             licitacoes_count=len(licitacoes),

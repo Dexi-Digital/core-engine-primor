@@ -58,6 +58,89 @@ async def _run(
         return result.model_dump()
 
 
+@celery_app.task(name="worker.tasks.licitacoes.ingest_resultados")
+def ingest_resultados(
+    dias: int = 30, uf: str | None = None, max_licitacoes: int = 200
+) -> dict[str, object]:
+    """Resultados homologados -- alimenta os dashboards comerciais.
+
+    So existia como POST manual, e por isso `licitacoes_resultados`
+    ficava vazia e a tela de Inteligencia comercial aparecia em branco,
+    com cara de nao implementada.
+
+    `max_licitacoes` sobe para 200 aqui: o default baixo (25) do
+    endpoint existe pelo timeout do serverless, que nao se aplica ao
+    worker.
+    """
+    return asyncio.run(_run_resultados(dias, uf, max_licitacoes))
+
+
+async def _run_resultados(
+    dias: int, uf: str | None, max_licitacoes: int
+) -> dict[str, object]:
+    try:
+        from app.core.db import SessionLocal
+        from app.integrations.pncp.client import PncpClient
+        from app.modules.licitacoes.resultados import ingest_resultados as svc
+    except ImportError as exc:  # pragma: no cover
+        return {"error": f"API package not available in worker: {exc}"}
+
+    async with SessionLocal() as db:
+        client = PncpClient(
+            base_url=os.getenv("PNCP_BASE_URL", "https://pncp.gov.br/api/consulta")
+        )
+        try:
+            r = await svc(db, client, dias=dias, uf=uf, max_licitacoes=max_licitacoes)
+        finally:
+            await client.aclose()
+        return r.model_dump()
+
+
+@celery_app.task(name="worker.tasks.licitacoes.ingest_atas")
+def ingest_atas(
+    data_inicial: str | None = None,
+    data_final: str | None = None,
+    max_paginas: int | None = 20,
+) -> dict[str, object]:
+    """Atas de registro de preco (base das adesoes).
+
+    Janela padrao de 7 dias, casando com a cadencia semanal do beat --
+    assim nenhuma semana fica sem cobertura.
+    """
+    return asyncio.run(_run_atas(data_inicial, data_final, max_paginas))
+
+
+async def _run_atas(
+    data_inicial: str | None, data_final: str | None, max_paginas: int | None
+) -> dict[str, object]:
+    try:
+        from app.core.db import SessionLocal
+        from app.integrations.pncp.client import PncpClient
+        from app.modules.licitacoes.atas import ingest_atas as svc
+    except ImportError as exc:  # pragma: no cover
+        return {"error": f"API package not available in worker: {exc}"}
+
+    final = date.fromisoformat(data_final) if data_final else date.today()
+    inicial = (
+        date.fromisoformat(data_inicial)
+        if data_inicial
+        else (final - timedelta(days=7))
+    )
+
+    async with SessionLocal() as db:
+        client = PncpClient(
+            base_url=os.getenv("PNCP_BASE_URL", "https://pncp.gov.br/api/consulta")
+        )
+        try:
+            r = await svc(
+                db, client, data_inicial=inicial, data_final=final,
+                max_paginas=max_paginas,
+            )
+        finally:
+            await client.aclose()
+        return r.model_dump()
+
+
 @celery_app.task(name="worker.tasks.licitacoes.analise_saude_municipal")
 def analise_saude_municipal(municipio_id: str) -> dict[str, object]:
     return {"stub": True, "municipio_id": municipio_id}
@@ -65,7 +148,7 @@ def analise_saude_municipal(municipio_id: str) -> dict[str, object]:
 
 @celery_app.task(name="worker.tasks.licitacoes.dispatch_boletins")
 def dispatch_boletins(saved_query_id: int | None = None) -> dict[str, object]:
-    """Despacha boletins por email. Rodada por Celery beat 3x/dia.
+    """Despacha boletins como notificacao na plataforma (3x/dia).
 
     Se `saved_query_id` for informado, processa apenas essa query (util para
     reenvio manual). Caso contrario, itera todas as queries ativas.
@@ -75,27 +158,21 @@ def dispatch_boletins(saved_query_id: int | None = None) -> dict[str, object]:
 
 async def _run_boletins(saved_query_id: int | None) -> dict[str, object]:
     try:
-        from app.core.config import get_settings
+        from app.core import models_registry as _models  # noqa: F401
         from app.core.db import SessionLocal
-        from app.integrations.resend.client import ResendClient
         from app.modules.licitacoes.boletins import dispatch_boletins as dispatch_service
     except ImportError as exc:  # pragma: no cover
         return {"error": f"API package not available in worker: {exc}"}
 
-    settings = get_settings()
-    if not settings.resend_api_key:
-        return {"error": "RESEND_API_KEY not configured; skipping boletins dispatch"}
-
+    # Nao ha mais checagem de RESEND_API_KEY: desde 21/09/2026 o boletim
+    # e notificacao na plataforma. A checagem antiga fazia a task ABORTAR
+    # em qualquer ambiente sem chave de email -- ou seja, o boletim nao
+    # rodava e nada dizia isso alem de uma linha de log.
     async with SessionLocal() as db:
-        resend = ResendClient(api_key=settings.resend_api_key)
-        try:
-            summary = await dispatch_service(
-                db,
-                resend,
-                saved_query_ids=[saved_query_id] if saved_query_id else None,
-            )
-        finally:
-            await resend.aclose()
+        summary = await dispatch_service(
+            db,
+            saved_query_ids=[saved_query_id] if saved_query_id else None,
+        )
     return summary.model_dump()
 
 

@@ -132,33 +132,22 @@ async def test_dispatch_sends_email_and_advances_cursor(
         )
         return httpx.Response(200, json={"id": "resend-msg-abc", "to": ["tester@primor.com"]})
 
-    transport = httpx.MockTransport(handler)
-    http = httpx.AsyncClient(
-        base_url="https://mock.resend",
-        transport=transport,
-        headers={"Authorization": "Bearer re_test"},
-    )
-    resend = ResendClient(api_key="re_test", client=http)
-
     summary = await dispatch_boletins(
         db_session,
-        resend,
         public_base_url="https://motorcentral.example",
-        from_email="boletins@motorcentral.example",
     )
 
     assert summary.total_queries == 1
     assert summary.sent == 1
     assert summary.skipped_empty == 0
     assert summary.failed == 0
-    assert summary.results[0].resend_message_id == "resend-msg-abc"
     assert summary.results[0].licitacoes_count == 2
     assert summary.results[0].last_licitacao_id == max(s.id for s in seeded)
 
-    # Resend was called exactly once with both recipients.
-    assert len(calls) == 1
-    assert '"tester@primor.com"' in calls[0]["body"]
-    assert '"cc@primor.com"' in calls[0]["body"]
+    # Os dois destinatarios receberam notificacao propria.
+    from app.modules.notificacoes import service as _notif
+    for _email in ("tester@primor.com", "cc@primor.com"):
+        assert len(await _notif.listar(db_session, destinatario=_email)) == 1
 
     # BoletimLog row persisted with cursor = highest licitacao id.
     log = (
@@ -172,12 +161,10 @@ async def test_dispatch_sends_email_and_advances_cursor(
 
     # A second dispatch with NO new rows should skip (cursor is at top).
     summary2 = await dispatch_boletins(
-        db_session, resend, public_base_url="https://motorcentral.example"
+        db_session, public_base_url="https://motorcentral.example"
     )
     assert summary2.skipped_empty == 1
     assert summary2.sent == 0
-    # Resend should NOT have been called again.
-    assert len(calls) == 1
 
     # Add a new row AFTER the cursor -> should fire.
     new_rows = await _seed_licitacoes(
@@ -185,20 +172,23 @@ async def test_dispatch_sends_email_and_advances_cursor(
         [_row(external_id="ext-3", objeto="Compra de brita")],
     )
     summary3 = await dispatch_boletins(
-        db_session, resend, public_base_url="https://motorcentral.example"
+        db_session, public_base_url="https://motorcentral.example"
     )
     assert summary3.sent == 1
     assert summary3.results[0].licitacoes_count == 1
     assert summary3.results[0].last_licitacao_id == new_rows[0].id
-    assert len(calls) == 2
-
-    await resend.aclose()
 
 
 @pytest.mark.asyncio
 async def test_dispatch_isolates_failures_and_does_not_advance_cursor(
-    db_session: AsyncSession,
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Falha ao notificar NAO pode avancar o cursor.
+
+    Se avancasse, a proxima rodada acharia "nada novo" e aquelas
+    licitacoes nunca seriam avisadas a ninguem -- perda silenciosa, que
+    num captador de oportunidade significa prazo perdido.
+    """
     await _seed_licitacoes(db_session, [_row(external_id="ext-1", objeto="Obra teste")])
     await create_saved_query(
         db_session,
@@ -208,36 +198,29 @@ async def test_dispatch_isolates_failures_and_does_not_advance_cursor(
         uf="SP",
     )
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        # Simulate Resend rejecting payload (bad-from etc). 400 is NOT retried
-        # and should bubble as ResendError.
-        return httpx.Response(400, json={"message": "from not verified"})
+    async def explode(*a, **k):
+        raise RuntimeError("banco de notificacoes indisponivel")
 
-    transport = httpx.MockTransport(handler)
-    http = httpx.AsyncClient(
-        base_url="https://mock.resend",
-        transport=transport,
-        headers={"Authorization": "Bearer re_test"},
+    monkeypatch.setattr(
+        "app.modules.licitacoes.boletins.criar_notificacao", explode
     )
-    resend = ResendClient(api_key="re_test", client=http)
 
-    summary = await dispatch_boletins(db_session, resend)
+    summary = await dispatch_boletins(db_session)
 
     assert summary.failed == 1
     assert summary.sent == 0
     assert summary.results[0].status == "failed"
-    assert summary.results[0].error_message is not None
-    assert "from not verified" in summary.results[0].error_message
+    assert "indisponivel" in (summary.results[0].error_message or "")
 
-    # After failure, cursor must remain None so next run retries the same rows.
+    # Cursor segue None: a proxima rodada tenta as MESMAS linhas.
     log = (
-        await db_session.execute(BoletimLog.__table__.select().order_by(BoletimLog.sent_at.desc()))
+        await db_session.execute(
+            BoletimLog.__table__.select().order_by(BoletimLog.sent_at.desc())
+        )
     ).first()
     assert log is not None
     assert log.status == "failed"
     assert log.last_licitacao_id is None
-
-    await resend.aclose()
 
 
 @pytest.mark.asyncio
@@ -306,21 +289,29 @@ async def test_crud_saved_queries_roundtrip(
 
 
 @pytest.mark.asyncio
-async def test_dispatch_endpoint_returns_503_without_api_key(
+async def test_dispatch_funciona_sem_chave_de_email(
     api_client: AsyncClient,
     monkeypatch: pytest.MonkeyPatch,
     auth_headers: dict[str, str],
 ) -> None:
-    # Simulate an unconfigured deploy: no RESEND_API_KEY in the environment.
+    """Sem RESEND_API_KEY o despacho tem de funcionar igual.
+
+    Este teste afirmava o CONTRARIO (503 sem a chave) ate 21/09/2026.
+    Com o boletim virando notificacao na plataforma, exigir chave de
+    email deixaria o despacho indisponivel por causa de uma
+    dependencia que nao e mais usada.
+    """
     monkeypatch.delenv("RESEND_API_KEY", raising=False)
     from app.core.config import get_settings
 
     get_settings.cache_clear()
-
-    resp = await api_client.post("/api/v1/licitacoes/boletins/dispatch", headers=auth_headers)
-    assert resp.status_code == 503
-    assert "RESEND_API_KEY" in resp.json()["detail"]
-    get_settings.cache_clear()
+    try:
+        resp = await api_client.post(
+            "/api/v1/licitacoes/boletins/dispatch", headers=auth_headers
+        )
+        assert resp.status_code == 200, resp.text
+    finally:
+        get_settings.cache_clear()
 
 
 @pytest.mark.asyncio
@@ -337,3 +328,125 @@ async def test_saved_query_rejects_empty_recipients(
         headers=auth_headers,
     )
     assert resp.status_code == 422
+
+
+# --- Boletim vira notificacao na plataforma (21/09/2026) --------------------
+#
+# O cliente pediu que o boletim parasse de mandar email e virasse
+# notificacao dentro da plataforma. O que NAO muda: o cursor
+# (`last_licitacao_id`) e o isolamento de falha por query -- essa parte
+# ja estava certa e os testes acima continuam valendo para ela.
+
+
+@pytest.mark.asyncio
+async def test_dispatch_cria_notificacao_para_cada_destinatario(
+    db_session: AsyncSession,
+) -> None:
+    """Uma notificacao POR pessoa, nao uma compartilhada.
+
+    Cada destinatario le e marca como lida a sua -- caixa de entrada
+    compartilhada faria a leitura de um sumir o aviso do outro.
+    """
+    from app.modules.notificacoes import service as notif_svc
+
+    query = await create_saved_query(
+        db_session,
+        nome="Obras SP",
+        user_email="tester@primor.com",
+        recipients=["tester@primor.com", "cc@primor.com"],
+        uf="SP",
+    )
+    await _seed_licitacoes(db_session, [_row(external_id="n-1", objeto="Ponte")])
+
+    summary = await dispatch_boletins(db_session)
+
+    assert summary.sent == 1
+    for email in ("tester@primor.com", "cc@primor.com"):
+        caixa = await notif_svc.listar(db_session, destinatario=email)
+        assert len(caixa) == 1, f"{email} nao recebeu"
+        assert caixa[0].categoria == "licitacoes"
+        assert query.nome in caixa[0].titulo
+
+
+@pytest.mark.asyncio
+async def test_dispatch_nao_chama_resend(db_session: AsyncSession) -> None:
+    """A garantia central do pedido: nenhum email sai daqui.
+
+    `dispatch_boletins` nem recebe mais um ResendClient -- passar um
+    seria TypeError, o que torna impossivel religar o email sem mexer
+    na assinatura de proposito.
+    """
+    import inspect
+
+    from app.modules.licitacoes import boletins
+
+    params = inspect.signature(boletins.dispatch_boletins).parameters
+    assert "resend" not in params
+
+
+@pytest.mark.asyncio
+async def test_notificacao_do_boletim_nao_duplica(db_session: AsyncSession) -> None:
+    """O beat roda 3x/dia. Sem chave, o sino encheria de copias."""
+    from app.modules.notificacoes import service as notif_svc
+
+    await create_saved_query(
+        db_session,
+        nome="Obras SP",
+        user_email="tester@primor.com",
+        recipients=["tester@primor.com"],
+        uf="SP",
+    )
+    await _seed_licitacoes(db_session, [_row(external_id="n-2", objeto="Asfalto")])
+
+    await dispatch_boletins(db_session)
+    await dispatch_boletins(db_session)  # cursor ja no topo -> skipped_empty
+
+    caixa = await notif_svc.listar(db_session, destinatario="tester@primor.com")
+    assert len(caixa) == 1
+
+
+@pytest.mark.asyncio
+async def test_notificacao_leva_para_a_licitacao(db_session: AsyncSession) -> None:
+    """Notificacao sem link obriga a pessoa a procurar o que mudou."""
+    from app.modules.notificacoes import service as notif_svc
+
+    await create_saved_query(
+        db_session,
+        nome="Obras SP",
+        user_email="tester@primor.com",
+        recipients=["tester@primor.com"],
+        uf="SP",
+    )
+    await _seed_licitacoes(db_session, [_row(external_id="n-3", objeto="Drenagem")])
+
+    await dispatch_boletins(db_session)
+    caixa = await notif_svc.listar(db_session, destinatario="tester@primor.com")
+    assert caixa[0].link and caixa[0].link.startswith("/licitacoes")
+
+
+@pytest.mark.asyncio
+async def test_corpo_da_notificacao_nao_leva_html(db_session: AsyncSession) -> None:
+    """O objeto vem do PNCP -- texto de terceiro.
+
+    O digest de email e HTML porque cliente de email pede HTML. O painel
+    renderiza o corpo como texto, e injetar HTML de terceiro ali seria
+    abrir XSS numa tela autenticada.
+    """
+    from app.modules.notificacoes import service as notif_svc
+
+    await create_saved_query(
+        db_session,
+        nome="Obras SP",
+        user_email="tester@primor.com",
+        recipients=["tester@primor.com"],
+        uf="SP",
+    )
+    await _seed_licitacoes(
+        db_session,
+        [_row(external_id="n-4", objeto="<script>alert(1)</script> Obra")],
+    )
+
+    await dispatch_boletins(db_session)
+    caixa = await notif_svc.listar(db_session, destinatario="tester@primor.com")
+    assert "<script" not in caixa[0].corpo
+    assert "<" not in caixa[0].corpo
