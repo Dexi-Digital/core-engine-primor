@@ -1059,6 +1059,7 @@ SELECT
     FLAN.CODFILIAL,
     FLAN.IDLAN,
     FLAN.VALORORIGINAL,
+    BX.VALORBAIXADO,
     FLAN.DATAVENCIMENTO,
     FLAN.DATAEMISSAO,
     FLAN.STATUSLAN,
@@ -1069,27 +1070,53 @@ FROM FLAN
 LEFT JOIN FCFO
        ON FCFO.CODCOLIGADA = FLAN.CODCOLIGADA
       AND FCFO.CODCFO      = FLAN.CODCFO
-WHERE FLAN.DATAVENCIMENTO BETWEEN :DATAINICIAL AND :DATAFINAL
+LEFT JOIN (
+    SELECT CODCOLIGADA, IDLAN, SUM(VALORBAIXADO) AS VALORBAIXADO
+    FROM FLANBAIXA
+    GROUP BY CODCOLIGADA, IDLAN
+) BX
+       ON BX.CODCOLIGADA = FLAN.CODCOLIGADA
+      AND BX.IDLAN       = FLAN.IDLAN
+WHERE FLAN.RECMODIFIEDON >= :DATAINICIAL
+  AND FLAN.RECMODIFIEDON <  :DATAFINAL
 ```
+
+**Fechado pela TOTVS em 21/09/2026** (ticket 30268517, segunda rodada — as
+quatro perguntas de uma vez, e as quatro respondidas):
+
+| Pergunta | Resposta |
+|---|---|
+| Domínio de `STATUSLAN` | **0** Em Aberto · **1** Baixado · **2** Cancelado · **3** Baixado por Acordo · **4** Baixado Parcialmente · **5** Borderô ([artigo](https://centraldeatendimento.totvs.com/hc/pt-br/articles/1500006130181)). Cancelados saem da conciliação. |
+| Valor efetivamente pago | `FLANBAIXA`, relacionada por `CODCOLIGADA + IDLAN`; **um item por baixa** (parcial ou total) em `VALORBAIXADO`. A consolidação (soma) é nossa — daí o subselect `BX`. |
+| Carga incremental | `FLAN.RECMODIFIEDON` é mantido nativamente por trigger em toda inserção/alteração. **É a janela do `WHERE` acima.** |
+| Nome da contraparte | `FCFO.NOME`, documento em `FCFO.CGCCFO`. Confirmado. |
+
+O que o adapter faz com isso (`extractor.py`):
+
+- `status_rm` continua com o **bruto**; `situacao` traz a interpretação
+  (`em_aberto`, `baixado`, `cancelado`, `baixado_por_acordo`,
+  `baixado_parcialmente`, `bordero`). Código fora do domínio vira `None`,
+  **nunca** um default — customização ou versão futura do RM precisa aparecer
+  como desconhecida, não como quitada.
+- `valor_baixado` = soma das baixas; `saldo` = `VALORORIGINAL − valor_baixado`
+  (zero quando cancelado).
+- Quitado para conciliação = `baixado` **ou** `baixado_por_acordo`.
+  `baixado_parcialmente` ainda tem saldo.
 
 Detalhes que importam:
 
-- **O `LEFT JOIN` é proposital.** Com `INNER`, um lançamento sem
-  contraparte cadastrada sumiria da extração — e sumir em silêncio é o
-  pior modo de falha possível numa reconciliação financeira.
-- **O join usa `CODCOLIGADA` além de `CODCFO`**, como a TOTVS
+- **Os dois `LEFT JOIN` são propositais.** Com `INNER`, lançamento sem
+  contraparte cadastrada ou sem baixa nenhuma sumiria da extração — e sumir
+  em silêncio é o pior modo de falha numa reconciliação financeira.
+- **O join da FCFO usa `CODCOLIGADA` além de `CODCFO`**, como a TOTVS
   especificou. Só por `CODCFO` haveria mistura entre coligadas.
-- **`AS NOMECFO` é o alias que o adapter espera** (`CAMPO_NOME`). Se a
-  coluna de nome da FCFO na instância da Primor não for `NOME`, basta
-  ajustar o lado esquerdo do alias — o adapter não muda.
-- Os parâmetros `:DATAINICIAL` e `:DATAFINAL` são preenchidos pelo
-  adapter e enviados separados por `;`, no formato que o
-  `ConsultaSqlExtractor` já monta.
-
-Para carga **incremental** (em vez de recarregar a janela inteira),
-trocar o `WHERE` por `FLAN.RECMODIFIEDON >= :DATAINICIAL` traz só o que
-mudou desde a última execução. Fica como evolução — a janela por
-vencimento resolve o caso de uso atual e é mais fácil de conferir.
+- **Aliases `NOMECFO` e `VALORBAIXADO` são o que o adapter espera**
+  (`CAMPO_NOME`, `CAMPO_VALOR_BAIXADO`).
+- A janela por `RECMODIFIEDON` traz o que **mudou**, inclusive baixas em
+  lançamentos antigos — que a janela antiga por `DATAVENCIMENTO` perdia. Para
+  carga inicial, passar `:DATAINICIAL` bem no passado.
+- Para conferir nomes de coluna na instância da Primor: no RM, `Ctrl+Alt+F9`
+  sobre o campo, ou a tabela `GDIC` (dicionário de dados).
 
 Depois de cadastrada, preencher no ambiente:
 

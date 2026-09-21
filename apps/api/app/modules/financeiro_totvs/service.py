@@ -37,6 +37,9 @@ _COLUNAS = (
     "data_vencimento",
     "data_emissao",
     "status_rm",
+    "situacao",
+    "valor_baixado",
+    "saldo",
     "raw",
 )
 
