@@ -147,3 +147,135 @@ async def test_api_lista_processos(
 
 async def test_api_exige_autenticacao(api_client: AsyncClient) -> None:
     assert (await api_client.get("/api/v1/juridico/processos")).status_code == 401
+
+
+# --- "Sincronizar agora" roda no worker, e a tela ve o estado -----------------
+#
+# A primeira versao bloqueava a requisicao por ~2,5 min sem feedback, e a
+# server action ENGOLIA o 502/503: clicar no botao e nada mudar na tela era
+# indistinguivel de "rodou". Relatado em 21/09/2026.
+
+
+class _DispatcherFalso:
+    def __init__(self) -> None:
+        self.chamadas: list[tuple[str, list, str | None]] = []
+
+    def send_task(self, name: str, args: list | None = None, queue: str | None = None, **kw):
+        self.chamadas.append((name, args or [], queue))
+
+
+@pytest.fixture
+def com_credencial(monkeypatch: pytest.MonkeyPatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("EASYJUR_EMAIL", "x@y.com")
+    monkeypatch.setenv("EASYJUR_PASSWORD", "s")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+async def test_sync_sem_credencial_da_503_e_fica_registrado(
+    api_client: AsyncClient, auth_headers: dict, db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """O motivo tem de aparecer na tela, nao so no status HTTP que a
+    server action pode engolir."""
+    from app.core.config import get_settings
+
+    # setenv("") e nao delenv: o .env local da maquina de dev tem a
+    # credencial, e pydantic-settings le o arquivo quando a variavel
+    # nao existe no ambiente.
+    monkeypatch.setenv("EASYJUR_EMAIL", "")
+    monkeypatch.setenv("EASYJUR_PASSWORD", "")
+    get_settings.cache_clear()
+    r = await api_client.post("/api/v1/juridico/sync", headers=auth_headers)
+    get_settings.cache_clear()
+    assert r.status_code == 503
+    log = (await db_session.execute(select(SyncLog))).scalar_one()
+    assert log.status == "erro"
+    assert "EASYJUR" in (log.erro or "")
+
+
+async def test_sync_enfileira_no_worker_e_devolve_202(
+    api_client: AsyncClient, auth_headers: dict, db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch, com_credencial,
+) -> None:
+    disp = _DispatcherFalso()
+    monkeypatch.setattr(svc, "get_celery_dispatcher", lambda: disp)
+
+    r = await api_client.post("/api/v1/juridico/sync", headers=auth_headers)
+    assert r.status_code == 202, r.text
+    assert r.json()["status"] == "em_andamento"
+    assert disp.chamadas == [("worker.tasks.juridico.pull_easyjur", ["manual"], "financeiro")]
+    log = (await db_session.execute(select(SyncLog))).scalar_one()
+    assert log.status == "em_andamento"
+    assert log.iniciado_em is not None
+
+
+async def test_sync_com_fila_fora_do_ar_da_503_e_registra(
+    api_client: AsyncClient, auth_headers: dict, db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch, com_credencial,
+) -> None:
+    class _Quebrado:
+        def send_task(self, *a, **k):
+            raise ConnectionError("redis recusou")
+
+    monkeypatch.setattr(svc, "get_celery_dispatcher", lambda: _Quebrado())
+    r = await api_client.post("/api/v1/juridico/sync", headers=auth_headers)
+    assert r.status_code == 503
+    log = (await db_session.execute(select(SyncLog))).scalar_one()
+    assert log.status == "erro"
+    assert "fila" in (log.erro or "").lower()
+
+
+async def test_sync_em_andamento_nao_enfileira_de_novo(
+    api_client: AsyncClient, auth_headers: dict, db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch, com_credencial,
+) -> None:
+    """Dois cliques = uma carga. Duas cargas simultaneas fariam dois
+    logins e dois exports de 12 mil linhas contra o EasyJur."""
+    disp = _DispatcherFalso()
+    monkeypatch.setattr(svc, "get_celery_dispatcher", lambda: disp)
+    assert (await api_client.post("/api/v1/juridico/sync", headers=auth_headers)).status_code == 202
+    r = await api_client.post("/api/v1/juridico/sync", headers=auth_headers)
+    assert r.status_code == 409
+    assert len(disp.chamadas) == 1
+
+
+async def test_sync_travado_ha_muito_tempo_pode_ser_reenfileirado(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Se o worker nao existir no ambiente, a carga fica "em andamento"
+    para sempre. Depois de 30 min o botao volta a funcionar -- e a tela
+    avisa que o worker pode estar fora."""
+    from datetime import UTC, datetime, timedelta
+
+    await svc.marcar_inicio(db_session, source="manual")
+    log = (await db_session.execute(select(SyncLog))).scalar_one()
+    log.iniciado_em = datetime.now(UTC) - timedelta(minutes=31)
+    await db_session.commit()
+    assert await svc.em_andamento(db_session, source="manual") is False
+
+
+async def test_erro_no_pull_fica_no_log(db_session: AsyncSession) -> None:
+    await svc.marcar_inicio(db_session, source="beat")
+    await svc.marcar_erro(db_session, source="beat", mensagem="EasyJur recusou o login")
+    log = (await db_session.execute(select(SyncLog))).scalar_one()
+    assert log.status == "erro"
+    assert log.erro == "EasyJur recusou o login"
+
+
+async def test_pull_bem_sucedido_fecha_como_ok(db_session: AsyncSession) -> None:
+    await svc.marcar_inicio(db_session, source="manual")
+    await svc.sincronizar(db_session, ClientFalso(), source="manual")
+    log = (await db_session.execute(select(SyncLog))).scalar_one()
+    assert log.status == "ok"
+    assert log.erro is None
+
+
+async def test_resumo_expoe_o_estado_do_sync(db_session: AsyncSession) -> None:
+    await svc.marcar_inicio(db_session, source="manual")
+    u = (await svc.resumo(db_session))["ultimo_sync"]
+    assert u["status"] == "em_andamento"
+    assert u["iniciado_em"] is not None

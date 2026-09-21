@@ -32,6 +32,13 @@ from app.core.db import Base
 
 SOURCES_SYNC: tuple[str, ...] = ("beat", "manual")
 
+# Estado de uma carga. "em_andamento" existe porque a carga roda no
+# worker e demora ~2,5 min: sem ele, clicar em "Sincronizar agora" e
+# nada mudar na tela era indistinguivel de "rodou".
+SYNC_EM_ANDAMENTO = "em_andamento"
+SYNC_OK = "ok"
+SYNC_ERRO = "erro"
+
 
 class Processo(Base):
     __tablename__ = "juridico_processos"
@@ -111,7 +118,9 @@ class SyncLog(Base):
     # O que o EasyJur DISSE ter, contra o que coletamos.
     total_declarado: Mapped[int | None] = mapped_column(Integer)
     divergencia: Mapped[bool] = mapped_column(Boolean, default=False)
+    status: Mapped[str] = mapped_column(String(16), default=SYNC_OK)
     erro: Mapped[str | None] = mapped_column(String(1024))
+    iniciado_em: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     executado_em: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

@@ -10,7 +10,9 @@
  * parecer uma afirmação sobre a carteira inteira.
  */
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 
+import { AutoRefresh } from "@/components/AutoRefresh";
 import { ModuleStatusCard } from "@/components/ModuleStatusCard";
 import { ApiError, apiFetch } from "@/lib/api";
 
@@ -61,6 +63,9 @@ type Resumo = {
     andamentos: number;
     total_declarado: number | null;
     divergencia: boolean;
+    status: "em_andamento" | "ok" | "erro";
+    erro: string | null;
+    iniciado_em: string | null;
   } | null;
 };
 
@@ -83,15 +88,28 @@ async function seguro<T>(path: string): Promise<T | null> {
 
 async function sincronizar(): Promise<void> {
   "use server";
+  let erro: string | null = null;
   try {
     await apiFetch("/api/v1/juridico/sync", { method: "POST" });
   } catch (e) {
-    // 502/503 = o EasyJur recusou, caiu ou a credencial não está neste
-    // ambiente. A tela já mostra o estado do último sync; estourar a
-    // página de erro não acrescentaria nada.
-    if (!(e instanceof ApiError) || ![502, 503].includes(e.status)) throw e;
+    if (!(e instanceof ApiError)) throw e;
+    // 503 = credencial ou fila fora; 409 = ja esta rodando. O motivo
+    // vai para a URL e aparece na tela -- a primeira versao engolia o
+    // erro e recarregava igual, e "cliquei e nada mudou" era
+    // indistinguivel de "rodou".
+    try {
+      erro = (JSON.parse(e.body) as { detail?: string }).detail ?? e.body;
+    } catch {
+      erro = e.body || `HTTP ${e.status}`;
+    }
   }
   revalidatePath("/juridico");
+  redirect(erro ? `/juridico?erro=${encodeURIComponent(erro)}` : "/juridico");
+}
+
+function minutosDesde(iso: string | null): number | null {
+  if (!iso) return null;
+  return Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
 }
 
 function dataBr(iso: string | null): string {
@@ -131,6 +149,7 @@ export default async function JuridicoPage(props: {
   const busca = typeof sp.busca === "string" ? sp.busca : "";
   const status = typeof sp.status === "string" ? sp.status : "";
   const page = Math.max(1, Number(sp.page) || 1);
+  const erroDaAcao = typeof sp.erro === "string" ? sp.erro : "";
 
   const qs = new URLSearchParams({ page: String(page), page_size: "25" });
   if (busca) qs.set("busca", busca);
@@ -143,6 +162,12 @@ export default async function JuridicoPage(props: {
   ]);
 
   const nuncaSincronizou = resumo !== null && resumo.ultimo_sync === null;
+  const sync = resumo?.ultimo_sync ?? null;
+  const rodando = sync?.status === "em_andamento";
+  const minutos = rodando ? minutosDesde(sync.iniciado_em) : null;
+  // Uma carga leva ~2,5 min. Passou de 30, o worker provavelmente nao
+  // esta de pe neste ambiente -- a API tambem deixa de bloquear o botao.
+  const travado = rodando && (minutos ?? 0) >= 30;
   const totalPaginas = processos ? Math.max(1, Math.ceil(processos.total / 25)) : 1;
 
   return (
@@ -158,15 +183,48 @@ export default async function JuridicoPage(props: {
         <form action={sincronizar} className="text-right">
           <button
             type="submit"
-            className="rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-700"
+            disabled={rodando && !travado}
+            className="rounded-md bg-slate-900 px-4 py-1.5 text-sm font-medium text-white hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-400"
           >
-            Sincronizar agora
+            {rodando && !travado ? "Sincronizando…" : "Sincronizar agora"}
           </button>
           <p className="mt-1 text-xs text-slate-400">
-            Leva alguns minutos. Última: {quando(resumo?.ultimo_sync?.executado_em ?? null)}
+            {rodando
+              ? `Em andamento há ${minutos ?? 0} min — leva uns 3`
+              : `Última: ${quando(sync?.executado_em ?? null)}`}
           </p>
         </form>
       </header>
+
+      {rodando && !travado && <AutoRefresh segundos={15} />}
+
+      {rodando && !travado && (
+        <section className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+          <p className="font-semibold">Sincronizando com o EasyJur…</p>
+          <p className="mt-1">
+            Iniciada há {minutos ?? 0} min. O EasyJur demora para exportar os
+            andamentos; esta página se atualiza sozinha a cada 15 segundos.
+          </p>
+        </section>
+      )}
+
+      {travado && (
+        <section className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <p className="font-semibold">A carga não terminou em {minutos} min.</p>
+          <p className="mt-1">
+            O normal são 3. Provavelmente o serviço que roda as cargas (worker)
+            não está de pé neste ambiente. Dá para tentar de novo, mas sem o
+            worker o resultado vai ser o mesmo.
+          </p>
+        </section>
+      )}
+
+      {((erroDaAcao && !rodando) || sync?.status === "erro") && (
+        <section className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+          <p className="font-semibold">A sincronização não rodou.</p>
+          <p className="mt-1 font-mono text-xs">{erroDaAcao || sync?.erro}</p>
+        </section>
+      )}
 
       {resumo === null && (
         <section className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
@@ -183,8 +241,8 @@ export default async function JuridicoPage(props: {
           <p className="font-semibold">Ainda não houve nenhuma sincronização.</p>
           <p className="mt-1">
             A rotina automática roda todo dia às 3h30. Para trazer os dados
-            agora, use “Sincronizar agora”. Os números abaixo ficam zerados até
-            lá — a tela está pronta, o que falta é a primeira carga.
+            agora, use “Sincronizar agora” — leva uns 3 minutos e a tela
+            acompanha. Os números abaixo ficam zerados até lá.
           </p>
         </section>
       )}
