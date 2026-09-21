@@ -55,7 +55,29 @@ async def _run(
             )
         finally:
             await client.aclose()
-        return result.model_dump()
+        resumo = result.model_dump()
+        _falhar_se_nada_rodou(resumo)
+        return resumo
+
+
+def _falhar_se_nada_rodou(resumo: dict[str, object]) -> None:
+    """Crawler em que TUDO falhou nao pode terminar verde.
+
+    Em 21/09/2026 o PNCP devolveu 503 nas 13 modalidades: a task voltou
+    `total_fetched=0` e encerrou com sucesso. No beat isso e uma
+    execucao saudavel sobre uma base que nao andou -- o mesmo defeito
+    silencioso que deixou a tela parada em 22/04.
+
+    So dispara quando nada veio E houve falha. Falha parcial segue
+    valendo (uma modalidade fora do ar nao invalida as outras doze), e
+    dia sem publicacao nenhuma e resultado legitimo.
+    """
+    falhas = resumo.get("failed_modalidades") or []
+    if falhas and not resumo.get("total_fetched"):
+        raise RuntimeError(
+            f"crawler_pncp: nenhuma modalidade respondeu "
+            f"({len(falhas)} falharam, 0 registros). PNCP fora do ar?"
+        )
 
 
 @celery_app.task(name="worker.tasks.licitacoes.ingest_resultados")

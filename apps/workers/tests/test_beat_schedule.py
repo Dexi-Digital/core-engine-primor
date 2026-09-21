@@ -77,3 +77,30 @@ def test_dashboards_comerciais_tem_fonte_agendada() -> None:
     tasks = {cfg["task"] for cfg in celery_app.conf.beat_schedule.values()}
     assert "worker.tasks.licitacoes.ingest_resultados" in tasks
     assert "worker.tasks.licitacoes.ingest_atas" in tasks
+
+
+def test_crawler_que_falha_em_tudo_nao_termina_verde() -> None:
+    """Em 21/09/2026 o PNCP devolveu 503 nas 13 modalidades.
+
+    A task voltou `total_fetched=0` com as 13 em `failed_modalidades` --
+    e terminou com SUCESSO. No beat isso e uma execucao verde sobre uma
+    base que nao andou: o mesmo defeito silencioso que deixou a tela
+    parada em 22/04, agora com cara de job saudavel.
+    """
+    from worker.tasks.licitacoes import _falhar_se_nada_rodou
+
+    tudo_falhou = {
+        "total_fetched": 0,
+        "failed_modalidades": [1, 2, 3],
+    }
+    with pytest.raises(RuntimeError, match="nenhuma modalidade"):
+        _falhar_se_nada_rodou(tudo_falhou)
+
+
+def test_falha_parcial_ou_dia_sem_publicacao_nao_e_erro() -> None:
+    """Uma modalidade fora do ar nao invalida as outras doze, e um dia
+    sem publicacao nenhuma (domingo) e resultado legitimo."""
+    from worker.tasks.licitacoes import _falhar_se_nada_rodou
+
+    _falhar_se_nada_rodou({"total_fetched": 40, "failed_modalidades": [7]})
+    _falhar_se_nada_rodou({"total_fetched": 0, "failed_modalidades": []})
