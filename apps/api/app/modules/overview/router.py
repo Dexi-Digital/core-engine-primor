@@ -36,6 +36,21 @@ def _days_until(d: date | None, ref: date) -> int | None:
     return (d - ref).days
 
 
+@router.get("/gargalos")
+async def get_gargalos(
+    db: AsyncSession = Depends(get_db),
+    _user: User = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Gargalos por frente -- o que precisa de alguem hoje.
+
+    Substitui na home o bloco "Integracoes ativas" (tecnico) por onde a
+    operacao esta travada. Ver `gargalos.py`.
+    """
+    from app.modules.overview.gargalos import gargalos
+
+    return await gargalos(db)
+
+
 @router.get("/home")
 async def get_home(
     db: AsyncSession = Depends(get_db),
