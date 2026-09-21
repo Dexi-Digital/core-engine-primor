@@ -14,12 +14,28 @@ import {
   IconGavel,
   IconShield,
   IconDoc,
-  IconDollar,
   IconRefresh,
   IconCloud,
   IconActivity,
   IconBell,
 } from "@/components/ui/icons";
+
+type Gargalo = {
+  chave: string;
+  titulo: string;
+  quantidade: number;
+  gravidade: "critico" | "atencao";
+  link: string;
+  detalhe: string | null;
+};
+type Frente = {
+  chave: string;
+  titulo: string;
+  link: string;
+  criticos: number;
+  gargalos: Gargalo[];
+};
+type Gargalos = { total: number; criticos: number; frentes: Frente[] };
 
 type HomeData = {
   kpis: Record<string, number | null>;
@@ -54,17 +70,6 @@ type HomeData = {
   }>;
 };
 
-const INTEGRATION_ICON: Record<string, React.ReactNode> = {
-  pncp: <IconGavel />,
-  detran: <IconTruck />,
-  crea: <IconDoc />,
-  onedrive: <IconCloud />,
-  documentai: <IconSparkles />,
-  resend: <IconBell />,
-  dominio: <IconDollar />,
-  totvs: <IconDollar />,
-};
-
 const KIND_ICON: Record<string, React.ReactNode> = {
   diagnostico: <IconStethoscope width={14} height={14} />,
   onedrive: <IconCloud width={14} height={14} />,
@@ -91,6 +96,14 @@ function relTime(iso: string | null): string {
   return d.toLocaleDateString("pt-BR");
 }
 
+async function loadGargalos(): Promise<Gargalos | null> {
+  try {
+    return await apiFetch<Gargalos>("/api/v1/overview/gargalos");
+  } catch {
+    return null;
+  }
+}
+
 async function load(): Promise<HomeData> {
   try {
     return await apiFetch<HomeData>("/api/v1/overview/home");
@@ -101,7 +114,7 @@ async function load(): Promise<HomeData> {
 }
 
 export default async function Home() {
-  const data = await load();
+  const [data, gargalos] = await Promise.all([load(), loadGargalos()]);
   const k = data.kpis;
   const conf = k.conformidade_pct;
   const confTone: "success" | "warning" | "danger" =
@@ -210,97 +223,78 @@ export default async function Home() {
 
       {/* --- Integrações + Feed --- */}
       <div className="mt-6 grid gap-4 fade-in fade-in-2 lg:grid-cols-3">
-        {/* Integrações */}
+        {/* Gargalos por frente */}
         <div className="card lg:col-span-2 overflow-hidden">
           <div
             className="flex items-center justify-between border-b px-5 py-3"
             style={{ borderColor: "var(--border)" }}
           >
             <div>
-              <h3 className="text-sm font-semibold">Integrações ativas</h3>
+              <h3 className="text-sm font-semibold">Gargalos por frente</h3>
               <p className="text-xs" style={{ color: "var(--fg-muted)" }}>
-                Conexões com sistemas externos — execuções recentes
+                O que precisa de alguém hoje — cada item leva à tela que resolve
               </p>
             </div>
-            <Link
-              href="/diagnostico"
-              className="btn btn-ghost btn-sm"
-              style={{ fontSize: 12 }}
-            >
-              Ver histórico <IconArrowRight width={12} height={12} />
-            </Link>
+            {gargalos && (
+              <StatusBadge tone={gargalos.criticos > 0 ? "danger" : gargalos.total > 0 ? "warning" : "success"} dot={false}>
+                {gargalos.criticos > 0
+                  ? `${gargalos.criticos} crítico(s)`
+                  : gargalos.total > 0
+                    ? `${gargalos.total} pendência(s)`
+                    : "nada pendente"}
+              </StatusBadge>
+            )}
           </div>
-          <ul className="divide-y" style={{ borderColor: "var(--border)" }}>
-            {data.integrations.map((int) => {
-              const toneCls =
-                int.status === "ok"
-                  ? "led-ok"
-                  : int.status === "pending"
-                  ? "led-off"
-                  : int.status === "error"
-                  ? "led-err"
-                  : "led-warn";
-              const chipTone:
-                | "success"
-                | "warning"
-                | "default"
-                | "danger" =
-                int.status === "ok"
-                  ? "success"
-                  : int.status === "pending"
-                  ? "default"
-                  : int.status === "error"
-                  ? "danger"
-                  : "warning";
-              const chipLabel =
-                int.status === "ok"
-                  ? "operando"
-                  : int.status === "pending"
-                  ? "aguardando credencial"
-                  : int.status === "error"
-                  ? "falha"
-                  : "ocioso";
-              return (
-                <li
-                  key={int.key}
-                  className="flex items-center gap-3 px-5 py-3 transition hover:bg-[var(--panel-alt)]"
-                >
-                  <span
-                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
-                    style={{
-                      background: "var(--bg-subtle)",
-                      color: "var(--fg-muted)",
-                    }}
-                  >
-                    {INTEGRATION_ICON[int.key] ?? <IconBolt />}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className={`led ${toneCls}`} />
-                      <span className="text-sm font-semibold">
-                        {int.label}
+          {gargalos === null ? (
+            <div className="px-5 py-8 text-center text-sm" style={{ color: "var(--fg-muted)" }}>
+              Não consegui carregar os gargalos — falha de requisição, não ausência de pendências.
+            </div>
+          ) : (
+            <ul className="divide-y" style={{ borderColor: "var(--border)" }}>
+              {gargalos.frentes.map((f) => (
+                <li key={f.chave} className="px-5 py-3">
+                  <div className="flex items-center justify-between">
+                    <Link href={f.link} className="text-sm font-semibold hover:underline">
+                      {f.titulo}
+                    </Link>
+                    {f.gargalos.length === 0 && (
+                      <span className="text-xs" style={{ color: "var(--fg-muted)" }}>
+                        nada pendente
                       </span>
-                      <StatusBadge tone={chipTone} dot={false}>
-                        {chipLabel}
-                      </StatusBadge>
-                    </div>
-                    <div
-                      className="mt-0.5 text-xs"
-                      style={{ color: "var(--fg-muted)" }}
-                    >
-                      {int.descr}
-                    </div>
+                    )}
                   </div>
-                  <div
-                    className="hidden text-right text-xs md:block"
-                    style={{ color: "var(--fg-muted)" }}
-                  >
-                    {int.last_event}
-                  </div>
+                  {f.gargalos.length > 0 && (
+                    <ul className="mt-2 space-y-1.5">
+                      {f.gargalos.map((g) => (
+                        <li key={g.chave}>
+                          <Link
+                            href={g.link}
+                            className="flex items-start gap-3 rounded-lg px-2 py-1.5 transition hover:bg-[var(--panel-alt)]"
+                          >
+                            <span className={`led mt-1.5 ${g.gravidade === "critico" ? "led-err" : "led-warn"}`} />
+                            <span className="min-w-0 flex-1">
+                              <span className="text-sm">
+                                <span className="font-semibold tabular-nums">
+                                  {g.chave === "captacao_parada" ? "" : `${g.quantidade} `}
+                                </span>
+                                {g.titulo}
+                              </span>
+                              {g.detalhe && (
+                                <span className="block text-xs" style={{ color: "var(--fg-muted)" }}>
+                                  {g.detalhe}
+                                </span>
+                              )}
+                            </span>
+                            <IconArrowRight width={12} height={12} />
+                          </Link>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </li>
-              );
-            })}
-          </ul>
+              ))}
+            </ul>
+          )}
         </div>
 
         {/* Feed */}
