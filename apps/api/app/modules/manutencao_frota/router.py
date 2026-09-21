@@ -40,7 +40,7 @@ from app.modules.licitacoes.storage import EditaisStorage
 from app.modules.manutencao_frota import custo_equipamento as custo_svc
 from app.modules.manutencao_frota import planos as planos_svc
 from app.modules.manutencao_frota import service
-from app.modules.manutencao_frota.models import PlanoManutencao
+from app.modules.manutencao_frota.models import PlanoManutencao, Veiculo
 from app.modules.manutencao_frota.schemas import (
     ConsultaDetranListResponse,
     ConsultaDetranRead,
@@ -636,7 +636,9 @@ async def listar_planos(
     lista, "nenhum alerta" seria lido como "tudo em dia".
     """
     resultado = await planos_svc.status_dos_planos(db, veiculo_id=veiculo_id)
-    resultado["sem_plano"] = await planos_svc.veiculos_sem_plano(db)
+    resultado["sem_plano"] = await planos_svc.veiculos_sem_plano(
+        db, veiculo_id=veiculo_id
+    )
     return resultado
 
 
@@ -648,6 +650,10 @@ async def criar_plano_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> PlanoManutencaoRead:
+    # Sem isso a FK estoura so no commit: 500 com a transacao abortada,
+    # onde os outros endpoints deste router devolvem 404.
+    if await db.get(Veiculo, payload.veiculo_id) is None:
+        raise HTTPException(status_code=404, detail="Veiculo nao encontrado")
     return PlanoManutencaoRead.model_validate(
         await planos_svc.criar_plano(
             db, payload.model_dump(), actor=current_user.email

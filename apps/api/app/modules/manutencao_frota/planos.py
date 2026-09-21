@@ -39,12 +39,20 @@ from app.modules.manutencao_frota.models import (
     PLANO_PROXIMA,
     PLANO_SEM_LEITURA,
     PLANO_VENCIDA,
+    STATUS_BAIXADO,
+    STATUS_VENDIDO,
     ParteDiaria,
     PlanoManutencao,
     Veiculo,
 )
 
 STATUSES_CONFIAVEIS = (PARTE_REVISADO, PARTE_PROCESSADO)
+
+# Equipamento aposentado nao tem manutencao a vencer. Repare que
+# `manutencao` NAO entra aqui: maquina na oficina e exatamente a que
+# precisa do plano visivel, e filtrar por "== ativo" a esconderia --
+# trocando um alerta falso por uma omissao, que neste painel e pior.
+STATUSES_APOSENTADOS = (STATUS_BAIXADO, STATUS_VENDIDO)
 
 # A partir de quanto do intervalo restante o plano entra em "proxima".
 # Fracao e nao valor fixo: 10% de 3.000 km sao 300 km de aviso, e 10%
@@ -178,10 +186,18 @@ async def status_dos_planos(
     db: AsyncSession, *, veiculo_id: int | None = None
 ) -> dict[str, Any]:
     """Estado de todos os planos ativos, o que vence primeiro no topo."""
-    q = select(PlanoManutencao).where(PlanoManutencao.ativo.is_(True))
+    # O veiculo vem no mesmo SELECT: uma pagina com plano-por-item
+    # (oleo/filtro/correia x ~100 maquinas) fazia ~300 idas ao banco
+    # so para descobrir a placa de cada um.
+    q = (
+        select(PlanoManutencao, Veiculo)
+        .join(Veiculo, Veiculo.id == PlanoManutencao.veiculo_id)
+        .where(PlanoManutencao.ativo.is_(True))
+        .where(Veiculo.status.notin_(STATUSES_APOSENTADOS))
+    )
     if veiculo_id is not None:
         q = q.where(PlanoManutencao.veiculo_id == veiculo_id)
-    planos = list((await db.execute(q.order_by(PlanoManutencao.id))).scalars().all())
+    linhas = (await db.execute(q.order_by(PlanoManutencao.id))).all()
 
     # Cache por (veiculo, base): varios planos do mesmo equipamento na
     # mesma base compartilham a leitura, e sem isso seria uma query por
@@ -189,10 +205,7 @@ async def status_dos_planos(
     cache: dict[tuple[int, str], Decimal | None] = {}
     itens: list[StatusPlano] = []
 
-    for plano in planos:
-        veiculo = await db.get(Veiculo, plano.veiculo_id)
-        if veiculo is None:
-            continue
+    for plano, veiculo in linhas:
         chave = (plano.veiculo_id, plano.base)
         if chave not in cache:
             cache[chave] = await leitura_atual(db, veiculo, plano.base)
@@ -217,7 +230,9 @@ async def status_dos_planos(
     }
 
 
-async def veiculos_sem_plano(db: AsyncSession) -> list[dict[str, Any]]:
+async def veiculos_sem_plano(
+    db: AsyncSession, *, veiculo_id: int | None = None
+) -> list[dict[str, Any]]:
     """Equipamentos ativos sem nenhum plano cadastrado.
 
     Existe para a ausencia aparecer. Sem esta lista, um equipamento sem
@@ -229,12 +244,16 @@ async def veiculos_sem_plano(db: AsyncSession) -> list[dict[str, Any]]:
     com_plano = select(PlanoManutencao.veiculo_id).where(
         PlanoManutencao.ativo.is_(True)
     )
-    res = await db.execute(
+    q = (
         select(Veiculo)
-        .where(Veiculo.status == "ativo")
+        .where(Veiculo.status.notin_(STATUSES_APOSENTADOS))
         .where(Veiculo.id.notin_(com_plano))
-        .order_by(Veiculo.placa)
     )
+    # Numa tela de um equipamento so, "42 sem plano" e ruido sobre uma
+    # frota que aquela tela nao esta descrevendo.
+    if veiculo_id is not None:
+        q = q.where(Veiculo.id == veiculo_id)
+    res = await db.execute(q.order_by(Veiculo.placa))
     return [
         {
             "veiculo_id": v.id,
@@ -272,20 +291,29 @@ async def criar_plano(
 ) -> PlanoManutencao:
     plano = PlanoManutencao(**dados)
     db.add(plano)
+    # `flush` da o id sem fechar a transacao: a auditoria precisa do id
+    # e precisa cair no mesmo commit que o plano.
+    await db.flush()
+    _auditar(db, plano, "plano_criado", actor=actor)
     await db.commit()
     await db.refresh(plano)
-    await _auditar(db, plano, "plano_criado", actor=actor)
     return plano
 
 
 async def atualizar_plano(
     db: AsyncSession, plano: PlanoManutencao, campos: dict[str, Any], *, actor: str
 ) -> PlanoManutencao:
+    # Horimetro nao e odometro. Manter `1200` (horas) ao virar para km
+    # faria o vencimento ser contado contra o odometro (ex.: 48.000 km):
+    # o plano cravaria em "vencida" com um numero sem sentido e sem
+    # pista do motivo. Quem trocar a base registra a revisao de novo.
+    if "base" in campos and campos["base"] != plano.base:
+        campos = {**campos, "ultima_revisao_marcador": None}
     for k, v in campos.items():
         setattr(plano, k, v)
+    _auditar(db, plano, "plano_atualizado", actor=actor)
     await db.commit()
     await db.refresh(plano)
-    await _auditar(db, plano, "plano_atualizado", actor=actor)
     return plano
 
 
@@ -320,33 +348,43 @@ async def registrar_revisao(
         plano.ultima_revisao_em = data_revisao
     if observacoes:
         plano.observacoes = observacoes
+    _auditar(db, plano, "revisao_registrada", actor=actor)
     await db.commit()
     await db.refresh(plano)
-    await _auditar(db, plano, "revisao_registrada", actor=actor)
     return plano
 
 
-async def _auditar(
+def _linha_de_auditoria(
+    plano: PlanoManutencao, acao: str, *, actor: str
+) -> AuditLog:
+    return AuditLog(
+        actor=actor,
+        action=acao,
+        resource="manutencao_frota.plano",
+        resource_id=str(plano.id),
+        metadata_json=json.dumps(
+            {
+                "veiculo_id": plano.veiculo_id,
+                "base": plano.base,
+                "intervalo": str(plano.intervalo),
+                "ultima_revisao_marcador": (
+                    str(plano.ultima_revisao_marcador)
+                    if plano.ultima_revisao_marcador is not None
+                    else None
+                ),
+            }
+        ),
+    )
+
+
+def _auditar(
     db: AsyncSession, plano: PlanoManutencao, acao: str, *, actor: str
 ) -> None:
-    db.add(
-        AuditLog(
-            actor=actor,
-            action=acao,
-            resource="manutencao_frota.plano",
-            resource_id=str(plano.id),
-            metadata_json=json.dumps(
-                {
-                    "veiculo_id": plano.veiculo_id,
-                    "base": plano.base,
-                    "intervalo": str(plano.intervalo),
-                    "ultima_revisao_marcador": (
-                        str(plano.ultima_revisao_marcador)
-                        if plano.ultima_revisao_marcador is not None
-                        else None
-                    ),
-                }
-            ),
-        )
-    )
-    await db.commit()
+    """Enfileira a auditoria -- **sem commitar**.
+
+    Commitar aqui separava a auditoria da mutacao: uma falha depois do
+    commit do plano deixava o plano gravado, a requisicao em 500 e
+    nenhum registro de quem fez. O operador repetia e criava duplicata.
+    Agora as duas coisas caem no mesmo commit de quem chamou.
+    """
+    db.add(_linha_de_auditoria(plano, acao, actor=actor))

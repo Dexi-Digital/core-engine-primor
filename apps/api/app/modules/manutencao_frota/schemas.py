@@ -406,6 +406,48 @@ def _ensure_plano_base(v: str) -> str:
     return v
 
 
+def _marcador_decimal(v: Any) -> Any:
+    """Le horimetro/odometro escrito por gente, e recusa o ambiguo.
+
+    A tela formata em pt-BR: 3000 aparece como "3.000". Copiar esse
+    numero de volta para o campo gravaria `Decimal("3.000")` == 3 --
+    erro de mil vezes, em silencio, que crava o plano em "vencida" para
+    sempre. Num controle de manutencao, numero errado com cara de certo
+    e pior do que recusa.
+
+    Entao:
+      "250,5"    -> 250.5   (virgula decimal, como se escreve aqui)
+      "1.234,5"  -> 1234.5  (ponto de milhar + virgula decimal)
+      "1.234.567"-> 1234567 (so milhares)
+      "250.5"    -> 250.5   (forma canonica)
+      "3.000"    -> RECUSA  -- pode ser 3000 ou 3, e nao cabe adivinhar
+    """
+    if not isinstance(v, str):
+        return v
+    texto = v.strip()
+    if not texto:
+        return v
+
+    if "," in texto:
+        # Virgula so pode ser decimal em pt-BR: ponto vira milhar.
+        return texto.replace(".", "").replace(",", ".")
+
+    inteiro, ponto, resto = texto.rpartition(".")
+    if not ponto:
+        return texto
+    if texto.count(".") > 1:
+        # "1.234.567" -- so pode ser milhar.
+        return texto.replace(".", "")
+    if len(resto) == 3 and inteiro.lstrip("-+").isdigit():
+        raise ValueError(
+            f"'{texto}' e ambiguo: pode ser {texto.replace('.', '')} "
+            f"(milhar) ou {texto} (decimal). Escreva "
+            f"{texto.replace('.', '')} para milhar, ou use virgula "
+            f"({inteiro},{resto}) para decimal."
+        )
+    return texto
+
+
 class PlanoManutencaoBase(BaseModel):
     veiculo_id: int
     descricao: str = Field(..., min_length=3, max_length=200)
@@ -420,6 +462,11 @@ class PlanoManutencaoBase(BaseModel):
     @classmethod
     def _validate_base(cls, v: str) -> str:
         return _ensure_plano_base(v)
+
+    @field_validator("intervalo", "ultima_revisao_marcador", mode="before")
+    @classmethod
+    def _le_decimal_br(cls, v: Any) -> Any:
+        return _marcador_decimal(v)
 
 
 class PlanoManutencaoCreate(PlanoManutencaoBase):
@@ -439,6 +486,11 @@ class PlanoManutencaoUpdate(BaseModel):
     @classmethod
     def _validate_base(cls, v: str | None) -> str | None:
         return _ensure_plano_base(v) if v is not None else v
+
+    @field_validator("intervalo", "ultima_revisao_marcador", mode="before")
+    @classmethod
+    def _le_decimal_br(cls, v: Any) -> Any:
+        return _marcador_decimal(v)
 
 
 class PlanoManutencaoRead(PlanoManutencaoBase):
@@ -461,3 +513,8 @@ class PlanoRevisaoRegistrar(BaseModel):
     marcador: Decimal | None = Field(None, ge=0)
     data: date | None = None
     observacoes: str | None = Field(None, max_length=500)
+
+    @field_validator("marcador", mode="before")
+    @classmethod
+    def _le_decimal_br(cls, v: Any) -> Any:
+        return _marcador_decimal(v)
