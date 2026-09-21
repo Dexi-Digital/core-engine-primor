@@ -11,6 +11,7 @@ from decimal import Decimal
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.modules.manutencao_frota import planos as svc
@@ -309,3 +310,183 @@ async def test_base_invalida_recusada(
 async def test_planos_exige_autenticacao(api_client: AsyncClient) -> None:
     r = await api_client.get("/api/v1/manutencao-frota/planos-manutencao")
     assert r.status_code == 401
+
+
+# --- Correcoes da revisao de codigo -----------------------------------------
+#
+# Oito defeitos achados na revisao do PR. Cada teste abaixo falhou antes
+# da correspondente correcao -- e o motivo de cada um estar aqui e que
+# nenhum dos 942 testes anteriores os pegava.
+
+
+async def test_equipamento_vendido_sai_do_painel(db_session: AsyncSession) -> None:
+    """Maquina vendida nao tem manutencao a vencer.
+
+    Sem isso o plano dela fica ativo, `falta` so cresce negativo, e ela
+    ocupa o topo de "vencidas" para sempre -- inflando o KPI e
+    empurrando para baixo o equipamento que realmente precisa parar.
+    """
+    from app.modules.manutencao_frota.models import STATUS_VENDIDO
+
+    v = await _veiculo(db_session, "VEN1D00")
+    v.status = STATUS_VENDIDO
+    await db_session.commit()
+    await _plano(db_session, v, intervalo="50", marcador="100")
+    await _parte(db_session, v, h_fim=500)  # 400h alem do intervalo
+
+    painel = await svc.status_dos_planos(db_session)
+    assert painel["total"] == 0, "plano de equipamento vendido ainda no painel"
+
+
+async def test_equipamento_em_manutencao_continua_no_painel(
+    db_session: AsyncSession,
+) -> None:
+    """O oposto do teste acima, e o motivo de a regra nao ser `== ativo`.
+
+    Maquina na oficina e exatamente a que precisa do plano visivel.
+    Filtrar por "ativo" a esconderia -- trocando um falso alerta por uma
+    omissao, que neste painel e o erro pior.
+    """
+    from app.modules.manutencao_frota.models import STATUS_MANUTENCAO
+
+    v = await _veiculo(db_session, "MAN1T00")
+    v.status = STATUS_MANUTENCAO
+    await db_session.commit()
+    await _plano(db_session, v)
+
+    painel = await svc.status_dos_planos(db_session)
+    assert painel["total"] == 1
+
+
+async def test_sem_plano_inclui_equipamento_em_manutencao(
+    db_session: AsyncSession,
+) -> None:
+    """Mesma razao: ausencia de plano tem de aparecer mesmo na oficina."""
+    from app.modules.manutencao_frota.models import STATUS_MANUTENCAO
+
+    v = await _veiculo(db_session, "MAN2T00")
+    v.status = STATUS_MANUTENCAO
+    await db_session.commit()
+
+    sem = await svc.veiculos_sem_plano(db_session)
+    assert [s["placa"] for s in sem] == ["MAN2T00"]
+
+
+async def test_trocar_base_limpa_marcador_da_revisao(
+    db_session: AsyncSession,
+) -> None:
+    """Horimetro nao e odometro.
+
+    Trocar a base mantendo `1200` (horas) faz o proximo vencimento ser
+    calculado contra o odometro (ex.: 48.000 km): o plano crava em
+    "vencida" com numero sem sentido e sem pista do motivo.
+    """
+    v = await _veiculo(db_session, "BAS1E00")
+    p = await _plano(db_session, v, base=PLANO_BASE_HORAS, marcador="1200")
+
+    p = await svc.atualizar_plano(
+        db_session, p, {"base": PLANO_BASE_KM}, actor="t@t.com"
+    )
+    assert p.ultima_revisao_marcador is None, (
+        "marcador em horas sobreviveu a troca para km"
+    )
+
+
+async def test_marcador_em_formato_br_e_recusado(
+    api_client: AsyncClient, auth_headers: dict, db_session: AsyncSession
+) -> None:
+    """"3.000" na tela nao pode virar 3 no banco.
+
+    A tela formata em pt-BR (3000 -> "3.000"). Copiar esse numero de
+    volta para o campo gravaria 3,00 em silencio -- erro de mil vezes,
+    que crava o plano em "vencida" para sempre. Melhor recusar e dizer
+    como escrever.
+    """
+    v = await _veiculo(db_session, "FMT1B00")
+    p = await _plano(db_session, v)
+
+    r = await api_client.post(
+        f"/api/v1/manutencao-frota/planos-manutencao/{p.id}/revisao",
+        json={"marcador": "3.000"},
+        headers=auth_headers,
+    )
+    assert r.status_code == 422, f"aceitou formato ambiguo: {r.text}"
+    assert "3000" in r.text
+
+
+async def test_marcador_com_virgula_decimal_e_aceito(
+    api_client: AsyncClient, auth_headers: dict, db_session: AsyncSession
+) -> None:
+    """Quem escreve em portugues escreve 250,5 -- e isso e inequivoco."""
+    v = await _veiculo(db_session, "FMT2B00")
+    p = await _plano(db_session, v)
+
+    r = await api_client.post(
+        f"/api/v1/manutencao-frota/planos-manutencao/{p.id}/revisao",
+        json={"marcador": "250,5"},
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    assert Decimal(r.json()["ultima_revisao_marcador"]) == Decimal("250.5")
+
+
+async def test_criar_plano_para_veiculo_inexistente_da_404(
+    api_client: AsyncClient, auth_headers: dict
+) -> None:
+    """FK estourando vira 500 com transacao abortada.
+
+    Os outros quatro endpoints deste router devolvem 404 para id que
+    nao existe; este devolvia 500.
+    """
+    r = await api_client.post(
+        "/api/v1/manutencao-frota/planos-manutencao",
+        json={"veiculo_id": 99999, "descricao": "Troca de oleo",
+              "base": PLANO_BASE_HORAS, "intervalo": "50"},
+        headers=auth_headers,
+    )
+    assert r.status_code == 404, f"esperado 404, veio {r.status_code}"
+
+
+async def test_sem_plano_respeita_filtro_de_veiculo(
+    api_client: AsyncClient, auth_headers: dict, db_session: AsyncSession
+) -> None:
+    """Numa tela de um equipamento so, "42 sem plano" e ruido."""
+    alvo = await _veiculo(db_session, "FIL1T00")
+    await _veiculo(db_session, "FIL2T00")
+    await _veiculo(db_session, "FIL3T00")
+
+    r = await api_client.get(
+        f"/api/v1/manutencao-frota/planos-manutencao?veiculo_id={alvo.id}",
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    placas = [s["placa"] for s in r.json()["sem_plano"]]
+    assert placas == ["FIL1T00"], f"vazou a frota inteira: {placas}"
+
+
+async def test_falha_na_auditoria_nao_deixa_plano_orfao(
+    db_session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Auditoria e mutacao tem de viver na mesma transacao.
+
+    Commitando separado, uma falha na auditoria deixa o plano gravado
+    e devolve 500: o operador repete e cria plano duplicado, e a
+    mutacao fica sem registro de quem fez.
+    """
+    v = await _veiculo(db_session, "AUD1T00")
+
+    def explode(*a, **k):
+        raise RuntimeError("auditoria indisponivel")
+
+    monkeypatch.setattr(svc, "_linha_de_auditoria", explode)
+
+    with pytest.raises(RuntimeError):
+        await svc.criar_plano(
+            db_session,
+            {"veiculo_id": v.id, "descricao": "Troca de oleo",
+             "base": PLANO_BASE_HORAS, "intervalo": Decimal("50")},
+            actor="t@t.com",
+        )
+    await db_session.rollback()
+    achados = (await db_session.execute(select(PlanoManutencao))).scalars().all()
+    assert achados == [], "plano sobreviveu a falha da auditoria"

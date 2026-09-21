@@ -9,7 +9,7 @@
 import Link from "next/link";
 import { revalidatePath } from "next/cache";
 
-import { apiFetch } from "@/lib/api";
+import { ApiError, apiFetch } from "@/lib/api";
 
 type Plano = {
   plano_id: number;
@@ -41,7 +41,15 @@ type Painel = {
   sem_plano: SemPlano[];
 };
 
-type Veiculo = { id: number; placa: string; modelo: string | null };
+type Veiculo = {
+  id: number;
+  placa: string;
+  modelo: string | null;
+  status: string;
+};
+
+/** Aposentado não recebe plano. `manutencao` recebe — é justamente quem precisa. */
+const STATUS_APOSENTADOS = ["baixado", "vendido"];
 
 const STATUS_BADGE: Record<string, { rotulo: string; classe: string }> = {
   vencida: { rotulo: "Vencida", classe: "bg-red-100 text-red-700" },
@@ -64,6 +72,33 @@ function num(v: string | null): string {
   return n.toLocaleString("pt-BR", { maximumFractionDigits: 1 });
 }
 
+/**
+ * O mesmo número, mas **sem separador de milhar** — para aparecer em
+ * campo de entrada e em placeholder.
+ *
+ * `num()` exibe 3000 como "3.000". Digitado de volta num campo, isso é
+ * ambíguo (3000 ou 3?), e a API recusa de propósito em vez de adivinhar.
+ * Aqui sai "3000", que só pode ser uma coisa.
+ */
+function numInput(v: string | null): string {
+  if (v === null) return "";
+  const n = Number(v);
+  if (!Number.isFinite(n)) return "";
+  return n.toLocaleString("pt-BR", {
+    useGrouping: false,
+    maximumFractionDigits: 2,
+  });
+}
+
+/** Data de hoje em São Paulo, não em UTC. */
+function hojeLocal(): string {
+  // `toISOString()` devolve UTC: no Brasil (UTC−3), revisão registrada
+  // depois das 21h seria gravada com a data do dia seguinte.
+  return new Date().toLocaleDateString("en-CA", {
+    timeZone: "America/Sao_Paulo",
+  });
+}
+
 async function fetchPainel(): Promise<Painel | null> {
   try {
     return await apiFetch<Painel>("/api/v1/manutencao-frota/planos-manutencao");
@@ -72,14 +107,24 @@ async function fetchPainel(): Promise<Painel | null> {
   }
 }
 
-async function fetchVeiculos(): Promise<Veiculo[]> {
+async function fetchVeiculos(): Promise<{
+  itens: Veiculo[];
+  truncada: boolean;
+}> {
   try {
-    const r = await apiFetch<{ items: Veiculo[] }>(
-      "/api/v1/manutencao-frota/veiculos?page=1&page_size=200&status=ativo",
+    // Sem `status=ativo`: equipamento em manutenção também precisa poder
+    // receber plano, e é o mesmo critério do painel e do "sem plano".
+    // 200 é o teto do endpoint (`le=200`) — daí `truncada`, para a lista
+    // curta aparecer como curta em vez de esconder frota em silêncio.
+    const r = await apiFetch<{ items: Veiculo[]; total: number }>(
+      "/api/v1/manutencao-frota/veiculos?page=1&page_size=200",
     );
-    return r.items ?? [];
+    const itens = (r.items ?? []).filter(
+      (v) => !STATUS_APOSENTADOS.includes(v.status),
+    );
+    return { itens, truncada: (r.total ?? 0) > (r.items ?? []).length };
   } catch {
-    return [];
+    return { itens: [], truncada: false };
   }
 }
 
@@ -91,16 +136,24 @@ async function criarPlano(formData: FormData): Promise<void> {
   const intervalo = String(formData.get("intervalo") ?? "").trim();
   if (!veiculo_id || !descricao || !intervalo) return;
   const marcador = String(formData.get("ultima_revisao_marcador") ?? "").trim();
-  await apiFetch("/api/v1/manutencao-frota/planos-manutencao", {
-    method: "POST",
-    body: JSON.stringify({
-      veiculo_id,
-      descricao,
-      base,
-      intervalo,
-      ultima_revisao_marcador: marcador || null,
-    }),
-  });
+  try {
+    await apiFetch("/api/v1/manutencao-frota/planos-manutencao", {
+      method: "POST",
+      body: JSON.stringify({
+        veiculo_id,
+        descricao,
+        base,
+        intervalo,
+        ultima_revisao_marcador: marcador || null,
+      }),
+    });
+  } catch (e) {
+    // 422 = número em formato ambíguo ou descrição curta demais;
+    // 404 = veículo removido entre o carregamento e o envio. Nenhum dos
+    // dois é falha de sistema, e estourar a tela de erro do Next faria
+    // a pessoa perder o formulário inteiro.
+    if (!(e instanceof ApiError) || ![404, 422].includes(e.status)) throw e;
+  }
   revalidatePath("/manutencao/planos");
 }
 
@@ -109,16 +162,24 @@ async function registrarRevisao(formData: FormData): Promise<void> {
   const id = formData.get("plano_id");
   if (!id) return;
   const marcador = String(formData.get("marcador") ?? "").trim();
-  await apiFetch(
-    `/api/v1/manutencao-frota/planos-manutencao/${id}/revisao`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        marcador: marcador || null,
-        data: new Date().toISOString().slice(0, 10),
-      }),
-    },
-  );
+  try {
+    await apiFetch(
+      `/api/v1/manutencao-frota/planos-manutencao/${id}/revisao`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          marcador: marcador || null,
+          data: hojeLocal(),
+        }),
+      },
+    );
+  } catch (e) {
+    // 422 = sem marcador informado E sem leitura do equipamento. É a
+    // API funcionando: a linha `sem_leitura` exige o número na mão. O
+    // campo já é `required` nessas linhas, então isto cobre só a corrida
+    // entre o carregamento da página e o envio.
+    if (!(e instanceof ApiError) || e.status !== 422) throw e;
+  }
   revalidatePath("/manutencao/planos");
 }
 
@@ -258,7 +319,21 @@ export default async function PlanosPage() {
                         <input type="hidden" name="plano_id" value={p.plano_id} />
                         <input
                           name="marcador"
-                          placeholder={p.leitura_atual ?? u}
+                          inputMode="decimal"
+                          // Sem leitura do equipamento a API recusa (422):
+                          // exigir aqui troca a tela de erro do Next por
+                          // um aviso do próprio navegador.
+                          required={p.leitura_atual === null}
+                          placeholder={
+                            p.leitura_atual === null
+                              ? `${u} *`
+                              : numInput(p.leitura_atual)
+                          }
+                          title={
+                            p.leitura_atual === null
+                              ? `Equipamento sem leitura registrada: informe o ${u} da revisão`
+                              : `Em branco usa a leitura atual (${numInput(p.leitura_atual)} ${u})`
+                          }
                           className="w-20 rounded border border-slate-300 px-1 text-xs"
                         />
                         <button
@@ -291,13 +366,21 @@ export default async function PlanosPage() {
               name="veiculo_id"
               className="rounded border border-slate-300 px-2 py-1 text-sm"
             >
-              {veiculos.length === 0 && <option value="">— sem veículos —</option>}
-              {veiculos.map((v) => (
+              {veiculos.itens.length === 0 && (
+                <option value="">— sem veículos —</option>
+              )}
+              {veiculos.itens.map((v) => (
                 <option key={v.id} value={v.id}>
                   {v.placa} {v.modelo ? `— ${v.modelo}` : ""}
                 </option>
               ))}
             </select>
+            {veiculos.truncada && (
+              <span className="text-amber-700">
+                Lista limitada aos 200 primeiros. Se o equipamento não está
+                aqui, cadastre o plano pela página dele.
+              </span>
+            )}
           </label>
           <label className="flex flex-col gap-1 text-xs">
             <span className="font-medium uppercase tracking-wide text-slate-500">
