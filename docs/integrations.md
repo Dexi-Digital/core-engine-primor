@@ -1118,6 +1118,9 @@ Detalhes que importam:
 - Para conferir nomes de coluna na instância da Primor: no RM, `Ctrl+Alt+F9`
   sobre o campo, ou a tabela `GDIC` (dicionário de dados).
 
+**Passo a passo do cadastro no RM** (tela, campos, teste do formato de data):
+`docs/totvs-rm-cadastro-sentenca.md`.
+
 Depois de cadastrada, preencher no ambiente:
 
 ```ini

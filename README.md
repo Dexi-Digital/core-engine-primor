@@ -21,6 +21,7 @@ docs/
   architecture.md   Visão arquitetural
   roadmap.md        Backlog por módulo (A–E)
   integrations.md   Cada adapter de terceiro
+  totvs-rm-cadastro-sentenca.md  Passo a passo para cadastrar a consulta SQL no RM
   lgpd.md           Estratégia de conformidade e auditoria
 ```
 
