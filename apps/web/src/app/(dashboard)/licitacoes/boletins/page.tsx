@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { revalidatePath } from "next/cache";
 
 import { apiFetch } from "@/lib/api";
@@ -90,18 +89,12 @@ export default async function BoletinsPage() {
     <div className="space-y-6">
       <header className="flex items-start justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Boletins por email</h1>
+          <h1 className="text-2xl font-bold">Boletins</h1>
           <p className="mt-1 text-sm text-slate-500">
             Cadastre filtros salvos e receba um digest das novas licitações 3x/dia
-            (07h, 13h, 19h — America/Sao_Paulo). Envio via <strong>Resend</strong>.
+            (07h, 13h, 19h). Chega como <strong>notificação na plataforma</strong> — não por e-mail.
           </p>
         </div>
-        <Link
-          href="/licitacoes"
-          className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-        >
-          ← Voltar
-        </Link>
       </header>
 
       <section className="rounded-xl border border-slate-200 bg-white p-5">

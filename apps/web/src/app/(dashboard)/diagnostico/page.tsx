@@ -1,7 +1,8 @@
 import { revalidatePath } from "next/cache";
+import { redirect } from "next/navigation";
 import Link from "next/link";
 
-import { apiFetch } from "@/lib/api";
+import { ApiError, apiFetch } from "@/lib/api";
 
 type VersaoServicos = {
   api_fingerprint: string;
@@ -80,11 +81,24 @@ async function fetchOneDriveRuns(): Promise<OneDriveSyncRun[]> {
 async function triggerRun(formData: FormData): Promise<void> {
   "use server";
   const scope = String(formData.get("scope") ?? "all");
-  await apiFetch("/api/v1/diagnostico/run", {
-    method: "POST",
-    body: JSON.stringify({ scope }),
-  });
+  // O run e SINCRONO na API (aceitavel no volume atual). O que faltava
+  // era dizer o que aconteceu: erro engolido = "cliquei e nada mudou".
+  let erro: string | null = null;
+  try {
+    await apiFetch("/api/v1/diagnostico/run", {
+      method: "POST",
+      body: JSON.stringify({ scope }),
+    });
+  } catch (e) {
+    if (!(e instanceof ApiError)) throw e;
+    try {
+      erro = (JSON.parse(e.body) as { detail?: string }).detail ?? e.body;
+    } catch {
+      erro = e.body || `HTTP ${e.status}`;
+    }
+  }
   revalidatePath("/diagnostico");
+  redirect(erro ? `/diagnostico?erro=${encodeURIComponent(erro)}` : "/diagnostico?ok=1");
 }
 
 async function triggerOneDriveSync(formData: FormData): Promise<void> {
@@ -117,7 +131,12 @@ async function fetchVersao(): Promise<VersaoServicos | null> {
   }
 }
 
-export default async function DiagnosticoPage() {
+export default async function DiagnosticoPage(props: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const sp = await props.searchParams;
+  const erroAcao = typeof sp.erro === "string" ? sp.erro : "";
+  const okAcao = sp.ok === "1";
   const [runs, oneDriveRuns, versao] = await Promise.all([
     fetchRuns(),
     fetchOneDriveRuns(),
@@ -128,6 +147,18 @@ export default async function DiagnosticoPage() {
 
   return (
     <div className="flex flex-col gap-8">
+      {erroAcao && (
+        <div className="rounded-lg border border-red-300 bg-red-50 p-4 text-sm text-red-900">
+          <p className="font-semibold">O diagnóstico não rodou.</p>
+          <p className="mt-1 font-mono text-xs">{erroAcao}</p>
+        </div>
+      )}
+      {okAcao && lastRun && (
+        <div className="rounded-lg border border-emerald-300 bg-emerald-50 p-4 text-sm text-emerald-900">
+          Diagnóstico executado às {formatDateTime(lastRun.finished_at ?? lastRun.started_at)} —{" "}
+          {lastRun.total_findings} verificação(ões), {pctConformidade(lastRun)}% em conformidade.
+        </div>
+      )}
       {versao && versao.em_sincronia === false ? (
         <div className="rounded-lg border border-rose-300 bg-rose-50 p-4 text-sm">
           <p className="font-semibold text-rose-900">

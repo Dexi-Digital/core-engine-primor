@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { ApiError, apiFetch } from "@/lib/api";
@@ -91,12 +90,6 @@ export default async function DashboardsComerciaisPage(props: {
             Concorrentes, geotargeting e eficiência da esteira — dados do PNCP.
           </p>
         </div>
-        <Link
-          href="/licitacoes"
-          className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-        >
-          ← Licitações
-        </Link>
       </header>
 
       <form className="flex items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">

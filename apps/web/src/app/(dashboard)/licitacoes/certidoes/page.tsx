@@ -223,12 +223,6 @@ export default async function CertidoesPage(props: {
             de vencimento por email (30, 15, 7 e 0 dias antes).
           </p>
         </div>
-        <Link
-          href="/licitacoes"
-          className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
-        >
-          ← Voltar
-        </Link>
       </header>
 
       <section className="grid grid-cols-2 gap-3 md:grid-cols-4">

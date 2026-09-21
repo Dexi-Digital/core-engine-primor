@@ -412,6 +412,11 @@ async def painel(db: AsyncSession) -> dict[str, Any]:
     )
     por_etapa: dict[str, int] = {e: 0 for e in ADMISSAO_ETAPAS}
     itens: list[dict[str, Any]] = []
+    # Reflexo na OnSafety por pessoa, numa consulta so. "nunca" e um
+    # estado de verdade -- diferente de "erro" e de "ok".
+    from app.modules.dp_sesmt.onboarding import ultimo_run_por_employee
+
+    reflexo = await ultimo_run_por_employee(db, [j.employee_id for j in jornadas])
     for jornada in jornadas:
         por_etapa[jornada.etapa] = por_etapa.get(jornada.etapa, 0) + 1
         employee = await db.get(Employee, jornada.employee_id)
@@ -431,6 +436,15 @@ async def painel(db: AsyncSession) -> dict[str, Any]:
                 "kit_gerado_em": jornada.kit_gerado_em,
                 "kit_entregue_em": jornada.kit_entregue_em,
                 "confirmado_em": jornada.confirmado_em,
+                "onsafety": (
+                    {
+                        "status": run.status,
+                        "em": run.executed_at.isoformat() if run.executed_at else None,
+                        "erro": run.error_msg,
+                    }
+                    if (run := reflexo.get(jornada.employee_id)) is not None
+                    else {"status": "nunca", "em": None, "erro": None}
+                ),
             }
         )
     return {
