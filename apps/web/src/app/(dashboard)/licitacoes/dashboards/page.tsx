@@ -66,6 +66,22 @@ export default async function DashboardsComerciaisPage(props: {
     safeFetch<Eficiencia>(`/api/v1/licitacoes/dashboards/eficiencia?uf=${uf}`),
   ]);
 
+  // `null` = a requisição falhou. Array/objeto vazio = a API respondeu e
+  // não há dado. São coisas diferentes e a tela diz qual das duas é --
+  // tratar as duas como "sem dado" foi o que fez este módulo parecer não
+  // construído.
+  const falhouTudo =
+    concorrentes === null &&
+    geo === null &&
+    naoCaptados === null &&
+    eficiencia === null;
+
+  const semFonte =
+    !falhouTudo &&
+    (concorrentes ?? []).length === 0 &&
+    (geo ?? []).length === 0 &&
+    (eficiencia?.total_triadas ?? 0) === 0;
+
   return (
     <div className="space-y-6">
       <header className="flex items-start justify-between">
@@ -101,16 +117,46 @@ export default async function DashboardsComerciaisPage(props: {
         </button>
       </form>
 
-      {eficiencia && (
-        <section className="grid grid-cols-2 gap-4 md:grid-cols-4">
+      {/*
+        Os cards renderizam SEMPRE. Antes eram `{eficiencia && (...)}`:
+        com a tabela de triagem vazia a seção inteira sumia, e a tela
+        ficava só com título e filtro — indistinguível de
+        funcionalidade não construída. Foi exatamente assim que este
+        módulo foi relatado como "não implementado".
+      */}
+      {semFonte && (
+        <section className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
+          <p className="font-semibold">Ainda sem dados para {uf}.</p>
+          <p className="mt-1">
+            Estes painéis leem de resultados homologados, atas de RP e
+            decisões de triagem. As ingestões rodam no Celery beat
+            (resultados e atas às segundas, de madrugada) e a triagem
+            depende de alguém triar. Até a primeira rodada, os números
+            abaixo ficam zerados — a tela está construída, a fonte é que
+            está vazia.
+          </p>
+        </section>
+      )}
+
+      {falhouTudo && (
+        <section className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+          <p className="font-semibold">Não consegui falar com a API.</p>
+          <p className="mt-1">
+            Os quatro painéis falharam na requisição. Isso é diferente de
+            base vazia: pode ser a API fora do ar ou sessão expirada.
+          </p>
+        </section>
+      )}
+
+      <section className="grid grid-cols-2 gap-4 md:grid-cols-4">
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <p className="text-xs font-medium text-slate-500">Licitações triadas</p>
-            <p className="mt-1 text-2xl font-bold">{eficiencia.total_triadas}</p>
+            <p className="mt-1 text-2xl font-bold">{eficiencia?.total_triadas ?? "—"}</p>
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <p className="text-xs font-medium text-slate-500">Tempo médio até triagem</p>
             <p className="mt-1 text-2xl font-bold">
-              {eficiencia.tempo_medio_triagem_horas != null
+              {eficiencia?.tempo_medio_triagem_horas != null
                 ? `${eficiencia.tempo_medio_triagem_horas}h`
                 : "—"}
             </p>
@@ -118,17 +164,20 @@ export default async function DashboardsComerciaisPage(props: {
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <p className="text-xs font-medium text-slate-500">% com planilha localizada</p>
             <p className="mt-1 text-2xl font-bold">
-              {eficiencia.pct_com_planilha != null ? `${eficiencia.pct_com_planilha}%` : "—"}
+              {eficiencia?.pct_com_planilha != null
+                ? `${eficiencia.pct_com_planilha}%`
+                : "—"}
             </p>
           </div>
           <div className="rounded-xl border border-slate-200 bg-white p-4">
             <p className="text-xs font-medium text-slate-500">Falhas de portal/SharePoint</p>
             <p className="mt-1 text-2xl font-bold">
-              {Object.values(eficiencia.falhas_por_status).reduce((a, b) => a + b, 0)}
+              {eficiencia
+                ? Object.values(eficiencia.falhas_por_status).reduce((a, b) => a + b, 0)
+                : "—"}
             </p>
           </div>
-        </section>
-      )}
+      </section>
 
       {naoCaptados && naoCaptados.total > 0 && (
         <section className="rounded-xl border border-red-200 bg-red-50 p-4">
@@ -175,7 +224,7 @@ export default async function DashboardsComerciaisPage(props: {
             {(!concorrentes || concorrentes.length === 0) && (
               <tr>
                 <td colSpan={5} className="px-4 py-6 text-center text-slate-400">
-                  Sem resultados ingeridos — rode POST /licitacoes/ingest/resultados.
+                  Sem resultados homologados para {uf}. A ingestão roda às segundas, de madrugada.
                 </td>
               </tr>
             )}

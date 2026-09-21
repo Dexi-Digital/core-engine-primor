@@ -1104,7 +1104,7 @@ TOTVS_COLIGADAS_ESPERADAS=<lista das coligadas, ex.: 1,2>
 
 ---
 
-## EasyJur — jurídico (adapter pronto, aguardando credencial válida)
+## EasyJur — jurídico (autenticado; pull desenhado, não construído)
 
 **Adapter:** `app/integrations/easyjur/client.py`
 
@@ -1131,12 +1131,35 @@ tentar** quando resta 1, levantando `EasyjurBloqueioIminenteError`. Melhor
 falhar dizendo "não vou tentar" do que bloquear a conta de quem usa o sistema
 para trabalhar. Pelo mesmo motivo, o `health_check` **não autentica**.
 
-**Estado em 17/09/2026:** a senha fornecida foi **recusada** pelo servidor
-(`"Você digitou a senha incorreta"`), com 4 tentativas restantes. Não há hash
-no cliente — a senha vai em texto puro, exatamente como enviada. Hipótese mais
-provável: a conta entra pelo **login do Google** (a página carrega
-`accounts.google.com/gsi/client` e existe `api/login_google.php`), caso em que
-não há senha a usar por aqui.
+**Estado em 19/09/2026 — a credencial funciona.** A conta de integração é
+**`sistemas@primorsolucoes.srv.br`**, e autentica por email e senha de
+primeira. Sem SSO, sem captcha, sem 2FA.
+
+A senha recusada em 17/09 era de `rodrigo@construtorazag.com.br`, outro
+domínio — e a hipótese de que a conta entrava pelo **login do Google**
+(levantada porque a página carrega `accounts.google.com/gsi/client` e existe
+`api/login_google.php`) **está descartada**.
+
+### O que existe na base
+
+| Módulo | Endpoint | Registros |
+|---|---|---|
+| Processos | `POST /sgr/advogados/scripts/processos/ajax_processos_lista.php` + `acao_listagem=enviar` | 453 |
+| Andamentos | `POST /sgr/advogados/scripts/andamentos/ajax_andamento_lista.php` | 12.109 |
+| Pessoas | `POST /sgr/advogados/scripts/pessoas/ajax_pessoas_lista.php` | 1.974 |
+| Contratos | render de `GET /sgr/index.php?pg=contrato_lista` | 1 (template em branco) |
+
+⚠️ **`acao_listagem=enviar` é obrigatório em processos.** Sem ele o endpoint
+devolve HTTP 200 com `0 Registros Encontrados` — bem-formado e
+indistinguível de base vazia. Foi assim que a medição de 17/09 concluiu
+"0 processos" onde há 453.
+
+O conteúdo é o **contencioso trabalhista** (TRT03 296, TJMG 109), de PRIMOR /
+CONSTRUTORA ZAG / GUAXIMA — **não** contratos judicializados. O roadmap #12
+precisa ser reescrito.
+
+Desenho completo do pull, incluindo os três defeitos do export CSV deles:
+`docs/superpowers/specs/2026-09-20-easyjur-processos-design.md`.
 
 | Variável | Obrigatória | Descrição |
 |---|---|---|

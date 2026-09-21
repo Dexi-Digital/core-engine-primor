@@ -19,7 +19,7 @@ export default function JuridicoPage() {
         {
           label: "Integração com EasyJur (relatórios e tramitação processual).",
           status: "parcial",
-          nota: "Adapter autentica no sistema real por usuário e senha (a API é paga). Medido em 17/09: 1.974 cadastros de pessoas legíveis e 0 processos na base — confirmar com o cliente se o EasyJur é usado para acompanhamento processual antes de construir o pull.",
+          nota: "Adapter autentica no sistema real (conta sistemas@primorsolucoes.srv.br; a API é paga). Medido em 19/09: 453 processos e 12.109 andamentos — é o contencioso trabalhista (TRT03 296, TJMG 109), não contratos. A nota anterior afirmava 0 processos: era erro de medição, o endpoint só lista quando recebe acao_listagem=enviar. Endpoints mapeados e desenho fechado em docs/superpowers/specs/2026-09-20-easyjur-processos-design.md; falta construir o pull.",
         },
         {
           label: "Reconhecimento facial (foto Tangerino × fotos de obra).",

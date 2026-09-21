@@ -135,8 +135,15 @@ async def ingest_publicacoes(
             # Isolate flakiness: if the PNCP times out or returns 5xx for one
             # modalidade, record it and keep going so the other modalidades
             # still land in the DB. Callers can re-queue the failed ones.
+            # O TIPO vai na linha porque `str()` de timeout do httpx e
+            # vazio: em 21/09/2026 o PNCP caiu e o log saiu como
+            # "pncp modalidade 1 failed: " -- sem tipo e sem causa.
             logger.warning(
-                "pncp modalidade %s failed: %s", modalidade, exc, exc_info=False
+                "pncp modalidade %s failed: %s: %s",
+                modalidade,
+                type(exc).__name__,
+                str(exc) or "(sem mensagem)",
+                exc_info=False,
             )
             failed.append(modalidade)
 

@@ -206,3 +206,36 @@ async def test_list_filters_by_search_term(db_session: AsyncSession) -> None:
     # Non-matching term -> 0.
     _, total_none = await list_licitacoes(db_session, search="zzzzz")
     assert total_none == 0
+
+
+@pytest.mark.asyncio
+async def test_falha_de_modalidade_loga_o_tipo_da_excecao(
+    db_session: AsyncSession, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Timeout do httpx tem `str()` VAZIO.
+
+    Em 21/09/2026 o PNCP ficou inalcancavel e o log saiu literalmente
+    "pncp modalidade 1 failed: " -- sem tipo e sem causa. As 5h da
+    manha, no beat, isso nao diz se foi timeout, DNS ou 500. O tipo da
+    excecao tem de estar na linha.
+    """
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("")
+
+    http = httpx.AsyncClient(
+        base_url="https://mock.pncp", transport=httpx.MockTransport(handler)
+    )
+    client = PncpClient(base_url="https://mock.pncp", client=http)
+
+    with caplog.at_level("WARNING"):
+        result = await ingest_publicacoes(
+            db_session,
+            client,
+            data_inicial=date(2026, 9, 19),
+            data_final=date(2026, 9, 21),
+            modalidades=(6,),
+        )
+    await client.aclose()
+
+    assert result.failed_modalidades == [6]
+    assert "ConnectTimeout" in caplog.text

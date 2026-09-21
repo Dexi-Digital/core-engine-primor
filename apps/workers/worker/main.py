@@ -62,6 +62,32 @@ celery_app.conf.update(
 from celery.schedules import crontab  # noqa: E402
 
 celery_app.conf.beat_schedule = {
+    # --- Ingestao da esteira de licitacoes ---
+    #
+    # ATENCAO AO QUE ISTO CONSERTA: ate 21/09/2026 o beat despachava
+    # boletim 3x/dia sobre uma base que NINGUEM atualizava -- o
+    # `crawler_pncp` existia mas nunca tinha sido agendado, e a
+    # oportunidade mais recente da tela ficava parada havia meses. Se
+    # for para remover alguma entrada daqui, remova o boletim antes do
+    # crawler: boletim sem ingestao e notificacao sobre dado morto.
+    #
+    # 05h e de proposito ANTES do boletim das 07h, para o boletim da
+    # manha sair sobre o que foi publicado ontem.
+    "pncp-crawler-daily": {
+        "task": "worker.tasks.licitacoes.crawler_pncp",
+        "schedule": crontab(hour="5", minute="0"),
+    },
+    # Resultados e atas alimentam os dashboards de Inteligencia
+    # comercial. Semanal, nao diario: homologacao e evento raro e a
+    # carga e pesada -- rodar todo dia gastaria muito para mexer pouco.
+    "licitacoes-resultados-semanal": {
+        "task": "worker.tasks.licitacoes.ingest_resultados",
+        "schedule": crontab(hour="4", minute="0", day_of_week="1"),
+    },
+    "licitacoes-atas-semanal": {
+        "task": "worker.tasks.licitacoes.ingest_atas",
+        "schedule": crontab(hour="4", minute="30", day_of_week="1"),
+    },
     "boletins-morning": {
         "task": "worker.tasks.licitacoes.dispatch_boletins",
         "schedule": crontab(hour="7", minute="0"),

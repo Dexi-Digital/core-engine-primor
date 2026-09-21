@@ -74,6 +74,15 @@ export default async function DashboardLayout({
   children: ReactNode;
 }) {
   const user = await loadCurrentUser();
+  // Contador do sino. Falha aqui NAO pode derrubar o layout inteiro --
+  // sem notificacao a pessoa ainda precisa navegar no sistema.
+  let naoLidas = 0;
+  try {
+    const r = await apiFetch<{ total: number }>("/api/v1/notificacoes/nao-lidas");
+    naoLidas = r.total ?? 0;
+  } catch {
+    naoLidas = 0;
+  }
 
   return (
     <div
@@ -152,6 +161,29 @@ export default async function DashboardLayout({
               </div>
             </div>
           </div>
+          <Link
+            href="/notificacoes"
+            className="mt-2 flex items-center gap-2 rounded-lg px-2 py-1.5 text-[12px] font-medium transition hover:brightness-125"
+            style={{
+              background: naoLidas > 0 ? "rgba(16, 185, 129, 0.12)" : "transparent",
+              color: naoLidas > 0 ? "var(--sidebar-accent)" : "#94a3b8",
+              border:
+                naoLidas > 0
+                  ? "1px solid rgba(16, 185, 129, 0.3)"
+                  : "1px solid transparent",
+            }}
+          >
+            <span aria-hidden>🔔</span>
+            <span className="flex-1">Notificações</span>
+            {naoLidas > 0 && (
+              <span
+                className="rounded-full px-1.5 py-0.5 text-[10px] font-bold"
+                style={{ background: "var(--sidebar-accent)", color: "#0b1220" }}
+              >
+                {naoLidas > 99 ? "99+" : naoLidas}
+              </span>
+            )}
+          </Link>
           <div className="mt-2 flex items-center justify-between">
             <span
               className="rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wider"
@@ -173,7 +205,14 @@ export default async function DashboardLayout({
           </div>
         </div>
       </aside>
-      <main className="flex-1 px-8 py-7">{children}</main>
+      {/*
+        `min-w-0` e obrigatorio aqui: item de flex tem `min-width: auto`,
+        entao sem isso o <main> CRESCE junto com uma tabela larga em vez
+        de deixar o `overflow-x-auto` interno rolar -- e o conteudo
+        vaza pela direita da tela. Vale para todas as telas, nao so a
+        de triagem (9 colunas), que so foi onde apareceu primeiro.
+      */}
+      <main className="min-w-0 flex-1 px-8 py-7">{children}</main>
     </div>
   );
 }

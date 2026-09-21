@@ -30,6 +30,7 @@ from app.modules.licitacoes.empresa_documentos import (
 )
 from app.modules.licitacoes.router import router as licitacoes_router
 from app.modules.manutencao_frota.router import router as manutencao_router
+from app.modules.notificacoes.router import router as notificacoes_router
 from app.modules.obras.router import router as obras_router
 from app.modules.observability.router import (
     health as _observability_health_handler,
@@ -160,6 +161,7 @@ def create_app() -> FastAPI:
     app.include_router(empresa_documentos_router)
     app.include_router(onedrive_sync_router)
     app.include_router(onedrive_diagnostico_router)
+    app.include_router(notificacoes_router, prefix="/api/v1", tags=["notificacoes"])
     app.include_router(overview_router)
 
     return app

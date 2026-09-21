@@ -3,19 +3,6 @@ import { revalidatePath } from "next/cache";
 
 import { apiFetch } from "@/lib/api";
 import { PageHeader } from "@/components/ui/primitives";
-import { SubNav, type SubNavItem } from "@/components/ui/sub-nav";
-
-// Sub-paginas do modulo de Licitacoes. Ficam aqui (e nao espalhadas no
-// header) para as cinco telas terem a mesma hierarquia e a aba ativa
-// indicar onde o usuario esta.
-const LICITACOES_SUBNAV: SubNavItem[] = [
-  { href: "/licitacoes", label: "Oportunidades" },
-  { href: "/licitacoes/captacao", label: "Captação" },
-  { href: "/licitacoes/triagem", label: "Triagem" },
-  { href: "/licitacoes/dashboards", label: "Inteligência comercial" },
-  { href: "/licitacoes/certidoes", label: "Certidões / atestados" },
-  { href: "/licitacoes/boletins", label: "Boletins" },
-];
 
 type LicitacaoRead = {
   id: number;
@@ -106,8 +93,6 @@ export default async function LicitacoesPage(props: {
           </>
         }
       />
-
-      <SubNav items={LICITACOES_SUBNAV} />
 
       <form className="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">
         <label className="flex flex-col text-xs font-medium text-slate-600">

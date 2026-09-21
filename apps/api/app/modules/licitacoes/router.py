@@ -21,7 +21,6 @@ from app.integrations.llm.base import LLMError, LLMProvider, LLMUnavailableError
 from app.integrations.llm.openai_client import OpenAIProvider
 from app.integrations.llm.router import CostRoutedProvider
 from app.integrations.pncp.client import PncpClient
-from app.integrations.resend.client import ResendClient
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.dp_sesmt.schemas import ModuleStatus
@@ -390,26 +389,17 @@ async def dispatch_boletins_endpoint(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
 ) -> BoletimDispatchSummary:
-    """On-demand dispatch. Normally triggered by Celery beat 3x/dia.
+    """Despacho sob demanda. Normalmente o Celery beat roda 3x/dia.
 
-    Requires RESEND_API_KEY; returns 503 if not configured.
+    Nao exige mais `RESEND_API_KEY`: desde 21/09/2026 o boletim vira
+    **notificacao na plataforma**, nao email. O 503 que existia aqui
+    deixava o despacho indisponivel em qualquer ambiente sem chave de
+    email -- o que nao faz mais sentido, ja que nada e enviado.
     """
-    settings = get_settings()
-    if not settings.resend_api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="RESEND_API_KEY nao configurada; configure em settings para enviar boletins.",
-        )
-
-    resend = ResendClient(api_key=settings.resend_api_key)
-    try:
-        return await dispatch_boletins(
-            db,
-            resend,
-            saved_query_ids=[saved_query_id] if saved_query_id else None,
-        )
-    finally:
-        await resend.aclose()
+    return await dispatch_boletins(
+        db,
+        saved_query_ids=[saved_query_id] if saved_query_id else None,
+    )
 
 
 # --- D.4: edital download ---
