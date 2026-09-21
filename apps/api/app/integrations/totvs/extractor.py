@@ -51,6 +51,7 @@ import hashlib
 import logging
 import time
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Protocol
 from xml.etree import ElementTree as ET
 
@@ -82,6 +83,48 @@ CAMPO_NOME = "NOMECFO"
 CAMPO_VENCIMENTO = "DATAVENCIMENTO"
 CAMPO_EMISSAO = "DATAEMISSAO"
 CAMPO_STATUS = "STATUSLAN"
+# Alias definido pela sentenca SQL: SUM(FLANBAIXA.VALORBAIXADO) por
+# CODCOLIGADA + IDLAN. Confirmado pela TOTVS em 21/09/2026: cada baixa
+# (parcial ou total) e um item em FLANBAIXA, e VALORORIGINAL e so o
+# valor de origem -- o pago de verdade e a soma das baixas.
+CAMPO_VALOR_BAIXADO = "VALORBAIXADO"
+
+# Dominio OFICIAL do STATUSLAN (ticket 30268517, TOTVS, 21/09/2026):
+# https://centraldeatendimento.totvs.com/hc/pt-br/articles/1500006130181
+# Ate essa resposta o adapter gravava o valor bruto SEM interpretar, de
+# proposito -- assumir a ordem errada produziria relatorio financeiro
+# errado com cara de certo. O bruto continua gravado em `status_rm`.
+STATUSLAN = {
+    0: "em_aberto",
+    1: "baixado",
+    2: "cancelado",
+    3: "baixado_por_acordo",
+    4: "baixado_parcialmente",
+    5: "bordero",
+}
+SITUACOES_QUITADAS = frozenset({"baixado", "baixado_por_acordo"})
+
+
+def interpretar_statuslan(bruto: Any) -> str | None:
+    """Codigo do RM -> situacao legivel. Desconhecido -> None.
+
+    None e nao um default: um status fora do dominio (customizacao,
+    versao futura do RM) precisa aparecer como desconhecido, nao como
+    quitado nem como aberto.
+    """
+    try:
+        return STATUSLAN.get(int(str(bruto).strip()))
+    except (TypeError, ValueError):
+        return None
+
+
+def situacao_quitada(situacao: str | None) -> bool:
+    """Quitado = 1 (baixado) ou 3 (baixado por acordo).
+
+    4 (baixado parcialmente) ainda tem saldo; 2 (cancelado) nao e divida
+    -- a TOTVS orienta desconsiderar na conciliacao.
+    """
+    return situacao in SITUACOES_QUITADAS
 
 # Margem de renovacao do token. O default do RM e 5 MINUTOS (bem menor
 # que a hora tipica de um OAuth2), entao a margem tem que ser curta ou
@@ -187,12 +230,23 @@ def normalize_lancamento(raw: dict[str, Any], *, source: str) -> dict[str, Any]:
     coligada = raw.get(CAMPO_COLIGADA)
     filial = raw.get(CAMPO_FILIAL)
     idlan = raw.get(CAMPO_IDLAN)
+    valor = coerce_valor_rm(raw.get(CAMPO_VALOR))
+    valor_baixado = coerce_valor_rm(raw.get(CAMPO_VALOR_BAIXADO))
+    situacao = interpretar_statuslan(raw.get(CAMPO_STATUS))
+    # Saldo = o que ainda falta pagar. Cancelado nao e divida, entao
+    # zero; sem baixa, o saldo e o valor original inteiro.
+    if situacao == "cancelado":
+        saldo = Decimal("0")
+    elif valor is None:
+        saldo = None
+    else:
+        saldo = valor - (valor_baixado or Decimal("0"))
     return {
         "external_id": external_id_rm(coligada, idlan),
         "codcoligada": int(coligada) if coligada is not None else None,
         "codfilial": int(filial) if filial is not None else None,
         "idlan": int(idlan) if idlan is not None else None,
-        "valor": coerce_valor_rm(raw.get(CAMPO_VALOR)),
+        "valor": valor,
         "contraparte_documento": _so_digitos(raw.get(CAMPO_DOCUMENTO)),
         "contraparte_nome": raw.get(CAMPO_NOME),
         "data_vencimento": _data(raw.get(CAMPO_VENCIMENTO)),
@@ -200,6 +254,9 @@ def normalize_lancamento(raw: dict[str, Any], *, source: str) -> dict[str, Any]:
         "status_rm": (
             str(raw[CAMPO_STATUS]) if raw.get(CAMPO_STATUS) is not None else None
         ),
+        "situacao": situacao,
+        "valor_baixado": valor_baixado,
+        "saldo": saldo,
         "source": source,
         "raw": raw,
     }
@@ -536,7 +593,10 @@ class MockExtractor:
                         CAMPO_NOME: f"Fornecedor Mock {i}",
                         CAMPO_VENCIMENTO: f"{ate.isoformat()}T00:00:00",
                         CAMPO_EMISSAO: f"{desde.isoformat()}T00:00:00",
-                        CAMPO_STATUS: 0,
+                        # Um status por linha, cobrindo o dominio; a
+                        # linha 4 e "baixado parcialmente" e traz baixa.
+                        CAMPO_STATUS: i - 1,
+                        CAMPO_VALOR_BAIXADO: "100,00" if i == 5 else None,
                     },
                     source=self.source,
                 )
@@ -553,5 +613,7 @@ __all__ = [
     "TotvsExtractor",
     "TotvsPermissionError",
     "external_id_rm",
+    "interpretar_statuslan",
     "normalize_lancamento",
+    "situacao_quitada",
 ]

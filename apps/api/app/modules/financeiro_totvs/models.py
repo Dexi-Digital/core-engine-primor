@@ -81,6 +81,13 @@ class TotvsLancamento(Base):
     data_vencimento: Mapped[date | None] = mapped_column(Date, nullable=True, index=True)
     data_emissao: Mapped[date | None] = mapped_column(Date, nullable=True)
     status_rm: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # Interpretacao do STATUSLAN pelo dominio oficial (TOTVS, 21/09/2026).
+    # O bruto fica em `status_rm`; desconhecido fica None, nao adivinhado.
+    situacao: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    # SUM(FLANBAIXA.VALORBAIXADO): o pago de verdade, inclusive parcial.
+    valor_baixado: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
+    # valor - valor_baixado (zero quando cancelado).
+    saldo: Mapped[Decimal | None] = mapped_column(Numeric(20, 2), nullable=True)
 
     # Proveniencia, NAO chave: `totvs_rest` | `totvs_consultasql` | `totvs_mock`.
     extractor: Mapped[str] = mapped_column(String(32), index=True)
