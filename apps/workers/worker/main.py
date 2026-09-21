@@ -35,6 +35,7 @@ celery_app = Celery(
         "worker.tasks.licitacoes",
         "worker.tasks.fiscal",
         "worker.tasks.ia",
+        "worker.tasks.juridico",
         "worker.tasks.onedrive_diagnostico",
     ],
 )
@@ -48,6 +49,9 @@ celery_app.conf.update(
         "worker.tasks.licitacoes.*": {"queue": "licitacoes"},
         "worker.tasks.fiscal.*": {"queue": "financeiro"},
         "worker.tasks.ia.*": {"queue": "ia"},
+        # Fila EXISTENTE de proposito: o CMD do worker lista as filas
+        # com `-Q`, e task em fila nova nunca seria consumida -- sem erro.
+        "worker.tasks.juridico.*": {"queue": "financeiro"},
         "worker.tasks.onedrive_diagnostico.*": {"queue": "licitacoes"},
     },
     task_acks_late=True,
@@ -87,6 +91,13 @@ celery_app.conf.beat_schedule = {
     "licitacoes-atas-semanal": {
         "task": "worker.tasks.licitacoes.ingest_atas",
         "schedule": crontab(hour="4", minute="30", day_of_week="1"),
+    },
+    # Contencioso do EasyJur, de madrugada: o export de andamentos e
+    # lento (~12 mil linhas numa requisicao) e nao deve disputar o
+    # sistema com o escritorio em horario de trabalho.
+    "easyjur-pull-daily": {
+        "task": "worker.tasks.juridico.pull_easyjur",
+        "schedule": crontab(hour="3", minute="30"),
     },
     "boletins-morning": {
         "task": "worker.tasks.licitacoes.dispatch_boletins",

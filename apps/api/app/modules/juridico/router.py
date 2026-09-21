@@ -1,0 +1,153 @@
+"""API do modulo juridico (contencioso vindo do EasyJur)."""
+from __future__ import annotations
+
+from datetime import date, datetime
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.config import get_settings
+from app.core.db import get_db
+from app.integrations.easyjur import parser
+from app.integrations.easyjur.client import (
+    EasyjurAuthError,
+    EasyjurClient,
+    EasyjurError,
+)
+from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.models import User
+from app.modules.juridico import service as svc
+
+router = APIRouter()
+
+
+class ProcessoRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    easyjur_id: int
+    numero_cnj: str | None
+    status: str | None
+    area: str | None
+    tribunal: str | None
+    instancia: str | None
+    comarca: str | None
+    titulo: str | None
+    cliente: str | None
+    contrario: str | None
+    tipo_acao: str | None
+    risco: str | None
+    fase_atual: str | None
+    resultado: str | None
+    codigo_obra: str | None
+    obra_id: int | None
+
+
+class ProcessoList(BaseModel):
+    total: int
+    data: list[ProcessoRead]
+
+
+class AndamentoRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    numero_cnj: str
+    processo_id: int | None
+    tipo: str | None
+    status: str | None
+    descricao: str | None
+    data: date | None
+
+
+class SyncResponse(BaseModel):
+    processos: int
+    andamentos: int
+    total_declarado: int | None
+    divergencia: bool
+    executado_em: datetime
+
+
+@router.get("/processos", response_model=ProcessoList)
+async def listar_processos(
+    status: str | None = Query(None, max_length=64),
+    area: str | None = Query(None, max_length=64),
+    busca: str | None = Query(None, max_length=128),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(50, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> ProcessoList:
+    linhas, total = await svc.listar_processos(
+        db,
+        status=status,
+        area=area,
+        busca=busca,
+        limite=page_size,
+        offset=(page - 1) * page_size,
+    )
+    return ProcessoList(
+        total=total, data=[ProcessoRead.model_validate(p) for p in linhas]
+    )
+
+
+@router.get("/andamentos", response_model=list[AndamentoRead])
+async def ultimos_andamentos(
+    limite: int = Query(30, ge=1, le=200),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> list[AndamentoRead]:
+    return [
+        AndamentoRead.model_validate(a)
+        for a in await svc.ultimos_andamentos(db, limite=limite)
+    ]
+
+
+@router.get("/resumo", response_model=dict)
+async def resumo(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    """Totais da carteira. Campos esparsos vem SEMPRE com o denominador."""
+    return await svc.resumo(db)
+
+
+@router.post("/sync", response_model=SyncResponse)
+async def sincronizar_agora(
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> SyncResponse:
+    """Pull sob demanda. Leva alguns minutos: o export de andamentos do
+    EasyJur e lento (~12 mil linhas numa requisicao)."""
+    settings = get_settings()
+    client = EasyjurClient(
+        email=settings.easyjur_email, password=settings.easyjur_password
+    )
+    if client.is_mock:
+        await client.aclose()
+        raise HTTPException(
+            status_code=503,
+            detail="EASYJUR_EMAIL/EASYJUR_PASSWORD nao configurados neste ambiente.",
+        )
+    try:
+        r = await svc.sincronizar(db, client, source="manual")
+    except EasyjurAuthError as exc:
+        # 502 e nao 401: quem esta sem credencial valida e o SISTEMA
+        # diante do EasyJur, nao o usuario diante de nos.
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except (
+        EasyjurError,
+        parser.FormatoInesperadoError,
+        parser.SessaoSemFiltroError,
+    ) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    finally:
+        await client.aclose()
+    return SyncResponse(
+        processos=r.processos,
+        andamentos=r.andamentos,
+        total_declarado=r.total_declarado,
+        divergencia=r.divergencia,
+        executado_em=datetime.now().astimezone(),
+    )

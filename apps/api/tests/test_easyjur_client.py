@@ -159,3 +159,71 @@ async def test_sem_credencial_e_mock_e_nao_faz_rede():
     with pytest.raises(EasyjurAuthError):
         await c.login()
     await c.aclose()
+
+
+# --- leitura ----------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_listar_processos_manda_acao_listagem():
+    """SEM `acao_listagem=enviar` o EasyJur devolve 200 com "0 Registros
+    Encontrados". Foi assim que 453 processos viraram "0 na base" em
+    17/09/2026 -- o parametro nao pode sumir numa refatoracao."""
+    visto = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/api/login.php"):
+            return httpx.Response(200, json={"status": 200})
+        if request.url.path.endswith("ajax_processos_lista.php"):
+            visto["body"] = request.content.decode()
+            return httpx.Response(200, text="<table></table>")
+        return httpx.Response(200, text="<form>")
+
+    c = _client(handler)
+    await c.listar_processos(page=3)
+    assert "acao_listagem=enviar" in visto["body"]
+    assert "page=3" in visto["body"]
+
+
+@pytest.mark.asyncio
+async def test_export_arma_o_filtro_da_sessao_antes():
+    """O export le o filtro da sessao PHP: chamado direto devolve so o
+    cabecalho. A busca com `pesquisa=enviar` tem de vir ANTES, na mesma
+    sessao."""
+    ordem: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        p = request.url.path
+        if p.endswith("/api/login.php"):
+            return httpx.Response(200, json={"status": 200})
+        if p.endswith("ajax_andamento_lista.php"):
+            ordem.append("busca:" + request.content.decode())
+            return httpx.Response(200, text="<table></table>")
+        if p.endswith("export_andamentos.php"):
+            ordem.append("export")
+            return httpx.Response(200, content=b'"ID";\r\n')
+        return httpx.Response(200, text="<form>")
+
+    c = _client(handler)
+    await c.exportar_andamentos_csv()
+    assert len(ordem) == 2
+    assert ordem[0].startswith("busca:") and "pesquisa=enviar" in ordem[0]
+    assert ordem[1] == "export"
+
+
+@pytest.mark.asyncio
+async def test_leitura_faz_um_login_so():
+    """Reautenticar por pagina gastaria tentativa a toa num sistema que
+    bloqueia a conta em 5 erros."""
+    logins = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/api/login.php"):
+            logins["n"] += 1
+            return httpx.Response(200, json={"status": 200})
+        return httpx.Response(200, text="<table></table>")
+
+    c = _client(handler)
+    for page in (1, 2, 3):
+        await c.listar_processos(page=page)
+    assert logins["n"] == 1

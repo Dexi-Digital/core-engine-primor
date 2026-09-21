@@ -24,6 +24,7 @@ from app.modules.dp_sesmt.router import router as dp_sesmt_router
 from app.modules.financeiro_contratos.router import router as financeiro_router
 from app.modules.fiscal.router import router as fiscal_router
 from app.modules.ia_tools.router import router as ia_tools_router
+from app.modules.juridico.router import router as juridico_router
 from app.modules.licitacoes.certidoes_router import router as certidoes_router
 from app.modules.licitacoes.empresa_documentos import (
     router as empresa_documentos_router,
@@ -161,6 +162,7 @@ def create_app() -> FastAPI:
     app.include_router(empresa_documentos_router)
     app.include_router(onedrive_sync_router)
     app.include_router(onedrive_diagnostico_router)
+    app.include_router(juridico_router, prefix="/api/v1/juridico", tags=["juridico"])
     app.include_router(notificacoes_router, prefix="/api/v1", tags=["notificacoes"])
     app.include_router(overview_router)
 
