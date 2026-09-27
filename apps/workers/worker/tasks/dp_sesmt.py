@@ -47,6 +47,14 @@ async def _run_sync_onboarding(cpf: str) -> dict[str, object]:
         return {"error": f"API package not available in worker: {exc}"}
 
     settings = get_settings()
+    if settings.onsafety_token and not settings.onsafety_onboarding_push_enabled:
+        return {
+            "employee_id": None,
+            "sistema": "onsafety",
+            "status": "bloqueado",
+            "external_id": None,
+            "error": "push externo desabilitado (ONSAFETY_ONBOARDING_PUSH_ENABLED=false)",
+        }
     async with SessionLocal() as db:
         employee = await service.get_employee_by_cpf(db, cpf)
         if employee is None:

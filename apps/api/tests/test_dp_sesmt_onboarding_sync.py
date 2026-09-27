@@ -92,8 +92,12 @@ async def test_sync_ok_com_mock_persiste_run(
 
 @pytest.mark.asyncio
 async def test_sync_erro_upstream_vira_row_erro_201(
-    api_client: AsyncClient, auth_headers, db_session
+    api_client: AsyncClient, auth_headers, db_session, monkeypatch
 ):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("ONSAFETY_ONBOARDING_PUSH_ENABLED", "true")
+    get_settings.cache_clear()
     emp_id = await _criar_employee(api_client, auth_headers)
     app = _override(FakeErrClient())
     try:
@@ -103,6 +107,7 @@ async def test_sync_erro_upstream_vira_row_erro_201(
         )
     finally:
         app.dependency_overrides.pop(get_onsafety_dep, None)
+        get_settings.cache_clear()
     assert resp.status_code == 201, resp.text
     body = resp.json()
     assert body["status"] == "erro"
@@ -121,6 +126,29 @@ async def test_sync_erro_upstream_vira_row_erro_201(
         .all()
     )
     assert logs and logs[-1].action == "error"
+
+
+@pytest.mark.asyncio
+async def test_push_real_fica_bloqueado_no_modo_pre_visualizacao(
+    api_client: AsyncClient, auth_headers, monkeypatch
+):
+    from app.core.config import get_settings
+
+    monkeypatch.delenv("ONSAFETY_ONBOARDING_PUSH_ENABLED", raising=False)
+    get_settings.cache_clear()
+    emp_id = await _criar_employee(api_client, auth_headers)
+    client = FakeErrClient()
+    app = _override(client)
+    try:
+        resp = await api_client.post(
+            f"/api/v1/dp-sesmt/employees/{emp_id}/sync-onsafety",
+            headers=auth_headers,
+        )
+    finally:
+        app.dependency_overrides.pop(get_onsafety_dep, None)
+        get_settings.cache_clear()
+    assert resp.status_code == 423
+    assert "pre-visualizacao" in resp.json()["detail"]
 
 
 @pytest.mark.asyncio

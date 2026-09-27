@@ -8,7 +8,9 @@ from __future__ import annotations
 
 import asyncio
 import os
+from collections.abc import Callable
 from datetime import date, timedelta
+from typing import Any
 
 from worker.main import celery_app
 
@@ -78,6 +80,91 @@ def _falhar_se_nada_rodou(resumo: dict[str, object]) -> None:
             f"crawler_pncp: nenhuma modalidade respondeu "
             f"({len(falhas)} falharam, 0 registros). PNCP fora do ar?"
         )
+
+
+@celery_app.task(bind=True, name="worker.tasks.licitacoes.backfill_pncp")
+def backfill_pncp(
+    task: Any,
+    data_inicial: str,
+    data_final: str,
+    uf: str | None = None,
+) -> dict[str, object]:
+    """Recarga historica do PNCP em janelas semanais, fora da API.
+
+    Cada janela confirma seus upserts antes de seguir; se uma janela
+    falhar, as demais ainda rodam e o resultado identifica o intervalo.
+    Reexecutar o mesmo periodo e seguro (upsert por external_id).
+    """
+    inicio = date.fromisoformat(data_inicial)
+    fim = date.fromisoformat(data_final)
+    if inicio > fim:
+        raise ValueError("data_inicial deve ser anterior ou igual a data_final")
+    if (fim - inicio).days > 366:
+        raise ValueError("recarga PNCP limitada a 367 dias por execucao")
+    return asyncio.run(
+        _run_backfill(
+            inicio,
+            fim,
+            uf,
+            report_progress=lambda progress: task.update_state(
+                state="PROGRESS", meta=progress
+            ),
+        )
+    )
+
+
+async def _run_backfill(
+    inicio: date,
+    fim: date,
+    uf: str | None,
+    report_progress: Callable[[dict[str, object]], None] | None = None,
+) -> dict[str, object]:
+    total_fetched = 0
+    inserted = 0
+    failed_windows: list[dict[str, str]] = []
+    current = inicio
+    total_windows = ((fim - inicio).days // 7) + 1
+    windows_done = 0
+    while current <= fim:
+        chunk_end = min(current + timedelta(days=6), fim)
+        try:
+            result = await _run(
+                current.isoformat(), chunk_end.isoformat(), uf, None
+            )
+        except Exception as exc:  # a janela fica identificada para retry
+            failed_windows.append({
+                "data_inicial": current.isoformat(),
+                "data_final": chunk_end.isoformat(),
+                "erro": f"{type(exc).__name__}: {exc}"[:500],
+            })
+        else:
+            total_fetched += int(result.get("total_fetched", 0))
+            inserted += int(result.get("inserted", 0))
+        windows_done += 1
+        if report_progress is not None:
+            report_progress({
+                "windows_done": windows_done,
+                "total_windows": total_windows,
+                "current_window_start": current.isoformat(),
+                "current_window_end": chunk_end.isoformat(),
+                "total_fetched": total_fetched,
+                "inserted": inserted,
+                "failed_windows": len(failed_windows),
+            })
+        current = chunk_end + timedelta(days=1)
+
+    if failed_windows and total_fetched == 0:
+        raise RuntimeError(
+            f"recarga PNCP falhou em todas as janelas ({len(failed_windows)})"
+        )
+    return {
+        "data_inicial": inicio.isoformat(),
+        "data_final": fim.isoformat(),
+        "uf": uf,
+        "total_fetched": total_fetched,
+        "inserted": inserted,
+        "failed_windows": failed_windows,
+    }
 
 
 @celery_app.task(name="worker.tasks.licitacoes.ingest_resultados")

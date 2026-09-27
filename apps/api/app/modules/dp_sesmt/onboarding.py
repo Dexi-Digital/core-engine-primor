@@ -174,6 +174,7 @@ async def previsualizar_sync_onsafety(
     employee: Employee,
     *,
     projeto_id: str | None,
+    push_enabled: bool = False,
 ) -> dict[str, Any]:
     ambiente = "mock" if client.is_mock else ("producao" if client.is_prod else "homologacao")
     etapas: list[dict[str, Any]] = []
@@ -223,6 +224,25 @@ async def previsualizar_sync_onsafety(
     else:
         etapas.append(_etapa("guard", "Ambiente", OK,
                              "producao com escrita LIBERADA" if client.is_prod else "homologacao"))
+
+    # Trava de produto separada da trava de producao do adapter. Enquanto
+    # o cliente valida o fluxo, uma configuracao acidental de homologacao
+    # ou a liberacao do guard de producao nao deve enviar cadastros.
+    if client.is_mock:
+        etapas.append(_etapa(
+            "push_ativado", "Push externo", OK,
+            "modo mock: nenhum dado sera enviado a OnSafety",
+        ))
+    elif push_enabled:
+        etapas.append(_etapa(
+            "push_ativado", "Push externo", OK,
+            "habilitado por ONSAFETY_ONBOARDING_PUSH_ENABLED",
+        ))
+    else:
+        etapas.append(_etapa(
+            "push_ativado", "Push externo", BLOQUEADO,
+            "ONSAFETY_ONBOARDING_PUSH_ENABLED esta desligado; a pre-visualizacao nao escreve",
+        ))
 
     # 4 e 5. o que ainda nao aconteceu
     etapas.append(_etapa("envio", "Envio (create_or_update por CPF)", PENDENTE,

@@ -85,6 +85,20 @@ type Sync = {
 };
 
 type PainelItem = { employee_id: number; etapa: string; pendencias: string[] };
+type EmployeeDocument = {
+  id: number;
+  tipo: string;
+  numero: string | null;
+  emissao: string | null;
+  validade: string | null;
+  observacoes: string | null;
+  source: string | null;
+};
+const TREINAMENTO_LABEL: Record<string, string> = {
+  NR06: "NR-06 — EPI", NR10: "NR-10 — Eletricidade", NR12: "NR-12 — Máquinas",
+  NR18: "NR-18 — Construção", NR35: "NR-35 — Altura",
+  TREINAMENTO_SST: "Treinamento SST — classificação pendente",
+};
 
 export const dynamic = "force-dynamic";
 
@@ -295,11 +309,12 @@ export default async function FuncionarioPage(props: {
   const msg = typeof sp.msg === "string" ? sp.msg : "";
   const erro = typeof sp.erro === "string" ? sp.erro : "";
 
-  const [emp, preview, syncs, painel] = await Promise.all([
+  const [emp, preview, syncs, painel, documentos] = await Promise.all([
     seguro<Employee>(`/api/v1/dp-sesmt/employees/${id}`),
     seguro<Preview>(`/api/v1/dp-sesmt/employees/${id}/sync-onsafety/preview`),
     seguro<Sync[]>(`/api/v1/dp-sesmt/employees/${id}/sync-onsafety`),
     seguro<{ itens: PainelItem[] }>("/api/v1/dp-sesmt/admissao/painel"),
+    seguro<EmployeeDocument[]>(`/api/v1/dp-sesmt/employees/${id}/documentos`),
   ]);
 
   if (!emp) {
@@ -350,6 +365,31 @@ export default async function FuncionarioPage(props: {
           {erro}
         </div>
       )}
+
+      <section className="rounded-lg border border-slate-200 bg-white p-4">
+        <h2 className="text-sm font-semibold">Cursos e treinamentos de SST</h2>
+        <p className="mt-1 text-xs text-slate-500">
+          Registros importados da OnSafety. Cursos sem classificação ou validade são preservados,
+          mas não contam como conformidade automática.
+        </p>
+        {(documentos ?? []).filter((d) => d.tipo.startsWith("NR") || d.tipo === "TREINAMENTO_SST").length === 0 ? (
+          <p className="mt-3 text-sm text-slate-400">Nenhum curso registrado para este funcionário.</p>
+        ) : (
+          <ul className="mt-3 divide-y divide-slate-100 text-sm">
+            {(documentos ?? []).filter((d) => d.tipo.startsWith("NR") || d.tipo === "TREINAMENTO_SST").map((d) => (
+              <li key={d.id} className="flex flex-wrap items-start justify-between gap-2 py-2">
+                <span className="font-medium">{TREINAMENTO_LABEL[d.tipo] ?? d.tipo}</span>
+                <span className="text-xs text-slate-600">
+                  {d.validade ? `Validade: ${dataBr(d.validade)}` : "Validade não informada"}
+                  {d.emissao ? ` · Realizado: ${dataBr(d.emissao)}` : ""}
+                  {d.source ? ` · Fonte: ${d.source}` : ""}
+                </span>
+                {d.observacoes && <span className="basis-full text-xs text-slate-500">{d.observacoes}</span>}
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
 
       {jornada && jornada.pendencias.length > 0 && (
         <section className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm">

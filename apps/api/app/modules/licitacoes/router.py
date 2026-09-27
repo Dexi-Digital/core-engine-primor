@@ -312,6 +312,71 @@ async def ingest_resultados_endpoint(
         await client.aclose()
 
 
+@router.post("/ingest/pncp/backfill", status_code=202, response_model=dict)
+async def backfill_pncp_endpoint(
+    data_inicial: date,
+    data_final: date,
+    uf: str | None = Query(None, min_length=2, max_length=2),
+    _: User = Depends(get_current_user),
+) -> dict[str, str]:
+    """Agenda recarga historica em janelas semanais no worker Celery."""
+    if data_inicial > data_final:
+        raise HTTPException(400, "data_inicial deve ser anterior ou igual a data_final")
+    if (data_final - data_inicial).days > 366:
+        raise HTTPException(422, "recarga PNCP limitada a 367 dias por execucao")
+    from app.modules.manutencao_frota.service import get_celery_dispatcher
+
+    try:
+        task = get_celery_dispatcher().send_task(
+            "worker.tasks.licitacoes.backfill_pncp",
+            args=[data_inicial.isoformat(), data_final.isoformat(), uf.upper() if uf else None],
+            queue="licitacoes",
+        )
+    except Exception as exc:  # noqa: BLE001 -- broker types vary
+        raise HTTPException(503, f"worker indisponivel: {exc}") from exc
+    return {"task_id": task.id, "status": "PENDING"}
+
+
+@router.post("/ingest/resultados/dispatch", status_code=202, response_model=dict)
+async def dispatch_resultados_endpoint(
+    dias: int = Query(180, ge=1, le=365),
+    uf: str | None = Query(None, min_length=2, max_length=2),
+    max_licitacoes: int = Query(200, ge=1, le=5000),
+    _: User = Depends(get_current_user),
+) -> dict[str, str]:
+    """Agenda no worker o enriquecimento que abastece os paineis comerciais."""
+    from app.modules.manutencao_frota.service import get_celery_dispatcher
+
+    try:
+        task = get_celery_dispatcher().send_task(
+            "worker.tasks.licitacoes.ingest_resultados",
+            args=[dias, uf.upper() if uf else None, max_licitacoes],
+            queue="licitacoes",
+        )
+    except Exception as exc:  # noqa: BLE001 -- broker types vary
+        raise HTTPException(503, f"worker indisponivel: {exc}") from exc
+    return {"task_id": task.id, "status": "PENDING"}
+
+
+@router.get("/ingest/tasks/{task_id}", response_model=dict)
+async def ingest_task_status_endpoint(
+    task_id: str,
+    _: User = Depends(get_current_user),
+) -> dict[str, object]:
+    """Consulta estado/resultado de uma coleta enfileirada pelo modulo."""
+    from app.modules.manutencao_frota.service import get_celery_dispatcher
+
+    result = get_celery_dispatcher().AsyncResult(task_id)
+    payload: dict[str, object] = {"task_id": task_id, "status": result.state}
+    if result.successful():
+        payload["result"] = result.result
+    elif result.failed():
+        payload["error"] = str(result.result)[:1000]
+    elif result.state in {"STARTED", "PROGRESS"} and isinstance(result.info, dict):
+        payload["progress"] = result.info
+    return payload
+
+
 @router.post("/ingest/atas", response_model=AtaIngestSummary)
 async def ingest_atas_endpoint(
     data_inicial: Annotated[date | None, Query(description="Default: 7 dias atras")] = None,

@@ -196,6 +196,10 @@ class Settings(BaseSettings):
     # e o de prod (ADR-001) -- este flag impede que um dev com o token
     # no .env crie trabalhadores reais sem querer. Leitura nao e afetada.
     onsafety_allow_prod_write: bool = Field(default=False)
+    # Chave independente para ativar o push de onboarding. Mantida
+    # desligada enquanto o fluxo estiver em validacao; sem este opt-in,
+    # nenhuma chamada POST ao OnSafety pode ocorrer, mesmo em homolog.
+    onsafety_onboarding_push_enabled: bool = Field(default=False)
     # Estabelecimento/projeto OnSafety ao qual o push de onboarding
     # vincula o trabalhador (obrigatorio para o create_or_update deles:
     # sem projeto a API recusa com 403 "Estabelecimento não

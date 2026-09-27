@@ -116,6 +116,8 @@ async def test_preview_em_producao_com_guard_mostra_bloqueio_e_nao_envia(
     assert etapas["estabelecimento"]["estado"] == "ok"
     assert etapas["guard"]["estado"] == "bloqueado"
     assert "ONSAFETY_ALLOW_PROD_WRITE" in etapas["guard"]["detalhe"]
+    assert etapas["push_ativado"]["estado"] == "bloqueado"
+    assert "ONSAFETY_ONBOARDING_PUSH_ENABLED" in etapas["push_ativado"]["detalhe"]
     assert etapas["envio"]["estado"] == "pendente"
 
 

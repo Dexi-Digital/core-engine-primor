@@ -1465,7 +1465,10 @@ def get_celery_dispatcher() -> Any:
         from celery import Celery
 
         settings = _get_settings()
-        _celery_dispatcher_singleton = Celery(broker=settings.redis_url)
+        _celery_dispatcher_singleton = Celery(
+            broker=settings.redis_url,
+            backend=settings.redis_url,
+        )
     return _celery_dispatcher_singleton
 
 

@@ -11,8 +11,9 @@ from app.audit.models import AuditLog
 from app.integrations.onsafety.client import OnsafetyClient, OnsafetyError
 from app.modules.dp_sesmt.models import (
     DOC_EMP_FICHA_EPI,
-    DOC_EMP_NR12,
+    DOC_EMP_NR06,
     DOC_EMP_NR35,
+    DOC_EMP_TREINAMENTO_SST,
     DossieConsultaLog,
     Employee,
     EmployeeDocument,
@@ -408,7 +409,7 @@ async def test_pull_treinamento_reprovado_nao_vira_documento(
 
 
 @pytest.mark.asyncio
-async def test_pull_treinamento_sem_validade_nao_cria_doc(
+async def test_pull_treinamento_sem_validade_preserva_sem_avaliar_conformidade(
     db_session: AsyncSession,
 ):
     """NR mapeada, mas sem vencimento nem validade_dias: gravar viraria
@@ -421,19 +422,20 @@ async def test_pull_treinamento_sem_validade_nao_cria_doc(
 
     summary = await pull_onsafety(db_session, client, actor="t@t.com")
 
-    docs = (
-        (
-            await db_session.execute(
-                select(EmployeeDocument).where(
-                    EmployeeDocument.employee_id == emp.id,
-                    EmployeeDocument.tipo == DOC_EMP_NR12,
-                )
+    doc = (
+        await db_session.execute(
+            select(EmployeeDocument).where(
+                EmployeeDocument.employee_id == emp.id,
+                EmployeeDocument.tipo == DOC_EMP_TREINAMENTO_SST,
             )
         )
-        .scalars()
-        .all()
-    )
-    assert docs == []
+    ).scalar_one()
+    assert doc.validade is None
+    from app.modules.diagnostico.checklists import CHECKLIST_SST_FUNCIONARIO
+
+    assert DOC_EMP_TREINAMENTO_SST not in {
+        req.doc_tipo for req in CHECKLIST_SST_FUNCIONARIO
+    }
     assert summary.treinos_sem_validade >= 1
 
 
@@ -469,11 +471,10 @@ async def test_pull_treinamento_validade_por_dias_quando_falta_vencimento(
 
 
 @pytest.mark.asyncio
-async def test_pull_treinamento_nr_nao_mapeada_nao_polui_checklist(
+async def test_pull_treinamento_nr06_fica_no_dossie_sem_exigencia_universal(
     db_session: AsyncSession,
 ):
-    """NR-6 nao e tipo de documento do dossie -- ingerir como 'OUTRO'
-    encheria o checklist de ruido."""
+    """NR-6 e consultavel no dossie, mas nao e obrigatoria para todos."""
     client = OnsafetyClient(api_token=None)
     treinos = await _mock_treinos(client)
     nr6 = _por_sigla(treinos, "NR 6")
@@ -492,8 +493,12 @@ async def test_pull_treinamento_nr_nao_mapeada_nao_polui_checklist(
         .scalars()
         .all()
     )
+    assert any(d.tipo in {DOC_EMP_NR06, DOC_EMP_TREINAMENTO_SST} for d in docs)
     assert all(d.tipo != "OUTRO" for d in docs)
-    assert summary.treinos_nr_desconhecida >= 1
+    from app.modules.diagnostico.checklists import CHECKLIST_SST_FUNCIONARIO
+
+    assert DOC_EMP_NR06 not in {req.doc_tipo for req in CHECKLIST_SST_FUNCIONARIO}
+    assert summary.treinos_nr_desconhecida == 0
 
 
 @pytest.mark.asyncio

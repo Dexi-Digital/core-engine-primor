@@ -97,3 +97,86 @@ async def test_list_filter_no_match(api_client: AsyncClient, db_session) -> None
     r = await api_client.get("/api/v1/licitacoes?uf=RJ")
     assert r.status_code == 200
     assert r.json()["total"] == 0
+
+
+@pytest.mark.asyncio
+async def test_backfill_pncp_rejeita_janela_maior_que_um_ano(
+    api_client: AsyncClient, auth_headers
+) -> None:
+    resp = await api_client.post(
+        "/api/v1/licitacoes/ingest/pncp/backfill"
+        "?data_inicial=2025-01-01&data_final=2026-01-04",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_backfill_pncp_enfileira_no_worker(
+    api_client: AsyncClient, auth_headers, monkeypatch
+) -> None:
+    from app.modules.manutencao_frota import service
+
+    class Job:
+        id = "pncp-backfill-test"
+
+    class Dispatcher:
+        def __init__(self):
+            self.args = None
+
+        def send_task(self, name, *, args, queue):
+            self.args = (name, args, queue)
+            return Job()
+
+    dispatcher = Dispatcher()
+    monkeypatch.setattr(service, "get_celery_dispatcher", lambda: dispatcher)
+    resp = await api_client.post(
+        "/api/v1/licitacoes/ingest/pncp/backfill"
+        "?data_inicial=2026-04-01&data_final=2026-04-30&uf=mg",
+        headers=auth_headers,
+    )
+    assert resp.status_code == 202, resp.text
+    assert resp.json() == {"task_id": "pncp-backfill-test", "status": "PENDING"}
+    assert dispatcher.args == (
+        "worker.tasks.licitacoes.backfill_pncp",
+        ["2026-04-01", "2026-04-30", "MG"],
+        "licitacoes",
+    )
+
+
+@pytest.mark.asyncio
+async def test_backfill_pncp_exige_autenticacao(api_client: AsyncClient) -> None:
+    resp = await api_client.post(
+        "/api/v1/licitacoes/ingest/pncp/backfill"
+        "?data_inicial=2026-04-01&data_final=2026-04-30"
+    )
+    assert resp.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_status_tarefa_de_ingestao(api_client: AsyncClient, auth_headers, monkeypatch) -> None:
+    from app.modules.manutencao_frota import service
+
+    class Job:
+        state = "SUCCESS"
+        result = {"total_fetched": 12}
+
+        def successful(self):
+            return True
+
+        def failed(self):
+            return False
+
+    class Dispatcher:
+        def AsyncResult(self, task_id):
+            assert task_id == "task-123"
+            return Job()
+
+    monkeypatch.setattr(service, "get_celery_dispatcher", lambda: Dispatcher())
+    resp = await api_client.get(
+        "/api/v1/licitacoes/ingest/tasks/task-123", headers=auth_headers
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {
+        "task_id": "task-123", "status": "SUCCESS", "result": {"total_fetched": 12}
+    }

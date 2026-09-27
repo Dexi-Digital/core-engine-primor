@@ -9,10 +9,9 @@ materializa no dossie:
 - Fichas de EPI -> rows `EmployeeDocument` tipo `FICHA_EPI` com
   `source="onsafety"` e `onsafety_external_id` = id do controle na
   OnSafety (idempotencia: re-pull atualiza em vez de duplicar).
-- Treinamentos de NR -> rows `EmployeeDocument` nos tipos
-  `NR10`/`NR12`/`NR18`/`NR35`, mesma idempotencia. So entram
-  treinamentos APROVADOS e COM VALIDADE conhecida (ver
-  `pull_treinamentos`).
+- Treinamentos aprovados -> rows `EmployeeDocument`: NRs conhecidas com
+  validade calculada ficam tipadas; os demais ficam preservados como
+  `TREINAMENTO_SST`, sem entrar no diagnóstico de conformidade.
 - `obra_id` do documento sai do `establishment` (Projeto) da OnSafety,
   resolvido contra `obras_obra`.
 
@@ -49,10 +48,12 @@ from app.core.cpf import is_valid_cpf
 from app.integrations.onsafety.client import OnsafetyClient, OnsafetyError
 from app.modules.dp_sesmt.models import (
     DOC_EMP_FICHA_EPI,
+    DOC_EMP_NR06,
     DOC_EMP_NR10,
     DOC_EMP_NR12,
     DOC_EMP_NR18,
     DOC_EMP_NR35,
+    DOC_EMP_TREINAMENTO_SST,
     DossieConsultaLog,
     Employee,
     EmployeeDocument,
@@ -86,12 +87,13 @@ _RESULTADO_MAP = {1: "apto"}
 # tela sabe que o dado falta na origem.
 _CARGO_NAO_INFORMADO = "(nao informado)"
 
-# Treinamentos da OnSafety -> tipos de documento do dossie. So as NRs
-# que o checklist do diagnostico conhece: um treinamento fora deste
-# mapa (NR-06, integracao, brigada...) NAO vira documento -- ingerir
-# como "OUTRO" encheria o checklist de ruido sem responder a nenhuma
-# exigencia. Conta em `treinos_nr_desconhecida`.
+# Treinamentos da OnSafety -> tipos de documento do dossie. NR-06 e
+# preservada para consulta, mas nao e considerada obrigatoria para todo
+# trabalhador: a aplicabilidade depende do EPI, da atividade e da matriz
+# SST da empresa. Integracao, brigada e cursos ainda sem tipo seguem no
+# contador `treinos_nr_desconhecida` ate haver classificacao especifica.
 _NR_DOC_POR_CODIGO = {
+    "6": DOC_EMP_NR06,
     "10": DOC_EMP_NR10,
     "12": DOC_EMP_NR12,
     "18": DOC_EMP_NR18,
@@ -424,28 +426,28 @@ async def pull_treinamentos(
     ja_logados: set[tuple[int, str]],
     indices: _Indices,
 ) -> None:
-    """Treinamentos de NR -> documentos `NR10`/`NR12`/`NR18`/`NR35`.
+    """Treinamentos de NR -> documentos `NR06`/`NR10`/`NR12`/`NR18`/`NR35`.
 
     Percorre `/v2/treinamentos_realizados` e desce nos participantes.
     O caminho inverso (`.../trabalhadores`) NAO serve: contra a base
     real a relacao `treinamentoRealizado` volta vazia, entao sigla,
     descricao e validade nunca chegariam (medido em 11/09/2026).
 
-    Dois filtros deliberados, ambos para nao produzir falso
-    "conforme" no diagnostico documental:
+    Reprovados nao sao comprovantes. Treinamentos aprovados sao
+    preservados mesmo quando ainda nao podem ser classificados para o
+    diagnostico:
 
     1. **So participante aprovado.** Reprovado nao e comprovante de
        capacitacao; entra so no contador.
-    2. **So treinamento com validade conhecida.** `validade=None`
-       significa "documento perene, sem prazo" para
-       `diagnostico/runner.py` -- uma NR-35 vencida gravada sem
-       validade apareceria como OK, que e pior do que aparecer
-       ausente. Vencimento vem de `data_vencimento`; sem ele, de
-       `data_fim + validade_dias`.
+    2. NRs conhecidas so entram tipadas quando ha validade. Sem
+       validade, ou sem classificacao, salva como `TREINAMENTO_SST`,
+       que nao e avaliado como conformidade. Vencimento vem de
+       `data_vencimento`; sem ele, de `data_fim + validade_dias`.
 
     A NR sai da `sigla` ("NR 35"); na base real o `grupo` e uma
-    categoria descritiva, nao o rotulo da norma. NR fora do checklist
-    (NR-6, sinalizacao viaria, brigada...) nao vira documento.
+    categoria descritiva, nao o rotulo da norma. NR-6 e armazenada como
+    comprovante sem ser marcada como obrigatoria para todos; aplicabilidade
+    precisa seguir a matriz SST por funcao/atividade.
     """
     treinos = await _iter_paginado(client.list_treinamentos_realizados)
     summary.treinos_total = len(treinos)
@@ -479,23 +481,28 @@ async def pull_treinamentos(
             if not participante.get("aprovado"):
                 summary.treinos_reprovados += 1
                 continue
+            tipo_documento = tipo
             if tipo is None:
                 summary.treinos_nr_desconhecida += 1
-                continue
             if validade is None:
                 summary.treinos_sem_validade += 1
-                continue
+            if tipo_documento is None or validade is None:
+                tipo_documento = DOC_EMP_TREINAMENTO_SST
 
             external_id = str(participante.get("id"))
             doc = indices.docs.get(external_id)
             certificado = participante.get("certificado_id")
             fields = {
                 "employee_id": employee.id,
-                "tipo": tipo,
+                "tipo": tipo_documento,
                 "numero": str(certificado)[:128] if certificado else None,
                 "emissao": emissao,
                 "validade": validade,
-                "observacoes": treino.get("descricao") or None,
+                "observacoes": " · ".join(
+                    str(value).strip()
+                    for value in (treino.get("sigla"), treino.get("descricao"))
+                    if value and str(value).strip()
+                ) or None,
                 "source": "onsafety",
                 "onsafety_external_id": external_id,
                 "obra_id": obra_id,

@@ -382,10 +382,12 @@ DOC_EMP_CTPS = "CTPS"  # Carteira de Trabalho e Previdencia Social
 DOC_EMP_CONTRATO_TRABALHO = "CONTRATO_TRABALHO"
 DOC_EMP_FICHA_REGISTRO = "FICHA_REGISTRO"
 
+DOC_EMP_NR06 = "NR06"  # Treinamento de EPI (nao implica exigencia universal)
 DOC_EMP_NR10 = "NR10"  # Eletricidade -- so se is_eletricista
 DOC_EMP_NR12 = "NR12"  # Maquinas/equipamentos -- so se is_operador_maquina
 DOC_EMP_NR18 = "NR18"  # Construcao civil -- obrigatorio em obras
 DOC_EMP_NR35 = "NR35"  # Trabalho em altura -- so se is_alturas
+DOC_EMP_TREINAMENTO_SST = "TREINAMENTO_SST"  # Curso ainda sem regra de conformidade
 DOC_EMP_TOXICOLOGICO = "TOXICOLOGICO"  # so se is_motorista
 DOC_EMP_OS = "ORDEM_SERVICO"  # OS de SST (NR-1)
 DOC_EMP_LISTA_INTEGRACAO = "LISTA_INTEGRACAO"
@@ -406,10 +408,12 @@ DOC_EMP_TIPOS_VALIDOS: frozenset[str] = frozenset(
         DOC_EMP_CTPS,
         DOC_EMP_CONTRATO_TRABALHO,
         DOC_EMP_FICHA_REGISTRO,
+        DOC_EMP_NR06,
         DOC_EMP_NR10,
         DOC_EMP_NR12,
         DOC_EMP_NR18,
         DOC_EMP_NR35,
+        DOC_EMP_TREINAMENTO_SST,
         DOC_EMP_TOXICOLOGICO,
         DOC_EMP_OS,
         DOC_EMP_LISTA_INTEGRACAO,
@@ -431,10 +435,12 @@ DOC_EMP_LABELS: dict[str, str] = {
     DOC_EMP_CTPS: "CTPS (Carteira de Trabalho)",
     DOC_EMP_CONTRATO_TRABALHO: "Contrato de trabalho",
     DOC_EMP_FICHA_REGISTRO: "Ficha de registro",
+    DOC_EMP_NR06: "NR-06 (Equipamento de Protecao Individual)",
     DOC_EMP_NR10: "NR-10 (Eletricidade)",
     DOC_EMP_NR12: "NR-12 (Maquinas/Equipamentos)",
     DOC_EMP_NR18: "NR-18 (Construcao Civil)",
     DOC_EMP_NR35: "NR-35 (Trabalho em Altura)",
+    DOC_EMP_TREINAMENTO_SST: "Treinamento SST (classificacao pendente)",
     DOC_EMP_TOXICOLOGICO: "Exame toxicologico",
     DOC_EMP_OS: "Ordem de Servico (SST)",
     DOC_EMP_LISTA_INTEGRACAO: "Lista de Integracao",
@@ -662,4 +668,3 @@ class AdmissaoJornada(Base):
     )
 
     employee: Mapped[Employee] = relationship()
-

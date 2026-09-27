@@ -416,6 +416,7 @@ Env vars:
 | `ONSAFETY_TOKEN`            | opcional    | Sem token, adapter opera em mock determinístico. |
 | `ONSAFETY_BASE_URL`         | não         | Default: homologação (`api.dev.onsafety.com.br`). |
 | `ONSAFETY_ALLOW_PROD_WRITE` | não         | Default: `false`. **Guard-rail**: `create_or_update` contra `api.onsafety.com.br` levanta `OnsafetyProdWriteBlockedError` sem este opt-in (o token disponível hoje é o de produção — ADR-001). Leitura não é afetada. |
+| `ONSAFETY_ONBOARDING_PUSH_ENABLED` | não | Default: `false`. Trava separada para manter o push de onboarding somente em pré-visualização; nenhuma escrita externa ocorre até habilitação explícita. |
 | `ONSAFETY_PROJETO_ID`       | p/ push     | Estabelecimento/projeto OnSafety ao qual o push vincula o trabalhador. Sem ele a API deles recusa com 403. Em homolog: obra de teste "OBRA TESTE MOTOR CENTRAL". |
 
 **Importação de cadastro (`scripts/import_trabalhadores_onsafety.py`):**
@@ -438,23 +439,31 @@ para usarem dado fresco). Matching por CPF (validado com `is_valid_cpf`;
 sem match não cria funcionário). ASOs → colunas `aso_*` de `dp_employees`
 com regra **"ASO nunca regride"** (pull não sobrescreve dado mais
 recente); fichas de EPI → `EmployeeDocument` tipo `FICHA_EPI`; treinamentos
-→ `EmployeeDocument` tipo `NR10`/`NR12`/`NR18`/`NR35`. Todos com
+→ `EmployeeDocument` tipado como `NR06`/`NR10`/`NR12`/`NR18`/`NR35`
+quando há validade conhecida; os demais cursos aprovados são guardados
+como `TREINAMENTO_SST`, fora do checklist automático. Todos com
 `source="onsafety"` e upsert por `onsafety_external_id` (docs manuais
 nunca são tocados). O run carrega 3 índices em memória (funcionários por
 CPF, documentos por external id, obras por código) — antes era 1 SELECT
 por item. LGPD: 1 row em `dp_dossie_consultas` por (funcionário, fonte)
 por run + summary do run em `audit_log`.
 
-**Treinamentos → NR (regras de segurança).** Só entra no dossiê o
-treinamento que é (a) **aprovado** e (b) **com validade conhecida**
-(`dataVencimento`, ou `dataFim + validadeDias`). O motivo do item (b): o
-`diagnostico/runner.py` lê `validade = None` como *"documento perene →
-conforme"*, então uma NR-35 vencida gravada sem validade apareceria como
-**OK** no checklist — pior do que aparecer como ausente. Descartados
-contam em `treinos_sem_validade` / `treinos_reprovados`. A NR sai do
+**Treinamentos → NR (regras de segurança).** Só entram no dossiê os
+treinamentos **aprovados**. Os reconhecidos com validade conhecida
+recebem tipo específico; os sem validade ou classificação ficam como
+`TREINAMENTO_SST`, consultáveis na ficha do funcionário sem gerar falso
+"conforme". O vencimento vem de `dataVencimento` ou `dataFim + validadeDias`.
+`diagnostico/runner.py` lê `validade = None` como documento perene; uma
+NR-35 vencida sem validade apareceria como **OK** no checklist. Sem
+validade, portanto, o documento fica fora do checklist. Reprovados
+contam em `treinos_reprovados`; validade e tipos pendentes têm contadores
+próprios. A NR sai do
 `treinamentoCodigo.grupo` (rótulo normalizado deles), com fallback para
-`sigla` e `descricao`; NR fora do checklist (NR-06, integração, brigada)
-não vira documento e conta em `treinos_nr_desconhecida`.
+`sigla` e `descricao`. NR-06 agora fica disponível no dossiê como
+comprovante, mas não marca conformidade automaticamente: a norma condiciona
+o treinamento às características do EPI, atividade e exigências aplicáveis.
+Integração, brigada e cursos ainda sem classificação seguem no contador
+`treinos_nr_desconhecida`.
 
 **Obra do documento.** O `establishment` (Projeto) vem junto nos
 treinamentos e nas fichas de EPI e resolve `dp_employee_documents.obra_id`

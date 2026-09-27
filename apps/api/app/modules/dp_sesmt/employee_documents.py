@@ -247,7 +247,9 @@ async def create_endpoint(
     response_model=list[EmployeeDocumentRead],
 )
 async def list_endpoint(
-    employee_id: int, db: AsyncSession = Depends(get_db)
+    employee_id: int,
+    db: AsyncSession = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ) -> list[EmployeeDocumentRead]:
     if (await _get_employee(db, employee_id)) is None:
         raise HTTPException(status_code=404, detail="Funcionario nao encontrado")

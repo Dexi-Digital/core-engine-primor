@@ -304,6 +304,13 @@ async def sync_onsafety_endpoint(
     employee = await service.get_employee(db, employee_id)
     if employee is None:
         raise HTTPException(404, f"Funcionario {employee_id} nao encontrado")
+    if not get_settings().onsafety_onboarding_push_enabled and not client.is_mock:
+        await client.aclose()
+        raise HTTPException(
+            423,
+            "Push para a OnSafety esta em modo de pre-visualizacao. "
+            "Nenhuma escrita externa foi habilitada.",
+        )
     try:
         run = await onboarding_svc.sync_employee_onsafety(
             db,
@@ -381,7 +388,11 @@ async def preview_sync_onsafety_endpoint(
         raise HTTPException(404, f"Funcionario {employee_id} nao encontrado")
     try:
         return await onboarding_svc.previsualizar_sync_onsafety(
-            db, client, employee, projeto_id=get_settings().onsafety_projeto_id
+            db,
+            client,
+            employee,
+            projeto_id=get_settings().onsafety_projeto_id,
+            push_enabled=get_settings().onsafety_onboarding_push_enabled,
         )
     finally:
         await client.aclose()

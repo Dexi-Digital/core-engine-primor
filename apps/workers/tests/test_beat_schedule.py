@@ -80,6 +80,10 @@ def test_dashboards_comerciais_tem_fonte_agendada() -> None:
     assert "worker.tasks.licitacoes.ingest_atas" in tasks
 
 
+def test_recarga_historica_pncp_esta_registrada(tasks_registradas: set[str]) -> None:
+    assert "worker.tasks.licitacoes.backfill_pncp" in tasks_registradas
+
+
 def test_crawler_que_falha_em_tudo_nao_termina_verde() -> None:
     """Em 21/09/2026 o PNCP devolveu 503 nas 13 modalidades.
 
