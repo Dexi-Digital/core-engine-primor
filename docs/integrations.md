@@ -10,9 +10,9 @@ Chaves de acesso vivem em variáveis de ambiente; **nunca no código**.
 | `onsafety`      | OnSafety (SST, EPIs)              | API          | A |
 | `tangerino`     | Sólides Ponto (ex-Tangerino)      | API          | A, B |
 | `totvs`         | TOTVS RM (ERP financeiro)         | API (REST/SOAP) | C |
-| `sistema90`     | Sistema 90 (legado frota)         | API parcial  | B |
+| `sistema90`     | Sistema 90 (frota e legado financeiro) | API parcial para frota; planilha manual para financeiro (a implementar) | B, C |
 | `onedrive`      | OneDrive / SharePoint             | Graph API    | A, B, C |
-| `easyjur`       | EasyJur (jurídico)                | API          | C |
+| `easyjur`       | EasyJur (jurídico)                | HTTP de sessão; falha relatada em 26/09/2026 | C / Jurídico |
 | `solides`       | Sólides (R&S)                     | API          | A (avaliação) |
 | `pncp`          | PNCP (Consulta v1 + Portal)       | API pública  | D |
 | `comprasnet`    | ComprasNet (SIASG legacy)         | Scraping HTML| D (fallback) |
@@ -25,6 +25,22 @@ Chaves de acesso vivem em variáveis de ambiente; **nunca no código**.
 | `viacep`        | ViaCEP (endereço por CEP)         | API pública  | A (dossiê de admissão) |
 | `brasilapi`     | BrasilAPI (CNPJ via Receita)      | API pública  | A (dossiê de admissão) |
 | `directdata`    | DirectData (consulta CPF)         | API paga     | A (dossiê de admissão) |
+
+## Atualização operacional — 26/09/2026
+
+Informações fornecidas pelo cliente nesta data:
+
+- **Financeiro:** o legado 90 entrará por importação manual de planilha;
+  outra parte virá do TOTVS. Não pressupor API do Sistema 90 para esse
+  fluxo nem substituir o histórico importado pela sincronização TOTVS.
+  [Mapeamento dos arquivos e requisitos](./financeiro-origens.md).
+- **EasyJur:** não funcionou. O ponto da falha ainda não foi informado;
+  login, extração, persistência e exibição precisam ser diferenciados no
+  diagnóstico. As verificações antigas abaixo são evidência histórica.
+- **Manutenção / frota:** acessos concedidos. Identificar os serviços
+  abrangidos, conferir configuração no ambiente e validar a operação;
+  não presumir que cada adapter já esteja funcionando ou que o acesso
+  inclua serviços de outros módulos, como TOTVS.
 
 ## Padrões
 
@@ -693,6 +709,22 @@ Env vars:
 
 ## TOTVS RM (adapter pronto contra mock — aguardando credencial)
 
+**Novo requisito financeiro (26/09/2026):** o relatório FIN exige uma
+linha por apropriação, 23 campos preservados e duas colunas calculadas.
+O modelo atual `totvs_lancamentos` representa o lançamento e não cobre
+essa granularidade. Ampliar a extração e a persistência antes de declarar
+atendimento ao relatório; ver [mapeamento](./financeiro-origens.md).
+O documento recebido é uma solicitação de relatório, não uma resposta
+real do serviço TOTVS nem confirmação de acesso.
+
+A página de importação financeira mostra os lançamentos e as últimas
+cinco execuções já persistidos pelo pull atual (`GET
+/api/v1/financeiro/importacoes/totvs`). Essa consulta não altera a
+integração de leitura nem preenche os campos de apropriação que o modelo
+TOTVS atual não possui.
+O card de integração na visão geral passou a refletir a última execução
+registrada e a presença das três credenciais obrigatórias no ambiente.
+
 Adapter: `app.integrations.totvs.client.TotvsClient`, com a extração
 atrás da interface `TotvsExtractor` (`app/integrations/totvs/extractor.py`).
 Consome: Módulo C. Ticket TOTVS **30268517**.
@@ -1131,7 +1163,13 @@ TOTVS_COLIGADAS_ESPERADAS=<lista das coligadas, ex.: 1,2>
 
 ---
 
-## EasyJur — jurídico (autenticado; pull desenhado, não construído)
+## EasyJur — jurídico (falha relatada; diagnóstico pendente)
+
+**Estado informado em 26/09/2026:** o cliente relatou que não funcionou.
+Não há causa confirmada nem nova validação de acesso nesta atualização.
+O repositório contém adapter, módulo jurídico, worker e tela; sua
+existência não comprova o funcionamento em produção. O levantamento
+abaixo descreve as verificações de setembro anteriores a esse relato.
 
 **Adapter:** `app/integrations/easyjur/client.py`
 

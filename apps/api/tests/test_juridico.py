@@ -279,3 +279,12 @@ async def test_resumo_expoe_o_estado_do_sync(db_session: AsyncSession) -> None:
     u = (await svc.resumo(db_session))["ultimo_sync"]
     assert u["status"] == "em_andamento"
     assert u["iniciado_em"] is not None
+
+
+async def test_html_inesperado_nao_registra_sucesso_vazio(db_session: AsyncSession) -> None:
+    from app.integrations.easyjur.client import EasyjurError
+
+    with pytest.raises(EasyjurError, match="sem registros nem total"):
+        await svc.sincronizar(db_session, ClientFalso(html="<html>Manutenção</html>"), source="manual")
+    assert await _contar(db_session, Processo) == 0
+    assert await _contar(db_session, SyncLog) == 0

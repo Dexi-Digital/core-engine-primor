@@ -167,7 +167,8 @@ class EasyjurClient(IntegrationClient):
 
         # Visita a pagina antes: e o que cria o PHPSESSID que o POST usa.
         try:
-            await self._client.get(_PAGINA_LOGIN)
+            pagina = await self._client.get(_PAGINA_LOGIN)
+            pagina.raise_for_status()
             resp = await self._client.post(
                 _ENDPOINT_LOGIN,
                 data={"email": self._email, "password": self._password},
@@ -187,8 +188,12 @@ class EasyjurClient(IntegrationClient):
                 f"(status {resp.status_code})"
             ) from exc
 
+        if not isinstance(dados, dict) or dados.get("status") is None:
+            raise EasyjurError("EasyJur login devolveu JSON sem confirmação de autenticação")
         erros = dados.get("erros") or {}
-        if erros or dados.get("status") not in (200, None):
+        if not isinstance(erros, dict):
+            raise EasyjurError("EasyJur login devolveu formato de erro inesperado")
+        if erros or dados.get("status") != 200:
             restantes = _extrair_tentativas(erros)
             self.tentativas_restantes = restantes
             mensagem = _limpar_html(
@@ -199,6 +204,8 @@ class EasyjurClient(IntegrationClient):
                 tentativas_restantes=restantes,
             )
 
+        if not resp.is_success:
+            raise EasyjurError(f"EasyJur login devolveu HTTP {resp.status_code}")
         self._autenticado = True
         # Login OK zera a contagem consecutiva no lado deles.
         self.tentativas_restantes = None
@@ -209,6 +216,15 @@ class EasyjurClient(IntegrationClient):
     # Devolvem o conteudo CRU. Interpretar e trabalho do `parser.py`: a
     # unica camada que toca a rede fica livre da unica camada que quebra
     # quando o layout deles muda.
+
+    def _verificar_sessao(self, response: httpx.Response) -> None:
+        """Uma página de login com HTTP 200 não representa uma coleção vazia."""
+        content = response.text.lower()
+        if "/acesso/" in response.url.path or (
+            "<form" in content and ("type=\"password\"" in content or "type='password'" in content)
+        ):
+            self._autenticado = False
+            raise EasyjurAuthError("Sessão EasyJur expirada ou redirecionada para login")
 
     async def listar_processos(self, page: int = 1) -> str:
         """HTML de uma pagina de processos (50 por pagina).
@@ -230,6 +246,7 @@ class EasyjurClient(IntegrationClient):
             raise EasyjurError(
                 f"EasyJur processos p.{page}: {type(exc).__name__}: {exc}"
             ) from exc
+        self._verificar_sessao(r)
         return r.text
 
     async def exportar_andamentos_csv(self) -> bytes:
@@ -246,6 +263,7 @@ class EasyjurClient(IntegrationClient):
                 _ANDAMENTOS, data={"pesquisa": "enviar", "page": 1}, headers=_AJAX
             )
             r.raise_for_status()
+            self._verificar_sessao(r)
             r = await self._client.post(
                 _EXPORT_ANDAMENTOS,
                 data={"campos[]": list(_CAMPOS_EXPORT)},
@@ -257,6 +275,7 @@ class EasyjurClient(IntegrationClient):
             raise EasyjurError(
                 f"EasyJur export de andamentos: {type(exc).__name__}: {exc}"
             ) from exc
+        self._verificar_sessao(r)
         return r.content
 
 

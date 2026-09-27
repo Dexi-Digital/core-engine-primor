@@ -19,6 +19,7 @@ from alembic import context
 
 # Importar os models garante que estejam registrados no metadata:
 from app.audit import models as _audit  # noqa: F401
+from app.core import models_registry as _models  # noqa: F401
 from app.core.db import Base
 from app.core.db_url import resolve_sync_database_url
 from app.modules.auth import models as _auth  # noqa: F401

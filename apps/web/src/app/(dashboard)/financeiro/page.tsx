@@ -84,6 +84,11 @@ export default async function FinanceiroPage() {
         </Link>
       </header>
 
+      <Link href="/financeiro/importacoes" className="block rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-900">
+        <span className="font-semibold">Importar financeiro do legado 90 →</span>
+        <span className="mt-1 block">Envie o Relatório Completo, confira os rateios e ative a base. Histórico e exportação Excel disponíveis.</span>
+      </Link>
+
       {contratos === null && (
         <section className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
           <p className="font-semibold">Não consegui carregar os contratos.</p>
@@ -205,7 +210,7 @@ export default async function FinanceiroPage() {
           {
             label: "Lançamentos financeiros do TOTVS RM.",
             status: "parcial",
-            nota: "Pronto contra ambiente de teste; falta liberação de acesso pelo time Cloud da TOTVS.",
+            nota: "Adapter de lançamentos disponível; acesso real e ampliação para os 23 campos e rateios do FIN ainda precisam ser validados.",
           },
           {
             label: "Leitura de notas fiscais em PDF escaneado.",

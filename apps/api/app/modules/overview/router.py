@@ -1,4 +1,5 @@
 """Home/Comando Central — agregado de KPIs + integracoes + feed."""
+
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
@@ -14,6 +15,7 @@ from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.diagnostico.models import DiagnosticoFinding, DiagnosticoRun
 from app.modules.dp_sesmt.models import Afastamento, Employee
+from app.modules.financeiro_totvs.models import TotvsSyncLog
 from app.modules.licitacoes.models import (
     CertidaoEmpresa,
     Edital,
@@ -66,14 +68,10 @@ async def get_home(
     now = datetime.now(UTC)
 
     # -------- KPI: funcionarios --------
-    total_emp = int(
-        (await db.execute(select(func.count(Employee.id)))).scalar() or 0
-    )
+    total_emp = int((await db.execute(select(func.count(Employee.id)))).scalar() or 0)
     ativos_emp = int(
         (
-            await db.execute(
-                select(func.count(Employee.id)).where(Employee.status == "ativo")
-            )
+            await db.execute(select(func.count(Employee.id)).where(Employee.status == "ativo"))
         ).scalar()
         or 0
     )
@@ -109,29 +107,19 @@ async def get_home(
     afastados = int(
         (
             await db.execute(
-                select(func.count(Afastamento.id)).where(
-                    Afastamento.data_retorno.is_(None)
-                )
+                select(func.count(Afastamento.id)).where(Afastamento.data_retorno.is_(None))
             )
         ).scalar()
         or 0
     )
 
     # -------- KPI: frota --------
-    total_vei = int(
-        (await db.execute(select(func.count(Veiculo.id)))).scalar() or 0
-    )
+    total_vei = int((await db.execute(select(func.count(Veiculo.id)))).scalar() or 0)
     ativos_vei = int(
-        (
-            await db.execute(
-                select(func.count(Veiculo.id)).where(Veiculo.status == "ativo")
-            )
-        ).scalar()
+        (await db.execute(select(func.count(Veiculo.id)).where(Veiculo.status == "ativo"))).scalar()
         or 0
     )
-    partes_total = int(
-        (await db.execute(select(func.count(ParteDiaria.id)))).scalar() or 0
-    )
+    partes_total = int((await db.execute(select(func.count(ParteDiaria.id)))).scalar() or 0)
     partes_7d = int(
         (
             await db.execute(
@@ -146,8 +134,7 @@ async def get_home(
         (
             await db.execute(
                 select(func.count(ConsultaDetran.id)).where(
-                    ConsultaDetran.executed_at
-                    >= now - timedelta(days=30)
+                    ConsultaDetran.executed_at >= now - timedelta(days=30)
                 )
             )
         ).scalar()
@@ -155,9 +142,7 @@ async def get_home(
     )
 
     # -------- KPI: licitacoes --------
-    total_licit = int(
-        (await db.execute(select(func.count(Licitacao.id)))).scalar() or 0
-    )
+    total_licit = int((await db.execute(select(func.count(Licitacao.id)))).scalar() or 0)
     licit_7d = int(
         (
             await db.execute(
@@ -168,12 +153,8 @@ async def get_home(
         ).scalar()
         or 0
     )
-    total_editais = int(
-        (await db.execute(select(func.count(Edital.id)))).scalar() or 0
-    )
-    total_queries = int(
-        (await db.execute(select(func.count(SavedQuery.id)))).scalar() or 0
-    )
+    total_editais = int((await db.execute(select(func.count(Edital.id)))).scalar() or 0)
+    total_queries = int((await db.execute(select(func.count(SavedQuery.id)))).scalar() or 0)
 
     # -------- KPI: certidoes --------
     cert_vencidas = int(
@@ -203,9 +184,7 @@ async def get_home(
         ).scalar()
         or 0
     )
-    cert_total = int(
-        (await db.execute(select(func.count(CertidaoEmpresa.id)))).scalar() or 0
-    )
+    cert_total = int((await db.execute(select(func.count(CertidaoEmpresa.id)))).scalar() or 0)
 
     # -------- Diagnostico: ultima run concluida --------
     # Filtra status='done' para nao exibir 0% conformidade quando a ultima
@@ -227,9 +206,7 @@ async def get_home(
         conformidade_pct = (ok_f / total_f * 100.0) if total_f else 0.0
         last_run = {
             "id": last_run_row.id,
-            "started_at": last_run_row.started_at.isoformat()
-            if last_run_row.started_at
-            else None,
+            "started_at": last_run_row.started_at.isoformat() if last_run_row.started_at else None,
             "finished_at": last_run_row.finished_at.isoformat()
             if last_run_row.finished_at
             else None,
@@ -256,22 +233,28 @@ async def get_home(
             )
         ).all()
         for area, st, cnt in area_rows:
-            findings_por_area.setdefault(
-                area, {"ok": 0, "vencendo": 0, "vencido": 0, "ausente": 0}
-            )
+            findings_por_area.setdefault(area, {"ok": 0, "vencendo": 0, "vencido": 0, "ausente": 0})
             findings_por_area[area][st] = int(cnt)
 
     # -------- OneDrive Sync: ultima run --------
     last_od = (
         await db.execute(
-            select(OneDriveSyncRun)
-            .order_by(OneDriveSyncRun.started_at.desc())
-            .limit(1)
+            select(OneDriveSyncRun).order_by(OneDriveSyncRun.started_at.desc()).limit(1)
         )
     ).scalar_one_or_none()
 
     # -------- Integracoes status --------
     settings = get_settings()
+    ultimo_totvs = (
+        await db.execute(
+            select(TotvsSyncLog)
+            .order_by(TotvsSyncLog.started_at.desc(), TotvsSyncLog.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    totvs_configurado = bool(
+        settings.totvs_base_url and settings.totvs_username and settings.totvs_password
+    )
     integrations: list[dict[str, Any]] = [
         {
             "key": "pncp",
@@ -338,9 +321,21 @@ async def get_home(
             "key": "totvs",
             "label": "TOTVS",
             "descr": "ERP Protheus — financeiro / contratos",
-            "status": "pending",
-            "last_event": "Aguardando migração",
-            "configured": False,
+            "status": (
+                "ok"
+                if ultimo_totvs and ultimo_totvs.status == "ok"
+                else "error"
+                if ultimo_totvs and ultimo_totvs.status == "failed"
+                else "pending"
+            ),
+            "last_event": (
+                f"{ultimo_totvs.lidos} lançamentos lidos em {ultimo_totvs.janela}"
+                if ultimo_totvs and ultimo_totvs.status == "ok"
+                else ultimo_totvs.error_message[:160]
+                if ultimo_totvs and ultimo_totvs.status == "failed" and ultimo_totvs.error_message
+                else "Sem sincronização bem-sucedida; validar acesso ao RM"
+            ),
+            "configured": totvs_configurado,
         },
     ]
 
@@ -351,9 +346,7 @@ async def get_home(
     recent_runs = (
         (
             await db.execute(
-                select(DiagnosticoRun)
-                .order_by(DiagnosticoRun.started_at.desc())
-                .limit(3)
+                select(DiagnosticoRun).order_by(DiagnosticoRun.started_at.desc()).limit(3)
             )
         )
         .scalars()
@@ -364,8 +357,7 @@ async def get_home(
             {
                 "ts": r.started_at.isoformat() if r.started_at else None,
                 "kind": "diagnostico",
-                "title": f"Diagnóstico Run #{r.id} — "
-                f"{r.ok_count or 0}/{r.total_findings or 0} OK",
+                "title": f"Diagnóstico Run #{r.id} — {r.ok_count or 0}/{r.total_findings or 0} OK",
                 "by": r.triggered_by or "system",
             }
         )
@@ -374,9 +366,7 @@ async def get_home(
     recent_od = (
         (
             await db.execute(
-                select(OneDriveSyncRun)
-                .order_by(OneDriveSyncRun.started_at.desc())
-                .limit(3)
+                select(OneDriveSyncRun).order_by(OneDriveSyncRun.started_at.desc()).limit(3)
             )
         )
         .scalars()
@@ -395,11 +385,7 @@ async def get_home(
 
     # Ultimas partes diarias (5)
     recent_partes = (
-        (
-            await db.execute(
-                select(ParteDiaria).order_by(ParteDiaria.id.desc()).limit(5)
-            )
-        )
+        (await db.execute(select(ParteDiaria).order_by(ParteDiaria.id.desc()).limit(5)))
         .scalars()
         .all()
     )
@@ -418,9 +404,7 @@ async def get_home(
     recent_detran = (
         (
             await db.execute(
-                select(ConsultaDetran)
-                .order_by(ConsultaDetran.executed_at.desc())
-                .limit(3)
+                select(ConsultaDetran).order_by(ConsultaDetran.executed_at.desc()).limit(3)
             )
         )
         .scalars()

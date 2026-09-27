@@ -44,6 +44,8 @@ def _disable_login_rate_limit(monkeypatch: pytest.MonkeyPatch) -> None:
 # real usa `monkeypatch.setenv(...)` dentro do proprio teste, que roda
 # depois desta fixture e portanto vence.
 _CREDENCIAIS_EXTERNAS = (
+    "EASYJUR_EMAIL",
+    "EASYJUR_PASSWORD",
     "ONVIO_CLIENT_ID",
     "ONVIO_CLIENT_SECRET",
     "ONVIO_INTEGRATION_KEY",

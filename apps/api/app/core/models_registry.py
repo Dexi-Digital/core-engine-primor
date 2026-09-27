@@ -27,6 +27,7 @@ from app.modules.diagnostico import models as _diag  # noqa: F401
 from app.modules.dp_sesmt import afastamentos as _afast  # noqa: F401
 from app.modules.dp_sesmt import models as _dp  # noqa: F401
 from app.modules.financeiro_contratos import models as _contratos  # noqa: F401
+from app.modules.financeiro_importacao import models as _financeiro_importacao  # noqa: F401
 from app.modules.financeiro_totvs import models as _totvs  # noqa: F401
 from app.modules.fiscal import models as _fiscal  # noqa: F401
 from app.modules.juridico import models as _jur  # noqa: F401

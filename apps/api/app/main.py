@@ -22,6 +22,7 @@ from app.modules.dp_sesmt.employee_documents import (
 )
 from app.modules.dp_sesmt.router import router as dp_sesmt_router
 from app.modules.financeiro_contratos.router import router as financeiro_router
+from app.modules.financeiro_importacao.router import router as financeiro_importacao_router
 from app.modules.fiscal.router import router as fiscal_router
 from app.modules.ia_tools.router import router as ia_tools_router
 from app.modules.juridico.router import router as juridico_router
@@ -137,6 +138,7 @@ def create_app() -> FastAPI:
     app.include_router(dp_sesmt_router, prefix="/api/v1/dp-sesmt", tags=["dp-sesmt"])
     app.include_router(manutencao_router, prefix="/api/v1/manutencao-frota", tags=["manutencao-frota"])
     app.include_router(financeiro_router, prefix="/api/v1/financeiro", tags=["financeiro-contratos"])
+    app.include_router(financeiro_importacao_router)
     # D.6: mount certidoes BEFORE the catch-all `/{licitacao_id}` route to
     # avoid "certidoes" being parsed as an int (returns 422).
     app.include_router(

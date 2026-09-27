@@ -2,6 +2,24 @@
 
 Baseado nas 12 demandas do briefing (`demandas programação - rev01.docx`).
 
+## Atualização de escopo — 26/09/2026
+
+- **Financeiro:** duas origens complementares: legado do Sistema 90 por
+  importação manual de planilha e TOTVS. O relatório deve preservar os
+  dados por apropriação e permitir análise consolidada com origem identificada.
+  Mapeamento dos exemplos e requisitos em
+  [Financeiro: legado 90 e TOTVS](./financeiro-origens.md).
+- **EasyJur:** cliente informou que não funcionou. A integração permanece
+  pendente de diagnóstico e validação; autenticação histórica não comprova
+  funcionamento atual. Não considerar essa entrega concluída.
+- **Manutenção / frota:** acessos já concedidos, conforme informado pelo
+  cliente. Próxima etapa é validar a configuração e as operações de cada
+  integração; falta de concessão de acesso não é mais o bloqueio geral.
+  A lista de serviços abrangidos ainda precisa ser identificada.
+
+Esta atualização prevalece sobre os estados históricos de acesso registrados
+na documentação. Não representa validação em produção.
+
 ## Módulo A — DP / SESMT (prioridade alta)
 
 | # | Demanda | Entrega |
@@ -18,14 +36,14 @@ Baseado nas 12 demandas do briefing (`demandas programação - rev01.docx`).
 |---|---------|---------|
 | 5 | Unificação de partes diárias | Upload de foto/PDF → OCR (visão computacional treinada em manuscrito) → parsing para apontamento. Cálculo de combustível e alerta de manutenção preventiva. |
 | 6 | Download automático de docs | RPA via Playwright para IPVA, CRLV, certidões, multas. Agendado por placa/CNPJ. |
-| 7 | Apropriação e custo por equipamento | Integração parcial com Sistema 90; motor de regras que cruza apropriação (h/km) × NF. Alertas de custo acima da referência. |
+| 7 | Apropriação e custo por equipamento | Integração parcial com Sistema 90; motor de regras que cruza apropriação (h/km) × NF. Alertas de custo acima da referência. Acessos de manutenção/frota concedidos; validar os serviços abrangidos e a operação. A importação financeira do legado 90 é tratada na demanda 8. |
 
 ## Módulo C — Financeiro / Contratos
 
 | # | Demanda | Entrega |
 |---|---------|---------|
-| 8 | Migração 90 → TOTVS | Ingestão de NF-e (XML parser + OCR de PDFs). Conferência automática de remessas bancárias. Encaminhamento estruturado de NFs das obras. Cruzamento combustível × alimentação × aluguel × descontos em medição. |
-| 12 | Ciclo de contratos | Emissão, assinatura digital, AP, alertas de vencimento. Possível organização no OneDrive. Relatórios EasyJur para contratos judicializados. |
+| 8 | Financeiro: legado 90 + TOTVS | Importação manual de planilhas do legado 90 e leitura do TOTVS, preservando as origens. Relatório por apropriação com os 23 campos do FIN, competência da emissão e classificação por natureza; filtros e exportação Excel multiempresa. Ingestão de NF-e (XML parser + OCR de PDFs), conferência de remessas bancárias, encaminhamento de NFs e cruzamento combustível × alimentação × aluguel × descontos em medição continuam no escopo. Ver [mapeamento](./financeiro-origens.md). |
+| 12 | Ciclo de contratos | Cadastro, AP e alertas de vencimento; possível organização no OneDrive. Assinatura digital fora do escopo por decisão de 04/08/2026. EasyJur atende ao contencioso, sem base de contratos judicializados validada; falha relatada em 26/09/2026, pendente de diagnóstico. |
 
 ## Módulo D — Licitações
 

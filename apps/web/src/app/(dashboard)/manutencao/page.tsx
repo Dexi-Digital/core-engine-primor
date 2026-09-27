@@ -264,22 +264,22 @@ export default async function ManutencaoPage() {
           {
             label: "Leitura automática de partes diárias manuscritas (fotos).",
             status: "mock",
-            nota: "Pronto; falta a credencial do Google Document AI.",
+            nota: "Acessos de manutenção/frota informados como concedidos em 26/09. Validar se incluem Document AI e configurar o OCR neste ambiente.",
           },
           {
             label: "Consulta de IPVA, CRLV e multas.",
             status: "mock",
-            nota: "Via Detran/Infosimples; falta o token.",
+            nota: "Via Detran/Infosimples. Acessos concedidos segundo o cliente; validar o serviço e a configuração neste ambiente.",
           },
           {
             label: "Cruzamento do abastecimento apontado × nota fiscal.",
             status: "parcial",
-            nota: "O lado apontado em campo já é lido. Falta o lado fiscal: as notas de combustível estão no SharePoint, sem liberação.",
+            nota: "Apontamentos disponíveis. Com os acessos concedidos, validar a leitura das notas de combustível no SharePoint e o vínculo com os equipamentos.",
           },
           {
             label: "Sistema 90 como fonte adicional.",
-            status: "bloqueado",
-            nota: "Depende de acesso e documentação. O objetivo (custo por equipamento) já é entregue pelas partes diárias.",
+            status: "parcial",
+            nota: "Acessos de manutenção/frota concedidos; validar documentação e operação do Sistema 90. O financeiro legado entra por importação de planilha.",
           },
         ]}
       />

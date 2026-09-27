@@ -227,3 +227,43 @@ async def test_leitura_faz_um_login_so():
     for page in (1, 2, 3):
         await c.listar_processos(page=page)
     assert logins["n"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("payload", [{}, [], {"status": None}, {"status": 200, "erros": "inesperado"}])
+async def test_login_sem_confirmacao_nao_autentica(payload):
+    def handler(request):
+        if request.url.path.endswith("/api/login.php"):
+            return httpx.Response(200, json=payload)
+        return httpx.Response(200, text="<form>")
+
+    client = _client(handler)
+    with pytest.raises(EasyjurError):
+        await client.login()
+    assert client._autenticado is False
+
+
+@pytest.mark.asyncio
+async def test_http_erro_nao_autentica_mesmo_com_json_de_sucesso():
+    def handler(request):
+        if request.url.path.endswith("/api/login.php"):
+            return httpx.Response(503, json={"status": 200})
+        return httpx.Response(200, text="<form>")
+
+    client = _client(handler)
+    with pytest.raises(EasyjurError, match="HTTP 503"):
+        await client.login()
+    assert client._autenticado is False
+
+
+@pytest.mark.asyncio
+async def test_sessao_expirada_nao_vira_lista_vazia():
+    def handler(request):
+        if request.url.path.endswith("/api/login.php"):
+            return httpx.Response(200, json={"status": 200})
+        return httpx.Response(200, text='<form><input type="password"></form>')
+
+    client = _client(handler)
+    with pytest.raises(EasyjurAuthError, match="Sessão"):
+        await client.listar_processos()
+    assert client._autenticado is False

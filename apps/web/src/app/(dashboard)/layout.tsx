@@ -43,6 +43,7 @@ const navGroups = [
     label: "Compliance",
     items: [
       { href: "/financeiro", label: "Financeiro", icon: <IconDollar /> },
+      { href: "/financeiro/importacoes", label: "Importação financeira", icon: <IconDollar /> },
       { href: "/fiscal/documentos", label: "Fiscal", icon: <IconDoc /> },
       { href: "/licitacoes", label: "Licitações", icon: <IconGavel /> },
       { href: "/juridico", label: "Jurídico", icon: <IconShield /> },

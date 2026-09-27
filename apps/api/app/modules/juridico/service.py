@@ -14,6 +14,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.integrations.easyjur import parser
+from app.integrations.easyjur.client import EasyjurError
 from app.modules.juridico.models import (
     SOURCES_SYNC,
     SYNC_EM_ANDAMENTO,
@@ -68,6 +69,11 @@ async def _coletar_processos(
         if declarado is None:
             declarado = parser.total_registros(html)
         pagina = parser.parse_processos(html)
+        if not pagina and declarado is None:
+            raise EasyjurError(
+                "Resposta de processos sem registros nem total declarado; "
+                "verifique a sessão e o layout do EasyJur"
+            )
         if not pagina:
             break
         for p in pagina:
