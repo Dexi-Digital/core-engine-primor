@@ -2,11 +2,22 @@
 from __future__ import annotations
 
 import asyncio
+import logging
+from time import monotonic
 
 from worker.main import celery_app
 
+logger = logging.getLogger(__name__)
+_SYNC_TIMEOUT_S = 12 * 60
+_SOFT_LIMIT_S = _SYNC_TIMEOUT_S + 60
+_HARD_LIMIT_S = _SOFT_LIMIT_S + 60
 
-@celery_app.task(name="worker.tasks.juridico.pull_easyjur")
+
+@celery_app.task(
+    name="worker.tasks.juridico.pull_easyjur",
+    soft_time_limit=_SOFT_LIMIT_S,
+    time_limit=_HARD_LIMIT_S,
+)
 def pull_easyjur(source: str = "beat") -> dict[str, object]:
     """Espelha processos e andamentos do EasyJur. Somente leitura.
 
@@ -20,7 +31,15 @@ def pull_easyjur(source: str = "beat") -> dict[str, object]:
     se recusa a tentar perto do limite -- entao credencial errada aqui
     falha alto em vez de queimar tentativa toda madrugada.
     """
-    return asyncio.run(_run(source))
+    logger.info("easyjur.sync.started source=%s", source)
+    started = monotonic()
+    result = asyncio.run(_run(source))
+    logger.info(
+        "easyjur.sync.finished source=%s duration_s=%.1f",
+        source,
+        monotonic() - started,
+    )
+    return result
 
 
 async def _run(source: str) -> dict[str, object]:
@@ -47,14 +66,25 @@ async def _run(source: str) -> dict[str, object]:
             # e o defeito que este projeto ja pagou caro tres vezes.
             raise RuntimeError(msg)
 
-        await svc.marcar_inicio(db, source=source)
         try:
-            r = await svc.sincronizar(db, client, source=source)
+            async with asyncio.timeout(_SYNC_TIMEOUT_S):
+                await svc.marcar_inicio(db, source=source)
+                r = await svc.sincronizar(db, client, source=source)
+        except TimeoutError as exc:
+            await db.rollback()
+            mensagem = (
+                "Timeout: EasyJur nao concluiu processos e andamentos em "
+                f"{_SYNC_TIMEOUT_S // 60} minutos"
+            )
+            await svc.marcar_erro(db, source=source, mensagem=mensagem)
+            logger.error("easyjur.sync.timeout source=%s", source)
+            raise TimeoutError(mensagem) from exc
         except Exception as exc:  # noqa: BLE001 -- o motivo vai para a tela
             await db.rollback()
             await svc.marcar_erro(
                 db, source=source, mensagem=f"{type(exc).__name__}: {exc}"
             )
+            logger.exception("easyjur.sync.failed source=%s", source)
             raise
         finally:
             await client.aclose()

@@ -84,6 +84,15 @@ def test_recarga_historica_pncp_esta_registrada(tasks_registradas: set[str]) -> 
     assert "worker.tasks.licitacoes.backfill_pncp" in tasks_registradas
 
 
+def test_easyjur_tem_limite_de_tempo_para_nao_ficar_preso_indefinidamente(
+    tasks_registradas: set[str],
+) -> None:
+    from worker.tasks.juridico import pull_easyjur
+
+    assert pull_easyjur.soft_time_limit == 13 * 60
+    assert pull_easyjur.time_limit == 14 * 60
+
+
 def test_crawler_que_falha_em_tudo_nao_termina_verde() -> None:
     """Em 21/09/2026 o PNCP devolveu 503 nas 13 modalidades.
 

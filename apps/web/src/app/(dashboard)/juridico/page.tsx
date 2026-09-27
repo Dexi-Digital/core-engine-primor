@@ -165,8 +165,8 @@ export default async function JuridicoPage(props: {
   const sync = resumo?.ultimo_sync ?? null;
   const rodando = sync?.status === "em_andamento";
   const minutos = rodando ? minutosDesde(sync.iniciado_em) : null;
-  // Uma carga leva ~2,5 min. Passou de 30, o worker provavelmente nao
-  // esta de pe neste ambiente -- a API tambem deixa de bloquear o botao.
+  // Passou de 30 min, a tarefa pode estar presa no worker ou no EasyJur.
+  // A API também permite enfileirar nova tentativa após esse prazo.
   const travado = rodando && (minutos ?? 0) >= 30;
   const totalPaginas = processos ? Math.max(1, Math.ceil(processos.total / 25)) : 1;
 
@@ -212,9 +212,9 @@ export default async function JuridicoPage(props: {
         <section className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
           <p className="font-semibold">A carga não terminou em {minutos} min.</p>
           <p className="mt-1">
-            O normal são 3. Provavelmente o serviço que roda as cargas (worker)
-            não está de pé neste ambiente. Dá para tentar de novo, mas sem o
-            worker o resultado vai ser o mesmo.
+            A tarefa não concluiu dentro do prazo esperado. Pode ter travado no
+            worker ou estar aguardando resposta do EasyJur. Depois de 30 minutos,
+            você pode iniciar uma nova tentativa; a anterior não é reenfileirada.
           </p>
         </section>
       )}

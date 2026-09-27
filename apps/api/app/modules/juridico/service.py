@@ -6,6 +6,7 @@ em processo quanto em andamento. Rodar N vezes nao duplica.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from typing import Any, Protocol
@@ -62,6 +63,8 @@ class ResultadoSync:
 async def _coletar_processos(
     client: ClienteEasyjur,
 ) -> tuple[list[parser.ProcessoBruto], int | None]:
+    iniciado = time.monotonic()
+    logger.info("easyjur.processos.start max_paginas=%s", _MAX_PAGINAS)
     coletados: dict[int, parser.ProcessoBruto] = {}
     declarado: int | None = None
     for page in range(1, _MAX_PAGINAS + 1):
@@ -80,6 +83,13 @@ async def _coletar_processos(
             coletados[p.easyjur_id] = p
         if declarado is not None and len(coletados) >= declarado:
             break
+    logger.info(
+        "easyjur.processos.done paginas=%s coletados=%s declarado=%s duracao_s=%.1f",
+        page,
+        len(coletados),
+        declarado,
+        time.monotonic() - iniciado,
+    )
     return list(coletados.values()), declarado
 
 
@@ -89,9 +99,16 @@ async def sincronizar(
     if source not in SOURCES_SYNC:
         raise ValueError(f"source invalido: {source!r}")
 
+    iniciou = time.monotonic()
     brutos, declarado = await _coletar_processos(client)
+    logger.info("easyjur.andamentos_export.start")
     andamentos_brutos = parser.parse_andamentos_csv(
         await client.exportar_andamentos_csv()
+    )
+    logger.info(
+        "easyjur.andamentos_export.done linhas=%s duracao_total_s=%.1f",
+        len(andamentos_brutos),
+        time.monotonic() - iniciou,
     )
 
     # --- processos ---

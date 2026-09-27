@@ -35,6 +35,7 @@ Desenho em `docs/superpowers/specs/2026-09-20-easyjur-processos-design.md`.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any
 
 import httpx
@@ -166,6 +167,7 @@ class EasyjurClient(IntegrationClient):
             )
 
         # Visita a pagina antes: e o que cria o PHPSESSID que o POST usa.
+        logger.info("easyjur.login_start email=%s", _mascarar(self._email))
         try:
             pagina = await self._client.get(_PAGINA_LOGIN)
             pagina.raise_for_status()
@@ -235,6 +237,8 @@ class EasyjurClient(IntegrationClient):
         processos serem registrados como "0 na base".
         """
         await self.login()
+        iniciou = time.monotonic()
+        logger.info("easyjur.processos.page_start page=%s", page)
         try:
             r = await self._client.post(
                 _PROCESSOS,
@@ -247,6 +251,12 @@ class EasyjurClient(IntegrationClient):
                 f"EasyJur processos p.{page}: {type(exc).__name__}: {exc}"
             ) from exc
         self._verificar_sessao(r)
+        logger.info(
+            "easyjur.processos.page_done page=%s bytes=%s duracao_s=%.1f",
+            page,
+            len(r.content),
+            time.monotonic() - iniciou,
+        )
         return r.text
 
     async def exportar_andamentos_csv(self) -> bytes:
@@ -258,12 +268,14 @@ class EasyjurClient(IntegrationClient):
         so para armar o filtro.
         """
         await self.login()
+        logger.info("easyjur.andamentos.search_start")
         try:
             r = await self._client.post(
                 _ANDAMENTOS, data={"pesquisa": "enviar", "page": 1}, headers=_AJAX
             )
             r.raise_for_status()
             self._verificar_sessao(r)
+            logger.info("easyjur.andamentos.csv_start")
             r = await self._client.post(
                 _EXPORT_ANDAMENTOS,
                 data={"campos[]": list(_CAMPOS_EXPORT)},
@@ -276,6 +288,7 @@ class EasyjurClient(IntegrationClient):
                 f"EasyJur export de andamentos: {type(exc).__name__}: {exc}"
             ) from exc
         self._verificar_sessao(r)
+        logger.info("easyjur.andamentos.csv_done bytes=%s", len(r.content))
         return r.content
 
 
