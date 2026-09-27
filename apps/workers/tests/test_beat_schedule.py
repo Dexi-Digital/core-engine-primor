@@ -89,8 +89,8 @@ def test_easyjur_tem_limite_de_tempo_para_nao_ficar_preso_indefinidamente(
 ) -> None:
     from worker.tasks.juridico import pull_easyjur
 
-    assert pull_easyjur.soft_time_limit == 13 * 60
-    assert pull_easyjur.time_limit == 14 * 60
+    assert pull_easyjur.soft_time_limit == 19 * 60
+    assert pull_easyjur.time_limit == 20 * 60
 
 
 def test_crawler_que_falha_em_tudo_nao_termina_verde() -> None:

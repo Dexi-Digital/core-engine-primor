@@ -212,6 +212,31 @@ async def test_export_arma_o_filtro_da_sessao_antes():
 
 
 @pytest.mark.asyncio
+async def test_export_rearma_filtro_e_retenta_uma_leitura_interrompida():
+    ordem: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        p = request.url.path
+        if p.endswith("/api/login.php"):
+            return httpx.Response(200, json={"status": 200})
+        if p.endswith("ajax_andamento_lista.php"):
+            ordem.append("busca")
+            return httpx.Response(200, text="<table></table>")
+        if p.endswith("export_andamentos.php"):
+            ordem.append("export")
+            if ordem.count("export") == 1:
+                raise httpx.ReadError("conexao interrompida")
+            return httpx.Response(200, content=b'"ID";\r\n')
+        return httpx.Response(200, text="<form>")
+
+    c = _client(handler)
+    bruto = await c.exportar_andamentos_csv()
+
+    assert bruto == b'"ID";\r\n'
+    assert ordem == ["busca", "export", "busca", "export"]
+
+
+@pytest.mark.asyncio
 async def test_leitura_faz_um_login_so():
     """Reautenticar por pagina gastaria tentativa a toa num sistema que
     bloqueia a conta em 5 erros."""

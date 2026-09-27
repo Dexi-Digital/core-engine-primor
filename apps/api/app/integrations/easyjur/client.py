@@ -34,6 +34,7 @@ Desenho em `docs/superpowers/specs/2026-09-20-easyjur-processos-design.md`.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from typing import Any
@@ -268,28 +269,45 @@ class EasyjurClient(IntegrationClient):
         so para armar o filtro.
         """
         await self.login()
-        logger.info("easyjur.andamentos.search_start")
-        try:
-            r = await self._client.post(
-                _ANDAMENTOS, data={"pesquisa": "enviar", "page": 1}, headers=_AJAX
-            )
-            r.raise_for_status()
-            self._verificar_sessao(r)
-            logger.info("easyjur.andamentos.csv_start")
-            r = await self._client.post(
-                _EXPORT_ANDAMENTOS,
-                data={"campos[]": list(_CAMPOS_EXPORT)},
-                headers=_AJAX,
-                timeout=300.0,
-            )
-            r.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise EasyjurError(
-                f"EasyJur export de andamentos: {type(exc).__name__}: {exc}"
-            ) from exc
-        self._verificar_sessao(r)
-        logger.info("easyjur.andamentos.csv_done bytes=%s", len(r.content))
-        return r.content
+        for tentativa in range(1, 3):
+            logger.info("easyjur.andamentos.search_start tentativa=%s", tentativa)
+            try:
+                r = await self._client.post(
+                    _ANDAMENTOS,
+                    data={"pesquisa": "enviar", "page": 1},
+                    headers=_AJAX,
+                )
+                r.raise_for_status()
+                self._verificar_sessao(r)
+                logger.info("easyjur.andamentos.csv_start tentativa=%s", tentativa)
+                r = await self._client.post(
+                    _EXPORT_ANDAMENTOS,
+                    data={"campos[]": list(_CAMPOS_EXPORT)},
+                    headers=_AJAX,
+                    timeout=300.0,
+                )
+                r.raise_for_status()
+                self._verificar_sessao(r)
+                logger.info("easyjur.andamentos.csv_done bytes=%s", len(r.content))
+                return r.content
+            except httpx.ReadError as exc:
+                if tentativa == 1:
+                    logger.warning(
+                        "easyjur.andamentos.csv_read_error retrying=%s",
+                        type(exc).__name__,
+                    )
+                    await asyncio.sleep(1)
+                    continue
+                raise EasyjurError(
+                    "EasyJur export de andamentos falhou após 2 leituras: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
+            except httpx.HTTPError as exc:
+                raise EasyjurError(
+                    f"EasyJur export de andamentos: {type(exc).__name__}: {exc}"
+                ) from exc
+
+        raise AssertionError("loop de retry do CSV terminou sem resposta")
 
 
 def _extrair_tentativas(erros: dict[str, Any]) -> int | None:

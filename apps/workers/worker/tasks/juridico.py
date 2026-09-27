@@ -8,7 +8,7 @@ from time import monotonic
 from worker.main import celery_app
 
 logger = logging.getLogger(__name__)
-_SYNC_TIMEOUT_S = 12 * 60
+_SYNC_TIMEOUT_S = 18 * 60
 _SOFT_LIMIT_S = _SYNC_TIMEOUT_S + 60
 _HARD_LIMIT_S = _SOFT_LIMIT_S + 60
 
