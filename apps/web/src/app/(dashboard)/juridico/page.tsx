@@ -458,8 +458,8 @@ export default async function JuridicoPage(props: {
         scope={[
           {
             label: "Contencioso do EasyJur (processos e andamentos).",
-            status: "pronto",
-            nota: "Carga automática diária às 3h30 e sob demanda pelo botão acima.",
+            status: "parcial",
+            nota: "A leitura ainda não foi validada com uma sincronização concluída. A última falha foi ReadError na exportação de andamentos; o worker recebeu a correção com uma nova tentativa automática, mas falta confirmar a carga dos dados.",
           },
           {
             label: "Alertas de vencimento de contratos e locações.",

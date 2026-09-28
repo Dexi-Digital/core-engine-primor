@@ -92,6 +92,9 @@ function normalizar(scope: (string | ScopeItem)[]): ScopeItem[] {
 
 export function ModuleStatusCard({ title, scope, backendPath }: Props) {
   const itens = normalizar(scope);
+  if (itens.length > 0 && itens.every((item) => item.status === "pronto")) {
+    return null;
+  }
   const geral = resumo(itens);
   return (
     <section className="rounded-xl border border-slate-200 bg-white p-6 shadow-sm">
