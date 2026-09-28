@@ -1,8 +1,9 @@
 # Financeiro — legado 90 e TOTVS
 
 Atualização de requisitos em 26/09/2026, demandas 8 e 12 do briefing.
-Este documento registra o escopo e a inspeção dos exemplos; a importação
-descrita aqui ainda não está implementada.
+Este documento registra o escopo e a inspeção dos exemplos. A importação
+descrita aqui já tem fluxo implementado; falta validar o aceite com arquivos
+reais e confirmar a cobertura do relatório FIN.
 
 ## Decisão de origem
 

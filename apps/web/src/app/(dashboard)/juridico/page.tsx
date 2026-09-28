@@ -471,16 +471,6 @@ export default async function JuridicoPage(props: {
             status: "pronto",
             nota: "Registro por funcionário e fonte a cada consulta.",
           },
-          {
-            label: "Relatórios de contratos judicializados.",
-            status: "bloqueado",
-            nota: "O EasyJur da Primor não tem contratos cadastrados — só o contencioso. Depende de o escritório passar a registrar os contratos lá.",
-          },
-          {
-            label: "Reconhecimento facial (foto do ponto × fotos de obra).",
-            status: "bloqueado",
-            nota: "Biometria é dado pessoal sensível (LGPD art. 11) e exige consentimento específico dos funcionários e base legal definida. Precisa de decisão do cliente antes de qualquer desenvolvimento.",
-          },
         ]}
       />
     </div>

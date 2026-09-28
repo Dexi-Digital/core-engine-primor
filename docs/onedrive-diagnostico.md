@@ -11,7 +11,7 @@ Complementa o **D1 Diagnostico Documental** (que le das tabelas de DB) e o
 ## Padrao de pastas esperado
 
 ```
-<root>/                               (default: MotorCentral/editais)
+<root>/                               (configurado por MS_GRAPH_ROOT_FOLDER; default: MotorCentral/editais)
   dp/<employee_id>/<DOC_TIPO>.ext
   frota/<PLACA>/<DOC_TIPO>.ext
   obras/<OBRA_CODIGO>/<DOC_TIPO>.ext
@@ -21,6 +21,12 @@ Complementa o **D1 Diagnostico Documental** (que le das tabelas de DB) e o
 Mesmo padrao do `onedrive_sync.parser` (PR #26). O diagnostico aceita pastas
 de frota/obras com ou sem hifen na identificacao (placa `ABC-1D23` ou
 `ABC1D23`).
+
+Essa árvore é a convenção que o código espera, não uma confirmação de como a
+Primor organiza hoje o tenant. O valor default da raiz é
+`MotorCentral/editais`; antes de usar os findings como diagnóstico operacional,
+validar se a raiz configurada e as subpastas reais correspondem à estrutura do
+cliente. A especificação de documentos obrigatórios também é uma V1 fixa.
 
 ## Docs obrigatorios por area
 

@@ -15,7 +15,15 @@ Baseado nas 12 demandas do briefing (`demandas programação - rev01.docx`).
 - **Manutenção / frota:** acessos já concedidos, conforme informado pelo
   cliente. Próxima etapa é validar a configuração e as operações de cada
   integração; falta de concessão de acesso não é mais o bloqueio geral.
-  A lista de serviços abrangidos ainda precisa ser identificada.
+  O adapter Sistema 90 para esse módulo ainda é stub. A importação financeira
+  manual do legado já tem fluxo implementado; não depende de API do Sistema 90.
+- **Escopo comercial:** reunião ou menção no briefing não comprovam inclusão
+  no orçamento. OCR financeiro de PDF e conciliação de retorno bancário ficam
+  fora da contagem de entregas confirmadas até conferência da proposta aprovada.
+  Retorno bancário também exige arquivo real do banco para especificar o parser.
+- **OneDrive:** existe um diagnóstico de estrutura, mas a convenção configurada
+  precisa ser comparada às pastas reais. Isso não bloqueia as consultas públicas
+  de CEP e CNPJ do dossiê; CPF ainda depende da credencial DirectData.
 
 Esta atualização prevalece sobre os estados históricos de acesso registrados
 na documentação. Não representa validação em produção.
@@ -36,14 +44,14 @@ na documentação. Não representa validação em produção.
 |---|---------|---------|
 | 5 | Unificação de partes diárias | Upload de foto/PDF → OCR (visão computacional treinada em manuscrito) → parsing para apontamento. Cálculo de combustível e alerta de manutenção preventiva. |
 | 6 | Download automático de docs | RPA via Playwright para IPVA, CRLV, certidões, multas. Agendado por placa/CNPJ. |
-| 7 | Apropriação e custo por equipamento | Integração parcial com Sistema 90; motor de regras que cruza apropriação (h/km) × NF. Alertas de custo acima da referência. Acessos de manutenção/frota concedidos; validar os serviços abrangidos e a operação. A importação financeira do legado 90 é tratada na demanda 8. |
+| 7 | Apropriação e custo por equipamento | Motor de regras que cruza apropriação (h/km) × NF e alerta de custo acima da referência. Acessos de manutenção/frota concedidos; o adapter Sistema 90 ainda é stub. Identificar endpoints, autenticação, dados/operações cobertos e validar a conexão antes de implementar. A importação financeira do legado 90 é tratada na demanda 8. |
 
 ## Módulo C — Financeiro / Contratos
 
 | # | Demanda | Entrega |
 |---|---------|---------|
-| 8 | Financeiro: legado 90 + TOTVS | Importação manual de planilhas do legado 90 e leitura do TOTVS, preservando as origens. Relatório por apropriação com os 23 campos do FIN, competência da emissão e classificação por natureza; filtros e exportação Excel multiempresa. Ingestão de NF-e (XML parser + OCR de PDFs), conferência de remessas bancárias, encaminhamento de NFs e cruzamento combustível × alimentação × aluguel × descontos em medição continuam no escopo. Ver [mapeamento](./financeiro-origens.md). |
-| 12 | Ciclo de contratos | Cadastro, AP e alertas de vencimento; possível organização no OneDrive. Assinatura digital fora do escopo por decisão de 04/08/2026. EasyJur atende ao contencioso, sem base de contratos judicializados validada; falha relatada em 26/09/2026, pendente de diagnóstico. |
+| 8 | Financeiro: legado 90 + TOTVS | A importação manual da aba Relatório Completo e a leitura do TOTVS têm implementações próprias, preservando as origens. Falta validar os dados reais, a cobertura dos campos FIN e os critérios de consolidação. OCR de PDF escaneado e conciliação bancária só entram como compromisso após confirmação na proposta/orçamento; o parser bancário também depende de arquivo real de retorno. Confirmar separadamente encaminhamento de NFs e cruzamentos em medição. Ver [mapeamento](./financeiro-origens.md). |
+| 12 | Ciclo de contratos | Cadastro, AP e alertas de vencimento; possível organização no OneDrive. Assinatura digital fora do escopo por decisão de 04/08/2026. EasyJur é tratado como fonte de contencioso; relatórios de contratos judicializados não são considerados entrega enquanto não houver base de contratos e confirmação comercial. A leitura do contencioso permanece em diagnóstico. |
 
 ## Módulo D — Licitações
 
@@ -55,7 +63,6 @@ na documentação. Não representa validação em produção.
 
 | # | Demanda | Entrega |
 |---|---------|---------|
-| 10 | Reconhecimento facial | Foto Tangerino como referência → busca nas fotos de obra. Prova trabalhista auditável. |
 | 11 | Robô de compras WhatsApp | Agente LLM que recebe demanda de manutenção, contacta fornecedores, compila cotação em tabela. Mesmo fluxo para locações. |
 
 ## Ordem sugerida de execução
@@ -65,6 +72,6 @@ na documentação. Não representa validação em produção.
 3. **Módulo C** — ingestão de NF-e (rastreabilidade financeira).
 4. **Módulo B** — RPA despachante + OCR partes diárias.
 5. **Módulo D** — crawlers B2G.
-6. **Módulo E** — reconhecimento facial + bot de cotação.
+6. **Módulo E** — bot de cotação via WhatsApp.
 
 Cada entrega vira 1 PR com documentação, testes e feature flag.

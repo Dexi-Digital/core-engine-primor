@@ -32,7 +32,7 @@ docs/
 | **B** | `manutencao_frota`    | 5, 6, 7 (partes diárias, RPA, Sistema 90) |
 | **C** | `financeiro_contratos`| 8, 12 (TOTVS, NF, contratos) |
 | **D** | `licitacoes`          | 9 (Conlicitação, saúde municipal, habilitação) |
-| **E** | `ia_tools`            | 10, 11 (reconhecimento facial, compras via WhatsApp) |
+| **E** | `ia_tools`            | 11 (compras via WhatsApp) |
 
 Cada módulo tem `router.py`, `schemas.py`, `service.py`, `models.py` isolados.
 Integrações externas vivem em `apps/api/app/integrations/<sistema>/`.

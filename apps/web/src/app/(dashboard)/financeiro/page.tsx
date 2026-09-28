@@ -213,14 +213,9 @@ export default async function FinanceiroPage() {
             nota: "Adapter de lançamentos disponível; acesso real e ampliação para os 23 campos e rateios do FIN ainda precisam ser validados.",
           },
           {
-            label: "Leitura de notas fiscais em PDF escaneado.",
-            status: "bloqueado",
-            nota: "Depende da credencial do Google Document AI — o mesmo bloqueio das partes diárias.",
-          },
-          {
-            label: "Conciliação de remessas e retornos bancários.",
-            status: "bloqueado",
-            nota: "O formato varia por banco: precisamos de um arquivo de retorno real de exemplo para construir sem adivinhar.",
+            label: "OCR de notas fiscais em PDF escaneado.",
+            status: "nao_iniciado",
+            nota: "Não há ainda um fluxo de OCR financeiro implementado. O Google Document AI usado em partes diárias não configura, por si só, a leitura de notas fiscais; validar credencial, processador e se esta entrega consta no orçamento.",
           },
           {
             label: "Cruzamento combustível × alimentação × aluguel × descontos em medição.",

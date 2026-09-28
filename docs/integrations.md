@@ -10,7 +10,7 @@ Chaves de acesso vivem em variáveis de ambiente; **nunca no código**.
 | `onsafety`      | OnSafety (SST, EPIs)              | API          | A |
 | `tangerino`     | Sólides Ponto (ex-Tangerino)      | API          | A, B |
 | `totvs`         | TOTVS RM (ERP financeiro)         | API (REST/SOAP) | C |
-| `sistema90`     | Sistema 90 (frota e legado financeiro) | API parcial para frota; planilha manual para financeiro (a implementar) | B, C |
+| `sistema90`     | Sistema 90 (frota e legado financeiro) | Adapter de frota stub; importação financeira manual implementada em módulo separado | B, C |
 | `onedrive`      | OneDrive / SharePoint             | Graph API    | A, B, C |
 | `easyjur`       | EasyJur (jurídico)                | HTTP de sessão; falha relatada em 26/09/2026 | C / Jurídico |
 | `solides`       | Sólides (R&S)                     | API          | A (avaliação) |
@@ -39,8 +39,20 @@ Informações fornecidas pelo cliente nesta data:
   diagnóstico. As verificações antigas abaixo são evidência histórica.
 - **Manutenção / frota:** acessos concedidos. Identificar os serviços
   abrangidos, conferir configuração no ambiente e validar a operação;
-  não presumir que cada adapter já esteja funcionando ou que o acesso
-  inclua serviços de outros módulos, como TOTVS.
+  o adapter `Sistema90Client` ainda é stub (`health_check()` retorna
+  `False`). A implementação requer identificar endpoints, autenticação,
+  entidades/operações cobertas e validar uma leitura real. O acesso não
+  comprova que a integração esteja pronta nem inclui sistemas de outros
+  módulos.
+- **Financeiro legado 90:** a rota e interface de importação, staging,
+  validação da aba `Relatório Completo`, conferência, ativação atômica e
+  histórico já existem. Falta executar aceite com arquivos reais e conferir
+  mapeamento/cobertura dos 23 campos; não é necessário um adapter API Sistema 90.
+- **Escopo financeiro a confirmar:** reunião não substitui proposta aprovada.
+  OCR de nota escaneada e conciliação de retorno bancário não devem ser
+  tratados como compromisso até conferência do orçamento. Se aprovada, a
+  conciliação ainda exige arquivo real de retorno do banco para especificar
+  e testar o layout.
 
 ## Padrões
 

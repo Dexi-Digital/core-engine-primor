@@ -108,7 +108,7 @@ export default async function RHPage() {
           {
             label: "Dossiê de admissão (CEP, CNPJ, CPF).",
             status: "parcial",
-            nota: "ViaCEP e BrasilAPI funcionam (APIs públicas). Consulta de CPF pela DirectData aguarda token.",
+            nota: "CEP (ViaCEP) e CNPJ (BrasilAPI) estão disponíveis; CPF usa DirectData e aguarda credencial. A organização dos documentos no OneDrive é outra frente: o diagnóstico compara arquivos com uma convenção configurada, cuja aderência às pastas reais ainda precisa ser validada.",
           },
           {
             label: "Pull de ASO, EPI e treinamentos da OnSafety.",

@@ -273,13 +273,13 @@ export default async function ManutencaoPage() {
           },
           {
             label: "Cruzamento do abastecimento apontado × nota fiscal.",
-            status: "parcial",
-            nota: "Apontamentos disponíveis. Com os acessos concedidos, validar a leitura das notas de combustível no SharePoint e o vínculo com os equipamentos.",
+            status: "nao_iniciado",
+            nota: "Os apontamentos existem, mas a leitura das notas no SharePoint e o vínculo com equipamento ainda não foram implementados. Próximo passo: validar pastas, arquivos e campos disponíveis nos acessos concedidos; depois construir e testar o cruzamento.",
           },
           {
-            label: "Sistema 90 como fonte adicional.",
-            status: "parcial",
-            nota: "Acessos de manutenção/frota concedidos; validar documentação e operação do Sistema 90. O financeiro legado entra por importação de planilha.",
+            label: "Sistema 90 para manutenção e frota.",
+            status: "nao_iniciado",
+            nota: "O adapter ainda é um stub. Com os acessos concedidos, falta identificar e validar endpoints, autenticação, dados e operações cobertos para então implementar e testar a integração. O financeiro legado já tem importação manual de planilha separada.",
           },
         ]}
       />
