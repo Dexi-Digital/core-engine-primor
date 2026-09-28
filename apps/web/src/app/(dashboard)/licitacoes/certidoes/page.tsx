@@ -486,7 +486,9 @@ function CreaSection({ consultas }: { consultas: CreaConsulta[] | null }) {
         Consulte ART pelo número, situação de profissional ou histórico de ARTs
         de uma empresa. Importar uma ART <strong>ATIVA</strong> cria
         automaticamente uma certidão do tipo <strong>Acervo Técnico</strong>{" "}
-        com número, datas e órgão emissor preenchidos.
+        com número, datas e órgão emissor preenchidos. A integração suporta MG,
+        SP e GO; sem token Infosimples configurado, a resposta fica em modo
+        demonstração (mock), indicado na coluna de origem do histórico.
       </p>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">

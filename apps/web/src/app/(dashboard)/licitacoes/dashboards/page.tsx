@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 
 import { ApiError, apiFetch } from "@/lib/api";
 
@@ -92,6 +93,20 @@ export default async function DashboardsComerciaisPage(props: {
         </div>
       </header>
 
+      <section className="rounded-xl border border-blue-200 bg-blue-50 p-4 text-sm text-blue-950">
+        <p className="font-semibold">O que já está pronto e o que alimenta os painéis</p>
+        <p className="mt-1">
+          Os quatro painéis estão implementados. Concorrentes e geotargeting
+          dependem de resultados de homologação do PNCP para licitações já
+          captadas; eficiência e não captados dependem das decisões e estados
+          da triagem. O sistema não calcula esses números a partir de editais
+          sem resultado ou que ainda não foram triados.
+        </p>
+        <Link className="mt-2 inline-block font-semibold underline" href="/licitacoes">
+          Abrir Licitações para carregar resultados do PNCP →
+        </Link>
+      </section>
+
       <form className="flex items-end gap-3 rounded-xl border border-slate-200 bg-white p-4">
         <label className="flex flex-col text-xs font-medium text-slate-600">
           UF
@@ -121,13 +136,17 @@ export default async function DashboardsComerciaisPage(props: {
         <section className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
           <p className="font-semibold">Ainda sem dados para {uf}.</p>
           <p className="mt-1">
-            Estes painéis leem de resultados homologados, atas de RP e
-            decisões de triagem. As ingestões rodam no Celery beat
-            (resultados e atas às segundas, de madrugada) e a triagem
-            depende de alguém triar. Até a primeira rodada, os números
-            abaixo ficam zerados — a tela está construída, a fonte é que
-            está vazia.
+            Os painéis de concorrentes e geotargeting precisam que o worker
+            consulte resultados de homologação para as licitações captadas.
+            Em Licitações, use “Popular inteligência comercial”; o padrão
+            consulta até 200 processos captados nos últimos 180 dias. As
+            métricas de eficiência só aparecem depois que a equipe registra
+            decisões na triagem. Sem esses dados, os painéis ficam zerados
+            mesmo com o código funcionando.
           </p>
+          <Link className="mt-2 inline-block font-semibold underline" href="/licitacoes">
+            Ir para a carga e triagem →
+          </Link>
         </section>
       )}
 
@@ -217,7 +236,7 @@ export default async function DashboardsComerciaisPage(props: {
             {(!concorrentes || concorrentes.length === 0) && (
               <tr>
                 <td colSpan={5} className="px-4 py-6 text-center text-slate-400">
-                  Sem resultados homologados para {uf}. A ingestão roda às segundas, de madrugada.
+                  Sem resultados homologados para {uf}. Rode “Popular inteligência comercial” em Licitações para tentar uma carga imediata.
                 </td>
               </tr>
             )}

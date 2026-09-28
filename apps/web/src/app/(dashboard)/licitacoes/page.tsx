@@ -201,7 +201,7 @@ export default async function LicitacoesPage(props: {
         <form action={iniciarCargaResultados} className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
           <div>
             <h2 className="text-sm font-semibold">Popular inteligência comercial</h2>
-            <p className="mt-1 text-xs text-slate-500">Consulta homologações dos processos já captados e seleciona os vencedores.</p>
+            <p className="mt-1 text-xs text-slate-500">Alimenta concorrentes e geotargeting nos painéis. Consulta somente licitações já captadas — por padrão, até 200 publicadas nos últimos 180 dias. Eficiência depende de registrar decisões na triagem.</p>
           </div>
           <div className="flex flex-wrap items-end gap-3">
             <label className="flex flex-col text-xs text-slate-600">Publicações dos últimos dias

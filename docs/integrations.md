@@ -983,12 +983,14 @@ O campo `query` do multipart era `{"boxe/File": false}`; a documentação
 (solução 8476) especifica `boxeFile`, sem barra. Nunca apareceu porque o
 envio real nunca rodou.
 
-### Falta para enviar de verdade
+### Envio real e operação
 
-1. Rodar `activation/enable` para gerar a `integrationKey` de envio
-2. `ONVIO_ALLOW_SEND=true`
-3. Validar o primeiro envio — como a contabilidade é interna, dá para
-   combinar sem depender de terceiro
+`ONVIO_ALLOW_SEND=true` habilita a rota manual de envio; a flag, sozinha,
+não envia documentos. O endpoint fiscal envia apenas quando um usuário aciona
+“Enviar para contabilidade” para um XML específico. Não há task automática de
+envio/reenvio dos documentos bloqueados. No primeiro envio a integração chama
+`activation/enable` e depois cria o batch de NF-e no Onvio. Validar o batch e o
+XML escolhido após esse primeiro envio. A contabilidade é interna à Primor.
 
 Canais: `api.dominio@thomsonreuters.com`, WhatsApp 11 5047-2396,
 call em calendly.com/leonardo-steiner.

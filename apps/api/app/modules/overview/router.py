@@ -268,17 +268,31 @@ async def get_home(
             "key": "detran",
             "label": "Detran SP",
             "descr": "Consulta via Infosimples",
-            "status": "ok" if consultas_detran_30d else "idle",
-            "last_event": f"{consultas_detran_30d} consultas (30d)",
-            "configured": bool(getattr(settings, "infosimples_token", None)),
+            "status": (
+                "ok"
+                if consultas_detran_30d and settings.infosimples_token
+                else "pending"
+                if not settings.infosimples_token
+                else "idle"
+            ),
+            "last_event": (
+                f"{consultas_detran_30d} consultas (30d)"
+                if settings.infosimples_token
+                else "Token Infosimples ausente; consultas usam modo mock"
+            ),
+            "configured": bool(settings.infosimples_token),
         },
         {
             "key": "crea",
             "label": "CREA",
             "descr": "ART / Acervo Técnico via Infosimples",
-            "status": "ok",
-            "last_event": "Pronto para importar",
-            "configured": bool(getattr(settings, "infosimples_token", None)),
+            "status": "idle" if settings.infosimples_token else "pending",
+            "last_event": (
+                "Consulta/importação ART disponível"
+                if settings.infosimples_token
+                else "Token Infosimples ausente; consultas ficam em modo mock"
+            ),
+            "configured": bool(settings.infosimples_token),
         },
         {
             "key": "onedrive",

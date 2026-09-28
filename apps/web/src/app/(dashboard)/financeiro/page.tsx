@@ -205,7 +205,7 @@ export default async function FinanceiroPage() {
           {
             label: "Leitura de NF-e (XML) e envio à contabilidade.",
             status: "parcial",
-            nota: "Leitura pronta; o envio pelo Onvio autentica, mas está desligado por segurança até a validação final.",
+            nota: "Leitura do XML pronta. Envio real pelo Onvio habilitado em produção a pedido do cliente; ainda falta fazer e conferir manualmente o primeiro envio. Esta alteração não enviou nenhum XML.",
           },
           {
             label: "Lançamentos financeiros do TOTVS RM.",
