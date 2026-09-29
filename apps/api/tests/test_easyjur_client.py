@@ -11,6 +11,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from app.integrations.easyjur import client as easyjur_client
 from app.integrations.easyjur.client import (
     EasyjurAuthError,
     EasyjurBloqueioIminenteError,
@@ -212,7 +213,8 @@ async def test_export_arma_o_filtro_da_sessao_antes():
 
 
 @pytest.mark.asyncio
-async def test_export_rearma_filtro_e_retenta_uma_leitura_interrompida():
+async def test_export_rearma_filtro_e_retenta_uma_leitura_interrompida(monkeypatch):
+    monkeypatch.setattr(easyjur_client, "_EXPORT_ESPERA_S", 0)
     ordem: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -234,6 +236,71 @@ async def test_export_rearma_filtro_e_retenta_uma_leitura_interrompida():
 
     assert bruto == b'"ID";\r\n'
     assert ordem == ["busca", "export", "busca", "export"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "falha",
+    [
+        httpx.ReadTimeout("timeout"),
+        httpx.RemoteProtocolError("servidor fechou"),
+        httpx.Response(502, text="bad gateway"),
+    ],
+    ids=["timeout", "protocolo", "5xx"],
+)
+async def test_export_retenta_falhas_transitorias(monkeypatch, falha):
+    monkeypatch.setattr(easyjur_client, "_EXPORT_ESPERA_S", 0)
+    exports = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        p = request.url.path
+        if p.endswith("/api/login.php"):
+            return httpx.Response(200, json={"status": 200})
+        if p.endswith("export_andamentos.php"):
+            exports["n"] += 1
+            if exports["n"] < 3:
+                if isinstance(falha, Exception):
+                    raise falha
+                return falha
+            return httpx.Response(200, content=b'"ID";\r\n')
+        return httpx.Response(200, text="<table></table>")
+
+    assert await _client(handler).exportar_andamentos_csv() == b'"ID";\r\n'
+    assert exports["n"] == 3
+
+
+@pytest.mark.asyncio
+async def test_export_desiste_apos_3_tentativas_e_nao_retenta_4xx(monkeypatch):
+    monkeypatch.setattr(easyjur_client, "_EXPORT_ESPERA_S", 0)
+    exports = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        p = request.url.path
+        if p.endswith("/api/login.php"):
+            return httpx.Response(200, json={"status": 200})
+        if p.endswith("export_andamentos.php"):
+            exports["n"] += 1
+            raise httpx.ReadTimeout("timeout")
+        return httpx.Response(200, text="<table></table>")
+
+    with pytest.raises(EasyjurError, match="após 3 tentativas"):
+        await _client(handler).exportar_andamentos_csv()
+    assert exports["n"] == 3
+
+    exports["n"] = 0
+
+    def handler_403(request: httpx.Request) -> httpx.Response:
+        p = request.url.path
+        if p.endswith("/api/login.php"):
+            return httpx.Response(200, json={"status": 200})
+        if p.endswith("export_andamentos.php"):
+            exports["n"] += 1
+            return httpx.Response(403, text="negado")
+        return httpx.Response(200, text="<table></table>")
+
+    with pytest.raises(EasyjurError):
+        await _client(handler_403).exportar_andamentos_csv()
+    assert exports["n"] == 1
 
 
 @pytest.mark.asyncio
