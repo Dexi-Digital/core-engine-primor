@@ -201,3 +201,19 @@ async def test_erro_de_auth_marca_erro_e_incrementa_retry(
         select(DocumentoFiscal).where(DocumentoFiscal.id == doc_id)
     )
     assert doc is not None and doc.retry_count == 1
+
+
+@pytest.mark.parametrize(("environment", "permite"), [("production", False), ("staging", True)])
+def test_factory_so_permite_envio_mock_fora_de_producao(monkeypatch, environment, permite):
+    from app.core.config import get_settings
+    from app.modules.fiscal.service import get_dominio_client
+
+    monkeypatch.setenv("ENVIRONMENT", environment)
+    monkeypatch.setenv("ONVIO_CLIENT_ID", "")
+    monkeypatch.setenv("ONVIO_CLIENT_SECRET", "")
+    monkeypatch.setenv("ONVIO_INTEGRATION_KEY", "")
+    get_settings.cache_clear()
+    try:
+        assert get_dominio_client(get_settings())._allow_mock_send is permite
+    finally:
+        get_settings.cache_clear()

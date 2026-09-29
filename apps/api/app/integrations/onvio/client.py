@@ -52,7 +52,7 @@ class OnvioAuthError(OnvioError):
 
 
 class OnvioSendBlockedError(OnvioError):
-    """Envio real de NF-e bloqueado por guard-rail (ONVIO_ALLOW_SEND)."""
+    """Envio de NF-e bloqueado por guard-rail (ONVIO_ALLOW_SEND ou mock em producao)."""
 
 
 class OnvioClient(IntegrationClient):
@@ -66,6 +66,7 @@ class OnvioClient(IntegrationClient):
         integration_key: str | None = None,
         audience: str = ONVIO_DEFAULT_AUDIENCE,
         allow_send: bool = False,
+        allow_mock_send: bool = True,
         client: httpx.AsyncClient | None = None,
         timeout: float = 60.0,
     ) -> None:
@@ -74,6 +75,7 @@ class OnvioClient(IntegrationClient):
         self._integration_key = integration_key or ""
         self._audience = audience
         self._allow_send = allow_send
+        self._allow_mock_send = allow_mock_send
         self._own_client = client is None
         # Sem base_url: o client fala com DOIS hosts (auth.thomsonreuters
         # e api.onvio) -- URLs sempre absolutas.
@@ -220,6 +222,15 @@ class OnvioClient(IntegrationClient):
         if not content:
             raise ValueError("content vazio")
         if self.is_mock:
+            if not self._allow_mock_send:
+                # Em producao, sem credencial o "envio" seria simulado e o
+                # documento ficaria "enviado" com lote `mock-...` -- a
+                # contabilidade nunca receberia a nota e ninguem saberia.
+                raise OnvioSendBlockedError(
+                    "credenciais Onvio ausentes (ONVIO_CLIENT_ID, "
+                    "ONVIO_CLIENT_SECRET, ONVIO_INTEGRATION_KEY): envio "
+                    "simulado recusado neste ambiente."
+                )
             digest = hashlib.sha1(content).hexdigest()[:24]
             logger.info(
                 "onvio_mock.send_nfe_xml file=%s bytes=%d",
