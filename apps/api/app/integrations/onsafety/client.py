@@ -838,7 +838,9 @@ class OnsafetyClient(IntegrationClient):
                 "ativo": i % 5 != 4,  # ~80% ativos
             }
         if recurso == "exames":
-            resultados = [1, 1, 1, 2]  # 1=apto, 2=inapto (minoria)
+            # So 1 (=apto) tem significado comprovado; o 2 existe no mock
+            # para exercitar o caminho "desconhecido" do sync.
+            resultados = [1, 1, 1, 2]
             return {
                 "id": uid,
                 "tipo_exame": ["Admissional", "Periódico", "Demissional"][

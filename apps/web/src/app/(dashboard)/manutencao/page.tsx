@@ -249,7 +249,7 @@ export default async function ManutencaoPage() {
           {
             label: "Alertas preventivos por horas/km.",
             status: "pronto",
-            nota: "Regra do cliente: 50 h para máquinas, 3.000 km para caminhões e carros.",
+            nota: "Regra do cliente: 50 h para máquinas, 3.000 km para caminhões e carros. O alerta aparece no painel de planos e na parte diária; ainda não há aviso por e-mail ou WhatsApp.",
           },
           {
             label: "Plano de manutenção por equipamento.",
