@@ -50,6 +50,8 @@ def classificar(i: str | None, ii: str | None, iii: str | None) -> str | None:
     if a == 3:
         return "Investimento"
     if a == 1:
+        if b == 1 and c is None:
+            return None
         return {(1, 3): "Devolução de Aporte de SCP entrada", (1, 8): "Aporte entrada"}.get(
             (b, c), "Receita"
         )
