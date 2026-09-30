@@ -67,6 +67,13 @@ type Resumo = {
     erro: string | null;
     iniciado_em: string | null;
   } | null;
+  // Trava de login: o EasyJur recusou a credencial atual e o sistema
+  // nao tenta de novo (5 erros seguidos bloqueiam a conta).
+  login_easyjur?: {
+    bloqueado: boolean;
+    desde: string | null;
+    mensagem: string | null;
+  };
 };
 
 export const dynamic = "force-dynamic";
@@ -97,6 +104,24 @@ async function sincronizar(): Promise<void> {
     // vai para a URL e aparece na tela -- a primeira versao engolia o
     // erro e recarregava igual, e "cliquei e nada mudou" era
     // indistinguivel de "rodou".
+    try {
+      erro = (JSON.parse(e.body) as { detail?: string }).detail ?? e.body;
+    } catch {
+      erro = e.body || `HTTP ${e.status}`;
+    }
+  }
+  revalidatePath("/juridico");
+  redirect(erro ? `/juridico?erro=${encodeURIComponent(erro)}` : "/juridico");
+}
+
+async function liberarLogin(): Promise<void> {
+  "use server";
+  let erro: string | null = null;
+  try {
+    await apiFetch("/api/v1/juridico/login/liberar", { method: "POST" });
+  } catch (e) {
+    if (!(e instanceof ApiError)) throw e;
+    // 403 = so admin libera. O motivo aparece na tela.
     try {
       erro = (JSON.parse(e.body) as { detail?: string }).detail ?? e.body;
     } catch {
@@ -223,6 +248,27 @@ export default async function JuridicoPage(props: {
         <section className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
           <p className="font-semibold">A sincronização não rodou.</p>
           <p className="mt-1 font-mono text-xs">{erroDaAcao || sync?.erro}</p>
+        </section>
+      )}
+
+      {resumo?.login_easyjur?.bloqueado && (
+        <section className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+          <p className="font-semibold">
+            Login recusado pelo EasyJur desde {quando(resumo.login_easyjur.desde)}.
+          </p>
+          <p className="mt-1">
+            Nova tentativa só após trocar a credencial (EASYJUR_EMAIL /
+            EASYJUR_PASSWORD) no API e no worker. O sistema não tenta de novo
+            sozinho: o EasyJur bloqueia a conta após 5 senhas erradas seguidas.
+          </p>
+          <form action={liberarLogin} className="mt-2">
+            <button
+              type="submit"
+              className="rounded-md border border-red-300 bg-white px-3 py-1 text-xs font-medium text-red-900 hover:bg-red-100"
+            >
+              Liberar uma nova tentativa (admin)
+            </button>
+          </form>
         </section>
       )}
 

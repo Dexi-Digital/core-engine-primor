@@ -5,6 +5,9 @@ em processo quanto em andamento. Rodar N vezes nao duplica.
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -14,8 +17,10 @@ from typing import Any, Protocol
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.models import AuditLog
+from app.core.config import get_settings
 from app.integrations.easyjur import parser
-from app.integrations.easyjur.client import EasyjurError
+from app.integrations.easyjur.client import EasyjurError, EasyjurLoginRecusadoError
 from app.modules.juridico.models import (
     SOURCES_SYNC,
     SYNC_EM_ANDAMENTO,
@@ -267,6 +272,179 @@ async def enfileirar_carga(db: AsyncSession, *, source: str = "manual") -> None:
         raise FilaIndisponivel(str(exc)) from exc
 
 
+# --- trava de login entre execucoes -----------------------------------------
+#
+# O EasyJur bloqueia a conta apos 5 senhas erradas seguidas. O client ja
+# se recusa a tentar perto do limite, mas esse contador vive na instancia
+# e cada execucao cria uma nova: com a senha errada, o beat das 03:30 e
+# cada clique em "Sincronizar agora" queimariam uma tentativa ate travar
+# a conta de quem usa o EasyJur para trabalhar.
+#
+# Entao a recusa fica gravada no `audit_log` (sem migration, e a trilha
+# de quem liberou fica de graca), com a IMPRESSAO da credencial -- HMAC
+# da `secret_key`, nunca a senha. Enquanto a ultima linha for uma recusa
+# com a mesma impressao, nao se tenta login. Destrava quando:
+#   - a credencial muda (EASYJUR_EMAIL/EASYJUR_PASSWORD), ou
+#   - um admin chama `POST /api/v1/juridico/login/liberar` -- o que
+#     autoriza UMA nova tentativa: se falhar, trava de novo.
+# Trocar a SECRET_KEY muda a impressao e tambem libera uma tentativa.
+
+AUDIT_RESOURCE_LOGIN = "easyjur_login"
+ACAO_LOGIN_RECUSADO = "easyjur.login_recusado"
+ACAO_LOGIN_OK = "easyjur.login_ok"
+ACAO_LOGIN_LIBERADO = "easyjur.login_liberado"
+ACTOR_WORKER = "system:worker"
+
+MSG_LOGIN_BLOQUEADO = (
+    "Login recusado pelo EasyJur; nova tentativa só após trocar a credencial "
+    "(EASYJUR_EMAIL/EASYJUR_PASSWORD) ou um admin liberar em "
+    "POST /api/v1/juridico/login/liberar. A sincronização não tentou logar "
+    "para não bloquear a conta (o EasyJur bloqueia após 5 erros seguidos)."
+)
+
+
+class LoginEasyjurBloqueado(RuntimeError):
+    """Recusa nossa de tentar login: a credencial atual ja foi recusada."""
+
+
+def impressao_credencial(email: str | None, password: str | None) -> str | None:
+    """Impressao NAO reversivel da credencial. None sem credencial.
+
+    HMAC com a `secret_key` em vez de sha256 puro: a impressao fica no
+    `audit_log`, e sha256 sem chave de uma senha fraca cai em dicionario.
+    """
+    if not (email and password):
+        return None
+    chave = get_settings().secret_key.encode()
+    msg = f"easyjur\0{email.strip().lower()}\0{password}".encode()
+    return hmac.new(chave, msg, hashlib.sha256).hexdigest()
+
+
+async def _ultimo_evento_login(db: AsyncSession) -> AuditLog | None:
+    return (
+        await db.execute(
+            select(AuditLog)
+            .where(AuditLog.resource == AUDIT_RESOURCE_LOGIN)
+            .order_by(AuditLog.id.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
+async def login_bloqueado(db: AsyncSession, impressao: str | None) -> AuditLog | None:
+    """A recusa que trava ESTA credencial, ou None se pode tentar."""
+    if impressao is None:
+        return None
+    ultimo = await _ultimo_evento_login(db)
+    if (
+        ultimo is not None
+        and ultimo.action == ACAO_LOGIN_RECUSADO
+        and ultimo.resource_id == impressao
+    ):
+        return ultimo
+    return None
+
+
+def _auditar_login(
+    db: AsyncSession, *, action: str, actor: str, impressao: str | None, **meta: Any
+) -> None:
+    db.add(
+        AuditLog(
+            actor=actor,
+            action=action,
+            resource=AUDIT_RESOURCE_LOGIN,
+            resource_id=impressao,
+            metadata_json=json.dumps(meta, ensure_ascii=False, default=str),
+        )
+    )
+
+
+async def registrar_login_recusado(
+    db: AsyncSession, impressao: str, exc: EasyjurLoginRecusadoError
+) -> None:
+    _auditar_login(
+        db,
+        action=ACAO_LOGIN_RECUSADO,
+        actor=ACTOR_WORKER,
+        impressao=impressao,
+        mensagem=str(exc)[:500],
+        tentativas_restantes=exc.tentativas_restantes,
+    )
+    await db.commit()
+    logger.error(
+        "easyjur.login_recusado_gravado tentativas_restantes=%s",
+        exc.tentativas_restantes,
+    )
+
+
+async def registrar_login_ok(db: AsyncSession, impressao: str) -> None:
+    """Fecha uma recusa anterior. Sem recusa aberta, nao grava nada --
+    uma linha de auditoria por madrugada so faria ruido."""
+    ultimo = await _ultimo_evento_login(db)
+    if ultimo is None or ultimo.action != ACAO_LOGIN_RECUSADO:
+        return
+    _auditar_login(db, action=ACAO_LOGIN_OK, actor=ACTOR_WORKER, impressao=impressao)
+    await db.commit()
+
+
+async def liberar_login(db: AsyncSession, *, actor: str) -> bool:
+    """Admin autoriza UMA nova tentativa. False se nada estava travado."""
+    ultimo = await _ultimo_evento_login(db)
+    if ultimo is None or ultimo.action != ACAO_LOGIN_RECUSADO:
+        return False
+    _auditar_login(
+        db,
+        action=ACAO_LOGIN_LIBERADO,
+        actor=actor,
+        impressao=ultimo.resource_id,
+    )
+    await db.commit()
+    return True
+
+
+async def estado_login(db: AsyncSession, impressao: str | None) -> dict[str, Any]:
+    """O que a tela mostra sobre a trava."""
+    bloqueio = await login_bloqueado(db, impressao)
+    if bloqueio is None:
+        return {"bloqueado": False, "desde": None, "mensagem": None}
+    return {
+        "bloqueado": True,
+        "desde": bloqueio.created_at.isoformat() if bloqueio.created_at else None,
+        "mensagem": MSG_LOGIN_BLOQUEADO,
+    }
+
+
+async def executar_carga(
+    db: AsyncSession, client: ClienteEasyjur, *, source: str, impressao: str | None
+) -> ResultadoSync:
+    """O pull com a trava de login. E o que o worker chama.
+
+    Credencial ja recusada: levanta `LoginEasyjurBloqueado` SEM tocar no
+    EasyJur. Recusa nova: grava a trava e levanta. Login aceito: fecha
+    qualquer trava anterior, mesmo que a carga falhe depois.
+    """
+    if await login_bloqueado(db, impressao) is not None:
+        logger.error("easyjur.login_bloqueado source=%s -- nao tentou", source)
+        raise LoginEasyjurBloqueado(MSG_LOGIN_BLOQUEADO)
+
+    await marcar_inicio(db, source=source)
+    try:
+        r = await sincronizar(db, client, source=source)
+    except EasyjurLoginRecusadoError as exc:
+        await db.rollback()
+        if impressao is not None:
+            await registrar_login_recusado(db, impressao, exc)
+        raise LoginEasyjurBloqueado(f"{MSG_LOGIN_BLOQUEADO} Resposta: {exc}") from exc
+    except Exception:
+        if impressao is not None and getattr(client, "login_confirmado", False):
+            await db.rollback()
+            await registrar_login_ok(db, impressao)
+        raise
+    if impressao is not None and getattr(client, "login_confirmado", False):
+        await registrar_login_ok(db, impressao)
+    return r
+
+
 # --- consultas da tela ------------------------------------------------------
 
 
@@ -321,7 +499,7 @@ async def _contagem(db: AsyncSession, coluna: Any) -> dict[str, int]:
     return dict(sorted(((k, n) for k, n in res.all()), key=lambda kv: -kv[1]))
 
 
-async def resumo(db: AsyncSession) -> dict[str, Any]:
+async def resumo(db: AsyncSession, *, impressao: str | None = None) -> dict[str, Any]:
     total = (
         await db.execute(select(func.count()).select_from(Processo))
     ).scalar_one()
@@ -358,6 +536,7 @@ async def resumo(db: AsyncSession) -> dict[str, Any]:
             )
         ).scalar_one(),
         "campos_esparsos": esparsos,
+        "login_easyjur": await estado_login(db, impressao),
         "ultimo_sync": (
             {
                 "executado_em": ultimo.executado_em.isoformat()

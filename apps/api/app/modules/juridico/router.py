@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.db import get_db
-from app.modules.auth.dependencies import get_current_user
+from app.modules.auth.dependencies import get_current_user, require_admin
 from app.modules.auth.models import User
 from app.modules.juridico import service as svc
 
@@ -60,6 +60,16 @@ class SyncResponse(BaseModel):
     mensagem: str
 
 
+class LiberarLoginResponse(BaseModel):
+    liberado: bool
+    mensagem: str
+
+
+def _impressao_atual() -> str | None:
+    s = get_settings()
+    return svc.impressao_credencial(s.easyjur_email, s.easyjur_password)
+
+
 @router.get("/processos", response_model=ProcessoList)
 async def listar_processos(
     status: str | None = Query(None, max_length=64),
@@ -101,7 +111,7 @@ async def resumo(
     _: User = Depends(get_current_user),
 ) -> dict:
     """Totais da carteira. Campos esparsos vem SEMPRE com o denominador."""
-    return await svc.resumo(db)
+    return await svc.resumo(db, impressao=_impressao_atual())
 
 
 @router.post("/sync", response_model=SyncResponse, status_code=202)
@@ -126,6 +136,11 @@ async def sincronizar_agora(
             status_code=503,
             detail="EASYJUR_EMAIL/EASYJUR_PASSWORD nao configurados neste ambiente.",
         )
+    # Credencial ja recusada pelo EasyJur: nem enfileira. O worker
+    # tambem recusaria, mas assim o motivo aparece na hora, no clique.
+    if await svc.login_bloqueado(db, _impressao_atual()) is not None:
+        await svc.marcar_erro(db, source="manual", mensagem=svc.MSG_LOGIN_BLOQUEADO)
+        raise HTTPException(status_code=423, detail=svc.MSG_LOGIN_BLOQUEADO)
     try:
         await svc.enfileirar_carga(db, source="manual")
     except svc.CargaJaEmAndamento as exc:
@@ -137,4 +152,26 @@ async def sincronizar_agora(
     return SyncResponse(
         status="em_andamento",
         mensagem="Carga enfileirada. Leva alguns minutos; a tela atualiza sozinha.",
+    )
+
+
+@router.post("/login/liberar", response_model=LiberarLoginResponse)
+async def liberar_login(
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(require_admin),
+) -> LiberarLoginResponse:
+    """Autoriza UMA nova tentativa de login com a credencial recusada.
+
+    So admin, e fica no `audit_log` com o email de quem liberou. Use
+    depois de corrigir a senha NO EasyJur (sem trocar a variavel de
+    ambiente) ou de confirmar que a recusa foi passageira. Se a proxima
+    tentativa falhar, a trava volta sozinha.
+    """
+    if await svc.liberar_login(db, actor=user.email):
+        return LiberarLoginResponse(
+            liberado=True,
+            mensagem="Nova tentativa liberada. A próxima sincronização vai tentar logar uma vez.",
+        )
+    return LiberarLoginResponse(
+        liberado=False, mensagem="Não havia trava de login do EasyJur."
     )

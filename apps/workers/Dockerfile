@@ -51,5 +51,6 @@ RUN pip install --upgrade pip \
 # pronto -- 9 tentativas em 18 segundos, sem traceback (SIGKILL nao
 # deixa rastro). Medido em 16/09/2026.
 #
-# 2 basta: a carga sao 11 crons espacados, nao fila de alto volume.
+# 2 basta: a carga sao os agendamentos espacados do beat (15 entradas
+# em `worker/main.py`), nao fila de alto volume.
 CMD ["celery", "-A", "worker.main.celery_app", "worker", "-B", "-s", "/tmp/celerybeat-schedule", "--loglevel=info", "--concurrency=2", "-Q", "default,dp_sesmt,manutencao,financeiro,licitacoes,ia"]

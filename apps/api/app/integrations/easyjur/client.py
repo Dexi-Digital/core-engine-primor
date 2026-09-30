@@ -21,6 +21,14 @@ novo quando esta perto do limite (`_MARGEM_SEGURANCA`). Melhor falhar
 dizendo "nao vou tentar" do que bloquear a conta de quem usa o sistema
 para trabalhar.
 
+Esse contador vive na INSTANCIA, e cada execucao do pull cria uma nova.
+Por isso a recusa tambem e lembrada ENTRE execucoes: quem orquestra a
+carga (`app.modules.juridico.service.executar_carga`) grava a recusa no
+`audit_log` com a impressao da credencial e nao chama `login()` de novo
+ate a credencial mudar ou um admin liberar. `EasyjurLoginRecusadoError`
+existe para essa camada distinguir "o EasyJur recusou a senha" de
+"a sessao expirou no meio da carga".
+
 A conta de integracao e `sistemas@primorsolucoes.srv.br` e autentica
 por email e senha (medido em 19/09/2026). A pagina tambem carrega
 `accounts.google.com/gsi/client` e existe `api/login_google.php`, mas
@@ -87,6 +95,15 @@ class EasyjurAuthError(EasyjurError):
         self.tentativas_restantes = tentativas_restantes
 
 
+class EasyjurLoginRecusadoError(EasyjurAuthError):
+    """O EasyJur RESPONDEU recusando email/senha.
+
+    Diferente de sessao expirada (tambem `EasyjurAuthError`): so esta
+    consome tentativa do contador de bloqueio deles, e so ela deve
+    impedir novas tentativas nas proximas execucoes.
+    """
+
+
 class EasyjurBloqueioIminenteError(EasyjurAuthError):
     """Recusa PREVENTIVA: poucas tentativas restantes.
 
@@ -114,6 +131,10 @@ class EasyjurClient(IntegrationClient):
             base_url=base_url, timeout=timeout, follow_redirects=True
         )
         self._autenticado = False
+        # True depois de um login aceito nesta instancia -- e NAO volta a
+        # False se a sessao expirar depois. Quem orquestra usa para saber
+        # que a credencial funciona.
+        self.login_confirmado = False
         # Ultimo contador informado pelo EasyJur. None = desconhecido.
         self.tentativas_restantes: int | None = None
         if not self._email or not self._password:
@@ -202,7 +223,7 @@ class EasyjurClient(IntegrationClient):
             mensagem = _limpar_html(
                 erros.get("mensagem") or dados.get("mensagem") or ""
             ) or "credenciais recusadas"
-            raise EasyjurAuthError(
+            raise EasyjurLoginRecusadoError(
                 f"EasyJur recusou o login: {mensagem}",
                 tentativas_restantes=restantes,
             )
@@ -210,6 +231,7 @@ class EasyjurClient(IntegrationClient):
         if not resp.is_success:
             raise EasyjurError(f"EasyJur login devolveu HTTP {resp.status_code}")
         self._autenticado = True
+        self.login_confirmado = True
         # Login OK zera a contagem consecutiva no lado deles.
         self.tentativas_restantes = None
         logger.info("easyjur.login_ok email=%s", _mascarar(self._email))

@@ -3,7 +3,8 @@
 #
 # NAO e o desenho de producao -- para VPS continue usando
 # `infra/docker-compose.prod.yml`, que separa api/workers/web e roda o
-# Celery (esta imagem NAO tem worker, entao os 5 crons nao rodam).
+# Celery (esta imagem NAO tem worker, entao nenhum agendamento do beat
+# roda -- para isso, um segundo servico com `apps/workers/railway.json`).
 #
 # Por que isso funciona sem CORS nem rewrite: o front e server-side
 # (`src/lib/api.ts` usa cookie HTTP-only e roda em Server Components /
