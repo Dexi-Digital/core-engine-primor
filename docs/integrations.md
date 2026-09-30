@@ -411,9 +411,12 @@ de homologação (2026-07-13):
   `establishment` foram descobertos (08/09/2026).
 - **`resultadoAso` não tem enum nem descrição em lugar nenhum do spec**
   (`integer int32` puro; nenhum literal "apto"/"inapto" nas 354 schemas).
-  O mapa `{1: apto, 2: inapto, 3: apto_restricoes}` do `onsafety_sync.py`
-  segue **assumido** — pergunta em aberto com o suporte, e o rollout do
-  ASO em produção depende dela.
+  Na base real (11/09/2026, 401 fichas) só aparecem `1` e nulo, então o
+  `onsafety_sync.py` mapeia **só `1 → apto`**. Qualquer outro valor fica
+  como o número cru e conta em `aso_resultado_desconhecido` — a UI mostra
+  "desconhecido", nunca um rótulo chutado. O `tipoExame` da mesma API é
+  0-indexado, então não dá para supor a ordem de "inapto" e "apto com
+  restrições": o significado de `2` e `3` segue como pergunta ao suporte.
 - **`ControleEpi.validade` é `string` sem `format`** no spec (formato
   livre confirmado). Ao lado existe `vidaUtilDia` (int32), útil como
   sinal cruzado se o formato da string se mostrar instável.
