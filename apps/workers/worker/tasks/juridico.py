@@ -27,9 +27,11 @@ def pull_easyjur(source: str = "beat") -> dict[str, object]:
     falha e gravada la antes de ser relancada.
 
     UM login por execucao: a sessao serve todas as paginas e o export.
-    O EasyJur bloqueia a conta em 5 senhas erradas seguidas, e o client
-    se recusa a tentar perto do limite -- entao credencial errada aqui
-    falha alto em vez de queimar tentativa toda madrugada.
+    O EasyJur bloqueia a conta em 5 senhas erradas seguidas. Uma recusa
+    fica gravada (`svc.executar_carga`) e as execucoes seguintes NEM
+    tentam logar ate a credencial mudar ou um admin liberar -- entao
+    credencial errada falha alto em vez de queimar tentativa toda
+    madrugada.
     """
     logger.info("easyjur.sync.started source=%s", source)
     started = monotonic()
@@ -66,10 +68,14 @@ async def _run(source: str) -> dict[str, object]:
             # e o defeito que este projeto ja pagou caro tres vezes.
             raise RuntimeError(msg)
 
+        impressao = svc.impressao_credencial(
+            settings.easyjur_email, settings.easyjur_password
+        )
         try:
             async with asyncio.timeout(_SYNC_TIMEOUT_S):
-                await svc.marcar_inicio(db, source=source)
-                r = await svc.sincronizar(db, client, source=source)
+                r = await svc.executar_carga(
+                    db, client, source=source, impressao=impressao
+                )
         except TimeoutError as exc:
             await db.rollback()
             mensagem = (
@@ -79,6 +85,12 @@ async def _run(source: str) -> dict[str, object]:
             await svc.marcar_erro(db, source=source, mensagem=mensagem)
             logger.error("easyjur.sync.timeout source=%s", source)
             raise TimeoutError(mensagem) from exc
+        except svc.LoginEasyjurBloqueado as exc:
+            # Mensagem ja escrita para a tela; sem prefixo de classe.
+            await db.rollback()
+            await svc.marcar_erro(db, source=source, mensagem=str(exc))
+            logger.error("easyjur.sync.login_bloqueado source=%s", source)
+            raise
         except Exception as exc:  # noqa: BLE001 -- o motivo vai para a tela
             await db.rollback()
             await svc.marcar_erro(

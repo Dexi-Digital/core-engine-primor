@@ -1222,6 +1222,31 @@ tentar** quando resta 1, levantando `EasyjurBloqueioIminenteError`. Melhor
 falhar dizendo "não vou tentar" do que bloquear a conta de quem usa o sistema
 para trabalhar. Pelo mesmo motivo, o `health_check` **não autentica**.
 
+**Trava entre execuções.** O contador acima vive na instância do client, e
+cada execução do pull cria uma nova — sozinho, ele não impedia o beat das
+03h30 e cada clique em "Sincronizar agora" de gastarem uma tentativa por vez.
+Por isso, quando o EasyJur **recusa** o login (`EasyjurLoginRecusadoError`;
+sessão expirada no meio da carga não conta), `juridico.service.executar_carga`
+grava `easyjur.login_recusado` no `audit_log` com a **impressão** da
+credencial — HMAC-SHA256 de email+senha com a `SECRET_KEY`, nunca a senha. A
+partir daí:
+
+- o worker **não chama o login** enquanto a credencial for a mesma: marca o
+  sync como erro com "Login recusado pelo EasyJur; nova tentativa só após
+  trocar a credencial…" e falha a task;
+- `POST /api/v1/juridico/sync` responde **423** com a mesma mensagem, sem
+  enfileirar; `GET /juridico/resumo` expõe `login_easyjur.bloqueado` e a tela
+  mostra o aviso.
+
+Destrava de dois jeitos: **trocar** `EASYJUR_EMAIL`/`EASYJUR_PASSWORD` (na
+API e no worker) — a impressão muda e a próxima execução tenta uma vez — ou um
+**admin** chamar `POST /api/v1/juridico/login/liberar` (botão na tela), que
+grava `easyjur.login_liberado` com o email dele e autoriza **uma** tentativa
+com a mesma credencial (para quando a senha foi corrigida no próprio
+EasyJur). Se essa tentativa falhar, trava de novo. Login aceito grava
+`easyjur.login_ok` e fecha a trava. Trocar a `SECRET_KEY` também muda a
+impressão e libera uma tentativa.
+
 **Estado em 19/09/2026 — a credencial funciona.** A conta de integração é
 **`sistemas@primorsolucoes.srv.br`**, e autentica por email e senha de
 primeira. Sem SSO, sem captcha, sem 2FA.
