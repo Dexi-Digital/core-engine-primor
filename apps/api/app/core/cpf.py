@@ -24,6 +24,20 @@ def format_cpf(cpf: str) -> str:
     return f"{n[:3]}.{n[3:6]}.{n[6:9]}-{n[9:]}"
 
 
+def mask_cpf(cpf: str) -> str:
+    """Mascara LGPD para logs/auditoria: `***.456.789-**`.
+
+    Mantem so os 6 digitos centrais (padrao de publicacao de CPF em
+    atos oficiais) -- suficiente para conferencia humana sem expor o
+    documento inteiro. Entrada sem 11 digitos vira `***` (nunca ecoa
+    o valor cru, que pode ser um CPF digitado com erro).
+    """
+    n = normalize_cpf(cpf)
+    if len(n) != 11:
+        return "***"
+    return f"***.{n[3:6]}.{n[6:9]}-**"
+
+
 def is_valid_cpf(cpf: str) -> bool:
     """Verifica algoritmo dos digitos verificadores.
 

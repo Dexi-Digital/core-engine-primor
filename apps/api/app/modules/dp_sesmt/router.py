@@ -427,16 +427,48 @@ def _get_directdata() -> DirectDataClient:
     return DirectDataClient(api_key=settings.directdata_api_key)
 
 
+# LGPD (docs/lgpd.md): consulta de dado pessoal exige justificativa. O
+# minimo evita "ok"/"teste" -- quem le o audit precisa entender o motivo.
+_JUSTIFICATIVA_MIN = 10
+_JUSTIFICATIVA_MAX = 500
+
+
+def _validar_justificativa(
+    justificativa: str | None, *, obrigatoria: bool
+) -> str | None:
+    texto = (justificativa or "").strip()
+    if not texto:
+        if obrigatoria:
+            raise HTTPException(
+                422, "justificativa obrigatoria para consulta de CPF (LGPD)"
+            )
+        return None
+    if len(texto) < _JUSTIFICATIVA_MIN:
+        raise HTTPException(
+            422,
+            f"justificativa deve ter ao menos {_JUSTIFICATIVA_MIN} caracteres",
+        )
+    return texto
+
+
 @router.get("/dossie/cep/{cep}", response_model=CepLookupOut)
 async def dossie_cep(
     cep: str,
     employee_id: int | None = Query(None),
+    justificativa: str | None = Query(None, max_length=_JUSTIFICATIVA_MAX),
     db: AsyncSession = Depends(get_db),
     viacep: ViaCEPClient = Depends(_get_viacep),
+    current_user: User = Depends(get_current_user),
 ) -> CepLookupOut:
     try:
+        justificativa = _validar_justificativa(justificativa, obrigatoria=False)
         result = await service.lookup_cep(
-            db, cep, viacep=viacep, employee_id=employee_id
+            db,
+            cep,
+            viacep=viacep,
+            employee_id=employee_id,
+            actor=current_user.email,
+            justificativa=justificativa,
         )
     except ViaCEPNotFoundError as exc:
         raise HTTPException(404, f"CEP {cep} nao encontrado") from exc
@@ -451,12 +483,20 @@ async def dossie_cep(
 async def dossie_cnpj(
     cnpj: str,
     employee_id: int | None = Query(None),
+    justificativa: str | None = Query(None, max_length=_JUSTIFICATIVA_MAX),
     db: AsyncSession = Depends(get_db),
     brasilapi: BrasilAPIClient = Depends(_get_brasilapi),
+    current_user: User = Depends(get_current_user),
 ) -> CnpjLookupOut:
     try:
+        justificativa = _validar_justificativa(justificativa, obrigatoria=False)
         result = await service.lookup_cnpj(
-            db, cnpj, brasilapi=brasilapi, employee_id=employee_id
+            db,
+            cnpj,
+            brasilapi=brasilapi,
+            employee_id=employee_id,
+            actor=current_user.email,
+            justificativa=justificativa,
         )
     except BrasilAPINotFoundError as exc:
         raise HTTPException(404, f"CNPJ {cnpj} nao encontrado") from exc
@@ -470,13 +510,21 @@ async def dossie_cnpj(
 @router.get("/dossie/cpf/{cpf}", response_model=CpfLookupOut)
 async def dossie_cpf(
     cpf: str,
+    justificativa: str = Query(..., max_length=_JUSTIFICATIVA_MAX),
     employee_id: int | None = Query(None),
     db: AsyncSession = Depends(get_db),
     directdata: DirectDataClient = Depends(_get_directdata),
+    current_user: User = Depends(get_current_user),
 ) -> CpfLookupOut:
     try:
+        texto = _validar_justificativa(justificativa, obrigatoria=True)
         result = await service.lookup_cpf(
-            db, cpf, directdata=directdata, employee_id=employee_id
+            db,
+            cpf,
+            directdata=directdata,
+            justificativa=texto or "",
+            employee_id=employee_id,
+            actor=current_user.email,
         )
     except (DirectDataError, ValueError) as exc:
         raise HTTPException(400, str(exc)) from exc

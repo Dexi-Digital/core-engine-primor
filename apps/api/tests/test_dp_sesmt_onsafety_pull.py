@@ -1,6 +1,7 @@
 """Testes do pull SST OnSafety -> dossie (Squad 2, ADR-001)."""
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
 
 import pytest
@@ -598,3 +599,176 @@ async def test_pull_treinamento_registra_consulta_lgpd(
         .all()
     )
     assert "onsafety_treinamento" in fontes
+
+
+# --- audit por registro (LGPD) ---------------------------------------------
+
+
+async def _audits_registro(db: AsyncSession) -> list[AuditLog]:
+    return list(
+        (
+            await db.execute(
+                select(AuditLog)
+                .where(
+                    AuditLog.resource.in_(
+                        ("dp_sesmt.employee", "dp_sesmt.employee_document")
+                    )
+                )
+                .order_by(AuditLog.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+@pytest.mark.asyncio
+async def test_pull_aso_audita_before_after_so_campos_alterados(
+    db_session: AsyncSession,
+):
+    client = OnsafetyClient(api_token=None)
+    cpfs = await _mock_cpfs(client)
+    emp = await _criar_employee(
+        db_session,
+        cpfs["exames"][0],
+        aso_data=date(2000, 1, 1),
+        aso_validade=date(2001, 1, 1),
+        aso_resultado="apto",
+    )
+
+    summary = await pull_onsafety(db_session, client, actor="admin@primor.com")
+    await db_session.refresh(emp)
+
+    audits = [
+        a
+        for a in await _audits_registro(db_session)
+        if a.resource == "dp_sesmt.employee"
+    ]
+    assert len(audits) == 1
+    a = audits[0]
+    assert a.action == "update"
+    assert a.actor == "admin@primor.com"
+    assert a.resource_id == str(emp.id)
+    meta = json.loads(a.metadata_json)
+    assert meta["source"] == "onsafety"
+    changed = meta["changed"]
+    assert changed["aso_data"] == {
+        "from": "2000-01-01",
+        "to": emp.aso_data.isoformat(),
+    }
+    assert changed["aso_validade"]["from"] == "2001-01-01"
+    # resultado do mock e "apto" (1) -> nao mudou, nao entra no diff
+    assert emp.aso_resultado == "apto"
+    assert "aso_resultado" not in changed
+    # CPF nunca vai no audit por registro
+    assert emp.cpf not in a.metadata_json
+    assert summary.audit_registros >= 1
+
+
+@pytest.mark.asyncio
+async def test_pull_documentos_auditados_na_criacao(db_session: AsyncSession):
+    client = OnsafetyClient(api_token=None)
+    cpfs = await _mock_cpfs(client)
+    emp = await _criar_employee(db_session, cpfs["epis"][0])
+
+    summary = await pull_onsafety(db_session, client, actor="t@t.com")
+
+    docs = (
+        (
+            await db_session.execute(
+                select(EmployeeDocument).where(
+                    EmployeeDocument.employee_id == emp.id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    doc_audits = [
+        a
+        for a in await _audits_registro(db_session)
+        if a.resource == "dp_sesmt.employee_document"
+    ]
+    assert docs
+    # um create por documento criado, com o id real do documento
+    assert {a.resource_id for a in doc_audits} == {str(d.id) for d in docs}
+    assert all(a.action == "create" for a in doc_audits)
+    meta = json.loads(doc_audits[0].metadata_json)
+    assert meta["employee_id"] == emp.id
+    assert meta["onsafety_external_id"]
+    assert meta["changed"]["tipo"]["from"] is None
+    assert summary.audit_registros >= len(doc_audits)
+
+
+@pytest.mark.asyncio
+async def test_pull_re_run_mesmo_dado_nao_gera_audit_por_registro(
+    db_session: AsyncSession,
+):
+    client = OnsafetyClient(api_token=None)
+    cpfs = await _mock_cpfs(client)
+    treinos = await _mock_treinos(client)
+    await _criar_employee(db_session, cpfs["exames"][0])
+    if cpfs["epis"][0] != cpfs["exames"][0]:
+        await _criar_employee(db_session, cpfs["epis"][0])
+    cpf_nr = _cpf_aprovado(_por_sigla(treinos, "NR 35"))
+    if cpf_nr not in {cpfs["exames"][0], cpfs["epis"][0]}:
+        await _criar_employee(db_session, cpf_nr)
+
+    await pull_onsafety(db_session, client, actor="t@t.com")
+    antes = len(await _audits_registro(db_session))
+    assert antes > 0
+
+    s2 = await pull_onsafety(db_session, client, actor="t@t.com")
+
+    assert len(await _audits_registro(db_session)) == antes
+    assert s2.audit_registros == 0
+    # o resumo do run continua sendo gravado
+    runs = (
+        (
+            await db_session.execute(
+                select(AuditLog).where(
+                    AuditLog.resource == "dp_sesmt.onsafety_pull"
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(runs) == 2
+
+
+@pytest.mark.asyncio
+async def test_pull_documento_alterado_audita_so_o_diff(
+    db_session: AsyncSession,
+):
+    client = OnsafetyClient(api_token=None)
+    cpfs = await _mock_cpfs(client)
+    emp = await _criar_employee(db_session, cpfs["epis"][0])
+    await pull_onsafety(db_session, client, actor="t@t.com")
+
+    doc = (
+        (
+            await db_session.execute(
+                select(EmployeeDocument).where(
+                    EmployeeDocument.employee_id == emp.id,
+                    EmployeeDocument.tipo == DOC_EMP_FICHA_EPI,
+                )
+            )
+        )
+        .scalars()
+        .first()
+    )
+    numero_original = doc.numero
+    doc.numero = "CA adulterado"
+    await db_session.commit()
+    antes = len(await _audits_registro(db_session))
+
+    await pull_onsafety(db_session, client, actor="t@t.com")
+
+    novos = (await _audits_registro(db_session))[antes:]
+    assert len(novos) == 1
+    assert novos[0].action == "update"
+    assert novos[0].resource_id == str(doc.id)
+    assert json.loads(novos[0].metadata_json)["changed"] == {
+        "numero": {"from": "CA adulterado", "to": numero_original}
+    }

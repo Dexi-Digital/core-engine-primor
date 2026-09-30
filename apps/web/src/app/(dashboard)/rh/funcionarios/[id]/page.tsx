@@ -181,15 +181,29 @@ async function buscarCep(formData: FormData): Promise<void> {
   volta(id, "Endereço preenchido a partir do CEP. Confira e informe o número.");
 }
 
+const JUSTIFICATIVA_MIN = 10;
+
 async function consultarCpf(formData: FormData): Promise<void> {
   "use server";
   const id = String(formData.get("id") ?? "");
   const cpf = String(formData.get("cpf") ?? "").replace(/\D/g, "");
+  // LGPD: consulta de dado pessoal exige justificativa (vai para o
+  // audit_log junto com quem consultou). A API rejeita com 422 abaixo
+  // do mínimo -- validamos aqui só para a mensagem ficar clara.
+  const justificativa = String(formData.get("justificativa") ?? "").trim();
+  if (justificativa.length < JUSTIFICATIVA_MIN) {
+    volta(
+      id,
+      undefined,
+      `Informe a justificativa da consulta de CPF (mínimo ${JUSTIFICATIVA_MIN} caracteres).`,
+    );
+  }
   try {
+    const qs = new URLSearchParams({ employee_id: id, justificativa });
     const r = await apiFetch<{
       nome: string | null; situacao_cpf: string | null;
       data_nascimento: string | null; source: string;
-    }>(`/api/v1/dp-sesmt/dossie/cpf/${cpf}?employee_id=${id}`);
+    }>(`/api/v1/dp-sesmt/dossie/cpf/${cpf}?${qs.toString()}`);
     const simulado = r.source.endsWith("_mock");
     volta(
       id,
@@ -567,6 +581,12 @@ export default async function FuncionarioPage(props: {
             (DirectData) responde em <strong>simulação</strong> até o token chegar
             — o resultado vem marcado como tal.
           </p>
+          <label className="mt-2 block text-xs text-slate-600">
+            Justificativa (LGPD) — fica registrada com seu usuário
+            <input name="justificativa" required minLength={JUSTIFICATIVA_MIN} maxLength={500}
+              placeholder="Ex.: conferência de dados na admissão"
+              className="mt-1 w-full rounded border border-slate-300 px-2 py-1 text-sm" />
+          </label>
           <button type="submit" className="mt-2 rounded border border-slate-300 px-3 py-1 text-sm hover:bg-slate-50">
             Consultar {emp.cpf}
           </button>
