@@ -456,7 +456,7 @@ async def dispatch_boletins_endpoint(
 ) -> BoletimDispatchSummary:
     """Despacho sob demanda. Normalmente o Celery beat roda 3x/dia.
 
-    Nao exige mais `RESEND_API_KEY`: desde 21/09/2026 o boletim vira
+    Nao exige chave de e-mail: desde 21/09/2026 o boletim vira
     **notificacao na plataforma**, nao email. O 503 que existia aqui
     deixava o despacho indisponivel em qualquer ambiente sem chave de
     email -- o que nao faz mais sentido, ja que nada e enviado.

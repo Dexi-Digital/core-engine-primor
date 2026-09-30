@@ -138,7 +138,9 @@ Em linguagem simples, o módulo de licitações:
 - **Conlicitação**, **ComprasNet** e **Licitações-e** — fontes complementares
   (parte já no roadmap/futuro).
 - **CREA / ART** — consulta de registros técnicos da empresa.
-- **Email (Resend)** — envio dos boletins e alertas.
+- **Notificações na plataforma** — boletins e alertas chegam no sino
+  (`/notificacoes`); os alertas também podem sair por e-mail pelo
+  Microsoft 365 da Primor quando a permissão de envio for liberada.
 - **OneDrive** — onde os anexos dos editais podem ser guardados.
 
 ### O que a equipe vê na tela (as 4 telas)

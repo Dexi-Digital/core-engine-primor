@@ -1,9 +1,12 @@
 """Notificacoes dentro da plataforma.
 
-**Por que existe.** Todo aviso do sistema saia por email (Resend):
-boletins de licitacao 3x/dia, alertas de certidao, ASO e afastamento.
-O cliente pediu que o boletim parasse de mandar email e aparecesse na
-plataforma -- e nao havia peca nenhuma de notificacao no projeto.
+**Por que existe.** Todo aviso do sistema saia por email: boletins de
+licitacao 3x/dia, alertas de certidao, ASO e afastamento. O cliente
+pediu que o boletim parasse de mandar email e aparecesse na plataforma
+-- e nao havia peca nenhuma de notificacao no projeto. Desde 30/09/2026
+os alertas de vencimento (certidoes, ASO, INSS, contratos) tambem caem
+aqui sempre; o e-mail pelo Microsoft 365 e canal adicional (ver
+`app.modules.notificacoes.alertas`).
 
 Nasce GENERICA de proposito. Poderia viver dentro de `licitacoes`,
 mas certidoes, ASO e afastamentos tem exatamente a mesma necessidade:
@@ -32,6 +35,7 @@ CATEGORIA_LICITACOES = "licitacoes"
 CATEGORIA_CERTIDOES = "certidoes"
 CATEGORIA_DP = "dp"
 CATEGORIA_FROTA = "frota"
+CATEGORIA_FINANCEIRO = "financeiro"
 
 
 class Notificacao(Base):

@@ -19,9 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.db import get_db
+from app.integrations.msgraph_mail.client import abrir_mail_client
 from app.integrations.onedrive.client import build_onedrive_client
 from app.integrations.onedrive.storage import OneDriveStorage
-from app.integrations.resend.client import ResendClient
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.dp_sesmt.schemas import ModuleStatus
@@ -149,38 +149,30 @@ async def dispatch_contrato_alerts_endpoint(
     _: User = Depends(get_current_user),
 ) -> ContratoAlertaSummary:
     """Disparo manual dos alertas (a demo Vercel nao tem worker/beat).
-    Requires RESEND_API_KEY; 503 se ausente -- paridade com o D.6.
+    Notificacao na plataforma sempre; e-mail pelo Microsoft 365 so
+    quando configurado (`MAIL_SENDER` + credenciais Graph).
 
     ATENCAO -- colisao com o beat: o dispatch manual grava as MESMAS
     janelas em `contratos_alertas_log` que o job diario do Celery Beat
     (`contrato-alerts-daily`, 08h15). Chamar este endpoint marca a
-    janela como enviada e SUPRIME o alerta do beat para os mesmos
+    janela como despachada e SUPRIME o alerta do beat para os mesmos
     contratos/janelas naquele dia (idempotencia por
     `uq_contrato_alerta_janela`, sem distincao de origem/`source`).
-    NAO e uma ferramenta de teste/dry-run -- qualquer chamada dispara
-    email de verdade para os `recipients` informados. Use apenas
-    emails reais de producao; disparos de teste vao "queimar" a janela
-    e o contrato correspondente nao recebera o alerta automatico do
-    beat. (Separar por `source` na unique key para permitir reenvio
+    NAO e uma ferramenta de teste/dry-run -- qualquer chamada cria
+    notificacao (e e-mail, se configurado) de verdade para os
+    `recipients` informados. Use apenas emails reais de producao;
+    disparos de teste vao "queimar" a janela e o contrato
+    correspondente nao recebera o alerta automatico do beat. (Separar por `source` na unique key para permitir reenvio
     manual sem suprimir o beat fica em ticket a parte.)
 
     ROUTE-ORDERING: precisa estar registrada ANTES de
     `/contratos/{contrato_id}` (abaixo) -- senao FastAPI tentaria
     converter "dispatch-alerts" para int e devolveria 422.
     """
-    settings = get_settings()
-    if not settings.resend_api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="RESEND_API_KEY nao configurada; configure em settings.",
-        )
-    resend = ResendClient(api_key=settings.resend_api_key)
-    try:
+    async with abrir_mail_client() as mailer:
         summary = await dispatch_contrato_alerts(
-            db, resend, recipients=[str(r) for r in payload.recipients]
+            db, recipients=[str(r) for r in payload.recipients], mailer=mailer
         )
-    finally:
-        await resend.aclose()
     return ContratoAlertaSummary(
         total_contratos=summary.total_contratos,
         sent=summary.sent,
@@ -192,8 +184,9 @@ async def dispatch_contrato_alerts_endpoint(
                 "janela": r.janela,
                 "status": r.status,
                 "recipients": r.recipients,
-                "resend_message_id": r.resend_message_id,
                 "error_message": r.error_message,
+                "email_status": r.email_status,
+                "email_error": r.email_error,
             }
             for r in summary.results
         ],  # type: ignore[arg-type]

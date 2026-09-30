@@ -1,6 +1,6 @@
 # docker-compose para Option A em VPS unica (ex: DigitalOcean Droplet
 # 4vCPU/8GB). Diferenca chave do `docker-compose.yml` (dev):
-#   - sem MinIO/MailHog (storage = OneDrive; email = Resend SaaS)
+#   - sem MinIO/MailHog (storage = OneDrive; email = Microsoft 365 via Graph)
 #   - portas internas (Postgres / Redis NAO expostas em 0.0.0.0)
 #   - vars vem do `.env.prod` que voce gera a partir do .env.example
 #   - healthchecks em todos os processos longos

@@ -133,7 +133,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
           </div>
 
           <div className="flex flex-wrap gap-2">
-            {["PNCP", "Detran", "CREA", "OneDrive", "Document AI", "Resend"].map(
+            {["PNCP", "Detran", "CREA", "OneDrive", "Document AI", "Microsoft 365"].map(
               (t) => (
                 <span
                   key={t}

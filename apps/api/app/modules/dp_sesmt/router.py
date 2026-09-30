@@ -182,10 +182,9 @@ async def dispatch_aso_alerts_endpoint(
     seguinte. Em prod o cron roda 1x/dia automaticamente.
 
     Se `recipients` nao for informado, usa `ASO_ALERT_EMAILS` da env.
+    Notificacao na plataforma sempre; e-mail pelo Microsoft 365 so
+    quando configurado -- nunca 503 por falta de e-mail.
     """
-    settings = get_settings()
-    if not settings.resend_api_key:
-        raise HTTPException(503, "RESEND_API_KEY nao configurada")
     if recipients is None or len(recipients) == 0:
         env_val = os.getenv("ASO_ALERT_EMAILS", "").strip()
         recipients = [e.strip() for e in env_val.split(",") if e.strip()]
@@ -193,14 +192,13 @@ async def dispatch_aso_alerts_endpoint(
         raise HTTPException(
             422, "Nenhum destinatario informado e ASO_ALERT_EMAILS vazia"
         )
-    from app.integrations.resend.client import ResendClient
+    from app.integrations.msgraph_mail.client import abrir_mail_client
     from app.modules.dp_sesmt.aso_alerts import dispatch_aso_alerts
 
-    resend = ResendClient(api_key=settings.resend_api_key)
-    try:
-        summary = await dispatch_aso_alerts(db, resend, recipients=recipients)
-    finally:
-        await resend.aclose()
+    async with abrir_mail_client() as mailer:
+        summary = await dispatch_aso_alerts(
+            db, recipients=recipients, mailer=mailer
+        )
     return {
         "total_employees": summary.total_employees,
         "sent": summary.sent,
@@ -607,10 +605,8 @@ async def dispatch_afastamento_alerts_endpoint(
 
     Em prod o cron roda 1x/dia (08h10). Se `recipients` nao for
     informado, usa `INSS_ALERT_EMAILS` da env (mesmo padrao do A.2).
+    Notificacao na plataforma sempre; e-mail so quando configurado.
     """
-    settings = get_settings()
-    if not settings.resend_api_key:
-        raise HTTPException(503, "RESEND_API_KEY nao configurada")
     if recipients is None or len(recipients) == 0:
         env_val = os.getenv("INSS_ALERT_EMAILS", "").strip()
         recipients = [e.strip() for e in env_val.split(",") if e.strip()]
@@ -619,15 +615,12 @@ async def dispatch_afastamento_alerts_endpoint(
             422,
             "Nenhum destinatario informado e INSS_ALERT_EMAILS vazia",
         )
-    from app.integrations.resend.client import ResendClient
+    from app.integrations.msgraph_mail.client import abrir_mail_client
 
-    resend = ResendClient(api_key=settings.resend_api_key)
-    try:
+    async with abrir_mail_client() as mailer:
         summary = await afastamentos_svc.dispatch_afastamento_alerts(
-            db, resend, recipients=recipients
+            db, recipients=recipients, mailer=mailer
         )
-    finally:
-        await resend.aclose()
     return {
         "total_afastamentos": summary.total_afastamentos,
         "sent": summary.sent,

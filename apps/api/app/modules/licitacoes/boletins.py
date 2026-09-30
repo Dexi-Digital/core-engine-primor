@@ -7,7 +7,7 @@ que, para cada query ativa:
 1. carrega o ultimo envio (`BoletimLog`) e pega `last_licitacao_id`;
 2. busca licitacoes NOVAS desde entao que batem com os filtros;
 3. se houver 1 ou mais, cria uma NOTIFICACAO na plataforma por
-   destinatario (desde 21/09/2026; antes era email via Resend);
+   destinatario (desde 21/09/2026; antes era email);
 4. registra um `BoletimLog` (sucesso, vazio ou falha) com o novo cursor.
 
 Esse servico NAO depende do FastAPI -- o Celery worker importa diretamente.
@@ -225,9 +225,9 @@ async def dispatch_boletins(
 ) -> BoletimDispatchSummary:
     """Despacha boletins pendentes como NOTIFICACAO NA PLATAFORMA.
 
-    Ate 21/09/2026 isto mandava email via Resend. O cliente pediu para
-    nao enviar email e mostrar o aviso dentro do sistema -- entao o
-    `ResendClient` saiu da assinatura, e nao apenas do corpo: deixar o
+    Ate 21/09/2026 isto mandava email. O cliente pediu para nao enviar
+    email e mostrar o aviso dentro do sistema -- entao o cliente de
+    e-mail saiu da assinatura, e nao apenas do corpo: deixar o
     parametro deixaria religar o envio por engano.
 
     O que NAO mudou, porque ja estava certo: o cursor por saved query
@@ -311,12 +311,10 @@ async def dispatch_boletins(
             )
             continue
 
-        message_id = None  # nao ha mais envio de email
         log = BoletimLog(
             saved_query_id=query.id,
             licitacoes_count=len(licitacoes),
             last_licitacao_id=last_id,
-            resend_message_id=message_id,
             status="sent",
         )
         db.add(log)
@@ -327,7 +325,6 @@ async def dispatch_boletins(
                 licitacoes_count=len(licitacoes),
                 last_licitacao_id=last_id,
                 status="sent",
-                resend_message_id=message_id,
             )
         )
 

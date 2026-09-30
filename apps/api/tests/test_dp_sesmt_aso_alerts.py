@@ -16,9 +16,9 @@ from datetime import date, timedelta
 import httpx
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.integrations.resend.client import ResendClient
 from app.modules.dp_sesmt.aso_alerts import (
     JANELAS_ALERTA,
     compute_aso_status,
@@ -33,6 +33,8 @@ from app.modules.dp_sesmt.models import (
     Employee,
     EmployeeAsoAlertaLog,
 )
+from app.modules.notificacoes.models import Notificacao
+from tests.fixtures.graph_mail.mock import mock_graph_mailer
 
 # --- pure helpers -----------------------------------------------------------
 
@@ -96,24 +98,7 @@ def test_janelas_alerta_includes_zero() -> None:
     assert 0 in JANELAS_ALERTA
 
 
-# --- dispatch (mock Resend) -------------------------------------------------
-
-
-def _mock_resend(
-    captured: list[httpx.Request], message_id: str = "msg_aso_xyz"
-) -> ResendClient:
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured.append(request)
-        return httpx.Response(200, json={"id": message_id})
-
-    return ResendClient(
-        api_key="re_test",
-        client=AsyncClient(
-            base_url="https://mock.resend",
-            transport=httpx.MockTransport(handler),
-            headers={"Authorization": "Bearer re_test"},
-        ),
-    )
+# --- dispatch (mock Graph sendMail) -------------------------------------------------
 
 
 async def _create_employee(
@@ -150,11 +135,11 @@ async def test_dispatch_sends_for_employee_in_window(
     )
 
     captured: list[httpx.Request] = []
-    resend = _mock_resend(captured)
+    mailer = mock_graph_mailer(captured)
     summary = await dispatch_aso_alerts(
-        db_session, resend, recipients=["sesmt@primor.example"], today=today
+        db_session, mailer=mailer, recipients=["sesmt@primor.example"], today=today
     )
-    await resend.aclose()
+    await mailer.aclose()
 
     assert summary.sent == 1
     assert summary.failed == 0
@@ -183,14 +168,14 @@ async def test_dispatch_idempotent_same_window(
     )
 
     captured: list[httpx.Request] = []
-    resend = _mock_resend(captured)
+    mailer = mock_graph_mailer(captured)
     s1 = await dispatch_aso_alerts(
-        db_session, resend, recipients=["x@y.com"], today=today
+        db_session, mailer=mailer, recipients=["x@y.com"], today=today
     )
     s2 = await dispatch_aso_alerts(
-        db_session, resend, recipients=["x@y.com"], today=today
+        db_session, mailer=mailer, recipients=["x@y.com"], today=today
     )
-    await resend.aclose()
+    await mailer.aclose()
 
     assert s1.sent == 1
     assert s2.sent == 0
@@ -221,11 +206,11 @@ async def test_dispatch_skips_status_nao_ativo(
     )
 
     captured: list[httpx.Request] = []
-    resend = _mock_resend(captured)
+    mailer = mock_graph_mailer(captured)
     summary = await dispatch_aso_alerts(
-        db_session, resend, recipients=["x@y.com"], today=today
+        db_session, mailer=mailer, recipients=["x@y.com"], today=today
     )
-    await resend.aclose()
+    await mailer.aclose()
     assert summary.sent == 0
     assert summary.total_employees == 0  # SQL filtrou
     assert len(captured) == 0
@@ -238,11 +223,11 @@ async def test_dispatch_skips_no_validade(db_session: AsyncSession) -> None:
         db_session, cpf="11144477735", aso_validade=None
     )
     captured: list[httpx.Request] = []
-    resend = _mock_resend(captured)
+    mailer = mock_graph_mailer(captured)
     summary = await dispatch_aso_alerts(
-        db_session, resend, recipients=["x@y.com"], today=today
+        db_session, mailer=mailer, recipients=["x@y.com"], today=today
     )
-    await resend.aclose()
+    await mailer.aclose()
     # employee ativo mas sem validade -- filtro `aso_validade IS NOT NULL`
     # ja exclui no SQL, entao total_employees = 0 (consistente com
     # `test_dispatch_skips_status_nao_ativo`).
@@ -292,9 +277,9 @@ async def test_dispatch_continues_after_db_rollback_in_loop(
     emp1_id = emp1.id
     emp2_id = emp2.id
 
-    # Resend OK para todo mundo -- a falha sera no commit, nao no envio.
+    # E-mail OK para todo mundo -- a falha sera no commit, nao no envio.
     captured: list[httpx.Request] = []
-    resend = _mock_resend(captured)
+    mailer = mock_graph_mailer(captured)
 
     original_commit = db_session.commit
     fail_count = {"remaining": 1}
@@ -308,9 +293,9 @@ async def test_dispatch_continues_after_db_rollback_in_loop(
     monkeypatch.setattr(db_session, "commit", flaky_commit)
 
     summary = await dispatch_aso_alerts(
-        db_session, resend, recipients=["x@y.com"], today=today
+        db_session, mailer=mailer, recipients=["x@y.com"], today=today
     )
-    await resend.aclose()
+    await mailer.aclose()
 
     # Sem o fix: summary.failed=1, summary.sent=0 e o segundo employee
     # NAO aparece em results (perdido por MissingGreenlet).
@@ -333,11 +318,91 @@ async def test_dispatch_empty_recipients_warns_and_returns(
         db_session, cpf="11144477735", aso_validade=today + timedelta(days=5)
     )
     captured: list[httpx.Request] = []
-    resend = _mock_resend(captured)
+    mailer = mock_graph_mailer(captured)
     summary = await dispatch_aso_alerts(
-        db_session, resend, recipients=[], today=today
+        db_session, mailer=mailer, recipients=[], today=today
     )
-    await resend.aclose()
+    await mailer.aclose()
     assert summary.sent == 0
     assert summary.total_employees == 0
     assert len(captured) == 0
+
+
+@pytest.mark.asyncio
+async def test_dispatch_sem_email_cria_notificacao_por_destinatario(
+    db_session: AsyncSession,
+) -> None:
+    """Sem config de e-mail: 1 notificacao por destinatario, alerta
+    marcado como despachado. Corpo sem CPF (LGPD)."""
+    today = date(2026, 4, 25)
+    emp = await _create_employee(
+        db_session, cpf="11144477735", aso_validade=today + timedelta(days=5)
+    )
+    summary = await dispatch_aso_alerts(
+        db_session, recipients=["sesmt@primor.example", "rh@primor.example"], today=today
+    )
+    assert summary.sent == 1
+    assert summary.results[0].email_status == "nao_configurado"
+    notifs = (await db_session.execute(select(Notificacao))).scalars().all()
+    assert sorted(n.destinatario for n in notifs) == [
+        "rh@primor.example",
+        "sesmt@primor.example",
+    ]
+    for n in notifs:
+        assert n.categoria == "dp"
+        assert n.link == f"/rh/funcionarios/{emp.id}"
+        assert "11144477735" not in n.corpo
+        assert "vence em 5 dia" in n.titulo.lower()
+    log = (await db_session.execute(select(EmployeeAsoAlertaLog))).scalar_one()
+    assert log.status == "sent"
+    assert log.email_status == "nao_configurado"
+
+    # Idempotente: segunda rodada nao duplica o sino.
+    s2 = await dispatch_aso_alerts(
+        db_session, recipients=["sesmt@primor.example", "rh@primor.example"], today=today
+    )
+    assert s2.skipped == 1
+    assert len((await db_session.execute(select(Notificacao))).scalars().all()) == 2
+
+
+@pytest.mark.asyncio
+async def test_dispatch_graph_403_mantem_notificacao(
+    db_session: AsyncSession,
+) -> None:
+    today = date(2026, 4, 25)
+    await _create_employee(
+        db_session, cpf="11144477735", aso_validade=today + timedelta(days=5)
+    )
+    captured: list[httpx.Request] = []
+    mailer = mock_graph_mailer(captured, status=403)
+    summary = await dispatch_aso_alerts(
+        db_session, mailer=mailer, recipients=["x@y.com"], today=today
+    )
+    await mailer.aclose()
+    assert summary.sent == 1
+    assert summary.failed == 0
+    assert len(captured) == 1
+    assert summary.results[0].email_status == "falhou"
+    assert len((await db_session.execute(select(Notificacao))).scalars().all()) == 1
+    log = (await db_session.execute(select(EmployeeAsoAlertaLog))).scalar_one()
+    assert log.status == "sent"
+    assert log.email_status == "falhou"
+    assert "Mail.Send" in (log.email_error or "")
+
+
+@pytest.mark.asyncio
+async def test_endpoint_aso_sem_email_nao_da_503(
+    api_client: AsyncClient,
+    auth_headers: dict[str, str],
+    db_session: AsyncSession,
+) -> None:
+    await _create_employee(
+        db_session, cpf="11144477735", aso_validade=date.today() + timedelta(days=5)
+    )
+    r = await api_client.post(
+        "/api/v1/dp-sesmt/aso/alerts/dispatch",
+        json=["sesmt@primor.example"],
+        headers=auth_headers,
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["sent"] == 1

@@ -13,13 +13,12 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.config import get_settings
 from app.core.db import get_db
 from app.integrations.infosimples.client import (
     InfosimplesCreaTipoNaoSuportadoError,
     InfosimplesUFNaoSuportadaError,
 )
-from app.integrations.resend.client import ResendClient
+from app.integrations.msgraph_mail.client import abrir_mail_client
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.licitacoes import crea_service
@@ -120,23 +119,17 @@ async def dispatch_certidao_alerts_endpoint(
     """On-demand dispatch dos alertas de vencimento. Normalmente rodado
     pelo Celery beat 1x/dia.
 
-    Requires RESEND_API_KEY; returns 503 if not configured.
+    Sempre cria notificacao na plataforma para cada destinatario; manda
+    e-mail pelo Microsoft 365 apenas quando `MAIL_SENDER` + credenciais
+    Graph estao configurados. Nao depende de servico externo para
+    responder.
     """
-    settings = get_settings()
-    if not settings.resend_api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="RESEND_API_KEY nao configurada; configure em settings.",
-        )
-    resend = ResendClient(api_key=settings.resend_api_key)
-    try:
+    async with abrir_mail_client() as mailer:
         summary = await dispatch_expiration_alerts(
             db,
-            resend,
             recipients=[str(r) for r in payload.recipients],
+            mailer=mailer,
         )
-    finally:
-        await resend.aclose()
     return CertidaoAlertaSummary(
         total_certidoes=summary.total_certidoes,
         sent=summary.sent,
@@ -148,8 +141,9 @@ async def dispatch_certidao_alerts_endpoint(
                 "janela": r.janela,
                 "status": r.status,
                 "recipients": r.recipients,
-                "resend_message_id": r.resend_message_id,
                 "error_message": r.error_message,
+                "email_status": r.email_status,
+                "email_error": r.email_error,
             }
             for r in summary.results
         ],  # type: ignore[arg-type]

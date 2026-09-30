@@ -22,7 +22,6 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit.models import AuditLog
-from app.integrations.resend.client import ResendClient
 from app.modules.dp_sesmt.afastamentos import (
     JANELAS_DCB,
     JANELAS_PERICIA,
@@ -39,6 +38,8 @@ from app.modules.dp_sesmt.models import (
     AfastamentoAlertaLog,
     Employee,
 )
+from app.modules.notificacoes.models import Notificacao
+from tests.fixtures.graph_mail.mock import mock_graph_mailer
 
 # --- domain helpers --------------------------------------------------------
 
@@ -82,23 +83,6 @@ def test_janelas_include_zero() -> None:
 
 
 # --- fixtures auxiliares ---------------------------------------------------
-
-
-def _mock_resend(
-    captured: list[httpx.Request], message_id: str = "msg_inss_xyz"
-) -> ResendClient:
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured.append(request)
-        return httpx.Response(200, json={"id": message_id})
-
-    return ResendClient(
-        api_key="re_test",
-        client=AsyncClient(
-            base_url="https://mock.resend",
-            transport=httpx.MockTransport(handler),
-            headers={"Authorization": "Bearer re_test"},
-        ),
-    )
 
 
 async def _create_employee(
@@ -326,11 +310,11 @@ async def test_dispatch_sends_dcb_in_window(
         db_session, emp.id, dcb=today + timedelta(days=10)
     )
     captured: list[httpx.Request] = []
-    resend = _mock_resend(captured)
+    mailer = mock_graph_mailer(captured)
     summary = await dispatch_afastamento_alerts(
-        db_session, resend, recipients=["rh@primor.com"], today=today
+        db_session, mailer=mailer, recipients=["rh@primor.com"], today=today
     )
-    await resend.aclose()
+    await mailer.aclose()
     assert summary.sent == 1
     assert summary.failed == 0
     assert len(captured) == 1
@@ -349,14 +333,14 @@ async def test_dispatch_idempotent_same_window(
         db_session, emp.id, dcb=today + timedelta(days=5)
     )
     captured: list[httpx.Request] = []
-    resend = _mock_resend(captured)
+    mailer = mock_graph_mailer(captured)
     s1 = await dispatch_afastamento_alerts(
-        db_session, resend, recipients=["x@y.com"], today=today
+        db_session, mailer=mailer, recipients=["x@y.com"], today=today
     )
     s2 = await dispatch_afastamento_alerts(
-        db_session, resend, recipients=["x@y.com"], today=today
+        db_session, mailer=mailer, recipients=["x@y.com"], today=today
     )
-    await resend.aclose()
+    await mailer.aclose()
     assert s1.sent == 1
     assert s2.sent == 0
     assert s2.skipped == 1
@@ -376,11 +360,11 @@ async def test_dispatch_skips_status_nao_em_andamento(
         status=AFASTAMENTO_ENCERRADO,
     )
     captured: list[httpx.Request] = []
-    resend = _mock_resend(captured)
+    mailer = mock_graph_mailer(captured)
     summary = await dispatch_afastamento_alerts(
-        db_session, resend, recipients=["x@y.com"], today=today
+        db_session, mailer=mailer, recipients=["x@y.com"], today=today
     )
-    await resend.aclose()
+    await mailer.aclose()
     assert summary.sent == 0
     assert summary.total_afastamentos == 0  # SQL filtrou
 
@@ -397,11 +381,11 @@ async def test_dispatch_pericia_window(db_session: AsyncSession) -> None:
         data_pericia=today + timedelta(days=4),  # janela 7
     )
     captured: list[httpx.Request] = []
-    resend = _mock_resend(captured)
+    mailer = mock_graph_mailer(captured)
     summary = await dispatch_afastamento_alerts(
-        db_session, resend, recipients=["rh@primor.com"], today=today
+        db_session, mailer=mailer, recipients=["rh@primor.com"], today=today
     )
-    await resend.aclose()
+    await mailer.aclose()
     assert summary.sent == 1
     assert len(captured) == 1
     body = captured[0].read().decode()
@@ -427,11 +411,11 @@ async def test_dispatch_dcb_e_pericia_disparam_independentes(
         data_pericia=today + timedelta(days=12),
     )
     captured: list[httpx.Request] = []
-    resend = _mock_resend(captured)
+    mailer = mock_graph_mailer(captured)
     summary = await dispatch_afastamento_alerts(
-        db_session, resend, recipients=["x@y.com"], today=today
+        db_session, mailer=mailer, recipients=["x@y.com"], today=today
     )
-    await resend.aclose()
+    await mailer.aclose()
     assert summary.sent == 2
     logs = (
         await db_session.execute(select(AfastamentoAlertaLog))
@@ -448,11 +432,61 @@ async def test_dispatch_empty_recipients_returns(
         db_session, emp.id, dcb=date(2026, 4, 30)
     )
     captured: list[httpx.Request] = []
-    resend = _mock_resend(captured)
+    mailer = mock_graph_mailer(captured)
     summary = await dispatch_afastamento_alerts(
-        db_session, resend, recipients=[], today=date(2026, 4, 25)
+        db_session, mailer=mailer, recipients=[], today=date(2026, 4, 25)
     )
-    await resend.aclose()
+    await mailer.aclose()
     assert summary.total_afastamentos == 0
     assert summary.sent == 0
     assert len(captured) == 0
+
+
+@pytest.mark.asyncio
+async def test_dispatch_sem_email_cria_notificacao_por_destinatario(
+    db_session: AsyncSession,
+) -> None:
+    today = date(2026, 4, 25)
+    emp = await _create_employee(db_session)
+    await _create_afastamento(db_session, emp.id, dcb=today + timedelta(days=5))
+    summary = await dispatch_afastamento_alerts(
+        db_session, recipients=["rh@primor.com", "dp@primor.com"], today=today
+    )
+    assert summary.sent == 1
+    assert summary.results[0].email_status == "nao_configurado"
+    notifs = (await db_session.execute(select(Notificacao))).scalars().all()
+    assert sorted(n.destinatario for n in notifs) == ["dp@primor.com", "rh@primor.com"]
+    for n in notifs:
+        assert n.categoria == "dp"
+        assert n.link == "/rh/afastamentos"
+        assert emp.cpf not in n.corpo
+    log = (await db_session.execute(select(AfastamentoAlertaLog))).scalar_one()
+    assert log.status == "sent"
+    assert log.email_status == "nao_configurado"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_graph_403_mantem_notificacao(
+    db_session: AsyncSession,
+) -> None:
+    today = date(2026, 4, 25)
+    emp = await _create_employee(db_session)
+    await _create_afastamento(db_session, emp.id, dcb=today + timedelta(days=5))
+    captured: list[httpx.Request] = []
+    mailer = mock_graph_mailer(captured, status=403)
+    summary = await dispatch_afastamento_alerts(
+        db_session, mailer=mailer, recipients=["x@y.com"], today=today
+    )
+    await mailer.aclose()
+    assert summary.sent == 1
+    assert summary.failed == 0
+    assert summary.results[0].email_status == "falhou"
+    assert len((await db_session.execute(select(Notificacao))).scalars().all()) == 1
+    log = (await db_session.execute(select(AfastamentoAlertaLog))).scalar_one()
+    assert log.status == "sent"
+    assert log.email_status == "falhou"
+    # Proxima rodada nao reenvia.
+    s2 = await dispatch_afastamento_alerts(
+        db_session, recipients=["x@y.com"], today=today
+    )
+    assert s2.skipped == 1

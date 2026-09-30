@@ -273,7 +273,7 @@ async def _run_boletins(saved_query_id: int | None) -> dict[str, object]:
     except ImportError as exc:  # pragma: no cover
         return {"error": f"API package not available in worker: {exc}"}
 
-    # Nao ha mais checagem de RESEND_API_KEY: desde 21/09/2026 o boletim
+    # Nao ha checagem de chave de e-mail: desde 21/09/2026 o boletim
     # e notificacao na plataforma. A checagem antiga fazia a task ABORTAR
     # em qualquer ambiente sem chave de email -- ou seja, o boletim nao
     # rodava e nada dizia isso alem de uma linha de log.
@@ -329,16 +329,11 @@ async def _run_certidao_alerts(
     recipients: list[str] | None,
 ) -> dict[str, object]:
     try:
-        from app.core.config import get_settings
         from app.core.db import SessionLocal
-        from app.integrations.resend.client import ResendClient
+        from app.integrations.msgraph_mail.client import abrir_mail_client
         from app.modules.licitacoes.certidoes import dispatch_expiration_alerts
     except ImportError as exc:  # pragma: no cover
         return {"error": f"API package not available in worker: {exc}"}
-
-    settings = get_settings()
-    if not settings.resend_api_key:
-        return {"error": "RESEND_API_KEY not configured; skipping certidao alerts"}
 
     if recipients is None:
         env_val = os.getenv("CERTIDOES_ALERT_EMAILS", "").strip()
@@ -346,14 +341,12 @@ async def _run_certidao_alerts(
     if not recipients:
         return {"error": "CERTIDOES_ALERT_EMAILS not configured; nothing to send"}
 
-    async with SessionLocal() as db:
-        resend = ResendClient(api_key=settings.resend_api_key)
-        try:
-            summary = await dispatch_expiration_alerts(
-                db, resend, recipients=recipients
-            )
-        finally:
-            await resend.aclose()
+    # Notificacao na plataforma sempre; e-mail (Microsoft 365) so quando
+    # configurado -- a falta de e-mail nao pula mais o alerta.
+    async with SessionLocal() as db, abrir_mail_client() as mailer:
+        summary = await dispatch_expiration_alerts(
+            db, recipients=recipients, mailer=mailer
+        )
     return {
         "total_certidoes": summary.total_certidoes,
         "sent": summary.sent,

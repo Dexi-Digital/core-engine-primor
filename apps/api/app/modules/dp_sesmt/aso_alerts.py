@@ -12,8 +12,10 @@ Diferencas importantes em relacao a certidoes:
   para nao iterar lista grande in-memory.
 
 - O destinatario padrao e a env `ASO_ALERT_EMAILS` (lista CSV). Cron
-  pula silenciosamente se vazia (em dev a Primor nao tem que receber
-  email de teste).
+  pula se vazia (em dev a Primor nao tem que receber alerta de teste).
+
+- Canal: notificacao na plataforma sempre; e-mail pelo Microsoft 365
+  quando configurado (`app.modules.notificacoes.alertas`).
 
 - Mensagem do email cita o cargo + obra do funcionario para ajudar o
   RH a identificar de quem e o ASO sem precisar abrir a UI.
@@ -30,12 +32,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.integrations.resend.client import ResendClient, ResendError
+from app.integrations.msgraph_mail.client import GraphMailClient
 from app.modules.dp_sesmt.models import (
     STATUS_ATIVO,
     Employee,
     EmployeeAsoAlertaLog,
 )
+from app.modules.notificacoes.alertas import despachar_alerta
+from app.modules.notificacoes.models import CATEGORIA_DP
 
 logger = structlog.get_logger(__name__)
 
@@ -99,8 +103,9 @@ class AsoAlertaResult:
     janela: str
     status: str
     recipients: list[str]
-    resend_message_id: str | None = None
     error_message: str | None = None
+    email_status: str | None = None  # enviado | falhou | nao_configurado
+    email_error: str | None = None
 
 
 @dataclass(slots=True)
@@ -242,11 +247,10 @@ def render_aso_alerta_html(
 
 async def dispatch_aso_alerts(
     db: AsyncSession,
-    resend: ResendClient,
     *,
     recipients: Sequence[str],
+    mailer: GraphMailClient | None = None,
     public_base_url: str | None = None,
-    from_email: str | None = None,
     today: _date | None = None,
 ) -> AsoAlertaSummary:
     """Itera funcionarios ativos e dispara alertas de ASO vencendo.
@@ -254,14 +258,16 @@ async def dispatch_aso_alerts(
     Filtra `status == ativo` ja no SQL para nao trazer lista enorme
     inutilmente. Por funcionario:
     - Calcula janela ativa (None se sem validade ou ja vencido).
-    - Pula se ja foi enviado para essa (employee, janela).
-    - Envia email + grava log.
+    - Pula se ja foi despachado para essa (employee, janela).
+    - Cria notificacao na plataforma (sempre) + e-mail pelo Microsoft
+      365 quando `mailer` vier configurado, e grava log. O alerta conta
+      como despachado assim que a notificacao existe -- falha de e-mail
+      fica em `email_status`/`email_error`.
 
-    Falhas isoladas: 1 envio com erro nao aborta os demais.
+    Falhas isoladas: 1 despacho com erro nao aborta os demais.
     """
     settings = get_settings()
     public_base_url = public_base_url or settings.public_base_url
-    from_email = from_email or settings.resend_from_email
     today = today or _date.today()
 
     if not recipients:
@@ -339,26 +345,33 @@ async def dispatch_aso_alerts(
         )
         validade_str = employee.aso_validade.strftime("%d/%m/%Y")
         if dias_restantes == 0:
-            subject = (
-                f"[Motor Central] ASO VENCIDO hoje: "
-                f"{employee.nome_completo} ({validade_str})"
-            )
+            titulo = f"ASO VENCIDO hoje: {employee.nome_completo} ({validade_str})"
         else:
-            subject = (
-                f"[Motor Central] ASO vence em {dias_restantes} dia(s): "
+            titulo = (
+                f"ASO vence em {dias_restantes} dia(s): "
                 f"{employee.nome_completo} ({validade_str})"
             )
-
-        existing_log = await _get_existing_log(db, employee.id, janela_str)
+        # Corpo da notificacao sem CPF: fica gravado por destinatario e o
+        # link ja leva a ficha completa (LGPD -- minimo necessario).
+        corpo = (
+            f"{employee.nome_completo} -- cargo {employee.cargo or '-'}, "
+            f"obra {employee.obra or '-'}. Validade do ASO: {validade_str}."
+        )
 
         try:
-            resp = await resend.send_email(
-                to=list(recipients),
-                subject=subject,
-                html=html,
-                from_=from_email,
+            despacho = await despachar_alerta(
+                db,
+                recipients=recipients,
+                categoria=CATEGORIA_DP,
+                titulo=titulo,
+                corpo=corpo,
+                link=f"/rh/funcionarios/{employee.id}",
+                chave_idempotencia=f"aso:{employee.id}:{janela_str}",
+                email_subject=f"[Motor Central] {titulo}",
+                email_html=html,
+                mailer=mailer,
             )
-        except (ResendError, Exception) as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "alerta aso falhou",
                 employee_id=employee.id,
@@ -366,6 +379,8 @@ async def dispatch_aso_alerts(
                 error=str(exc),
             )
             error_msg = str(exc)[:1024]
+            await db.rollback()
+            existing_log = await _get_existing_log(db, employee.id, janela_str)
             if existing_log is None:
                 db.add(
                     EmployeeAsoAlertaLog(
@@ -401,22 +416,24 @@ async def dispatch_aso_alerts(
             )
             continue
 
-        message_id = resp.get("id") if isinstance(resp, dict) else None
+        existing_log = await _get_existing_log(db, employee.id, janela_str)
         if existing_log is None:
             db.add(
                 EmployeeAsoAlertaLog(
                     employee_id=employee.id,
                     janela=janela_str,
                     recipients=list(recipients),
-                    resend_message_id=message_id,
                     status="sent",
+                    email_status=despacho.email_status,
+                    email_error=despacho.email_error,
                 )
             )
         else:
             existing_log.recipients = list(recipients)
-            existing_log.resend_message_id = message_id
             existing_log.status = "sent"
             existing_log.error_message = None
+            existing_log.email_status = despacho.email_status
+            existing_log.email_error = despacho.email_error
         try:
             await db.commit()
         except Exception:  # noqa: BLE001
@@ -444,7 +461,8 @@ async def dispatch_aso_alerts(
                 janela=janela_str,
                 status="sent",
                 recipients=list(recipients),
-                resend_message_id=message_id,
+                email_status=despacho.email_status,
+                email_error=despacho.email_error,
             )
         )
 

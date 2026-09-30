@@ -1,9 +1,11 @@
 /**
  * Caixa de notificações da plataforma.
  *
- * Substitui o e-mail dos boletins de licitação: em vez de disparar via
- * Resend três vezes ao dia, o despacho grava aqui e o sino da barra
- * lateral mostra o contador.
+ * Substitui o e-mail dos boletins de licitação: em vez de disparar
+ * e-mail três vezes ao dia, o despacho grava aqui e o sino da barra
+ * lateral mostra o contador. Os alertas de vencimento (certidões, ASO,
+ * INSS, contratos) também chegam sempre aqui; o e-mail pelo Microsoft
+ * 365 é só uma cópia, quando configurado.
  *
  * O corpo vem como TEXTO da API, de propósito — o objeto de uma
  * licitação vem do PNCP, é texto de terceiro, e renderizá-lo como HTML
@@ -33,6 +35,7 @@ const CATEGORIA_ROTULO: Record<string, string> = {
   certidoes: "Certidões",
   dp: "RH / DP",
   frota: "Frota",
+  financeiro: "Financeiro",
 };
 
 async function fetchCaixa(): Promise<Caixa | null> {

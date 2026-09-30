@@ -121,6 +121,8 @@ Mesma chaveamento do resto da app: `STORAGE_BACKEND=onedrive` + variaveis
 ## Evolucao prevista (nao neste PR)
 
 1. Snapshot persistente em tabela `onedrive_diagnostico_runs` + historico.
-2. Alerta por email (Resend) quando `faltando` ou `entidade_fantasma` > 0.
+2. Alerta (notificacao na plataforma + e-mail Microsoft 365 via
+   `app.modules.notificacoes.alertas`) quando `faltando` ou
+   `entidade_fantasma` > 0.
 3. Spec configuravel via UI (YAML ou form) — hoje e hardcoded.
 4. Export PDF do relatorio.

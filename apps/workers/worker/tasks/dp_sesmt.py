@@ -141,16 +141,11 @@ async def _run_aso_alerts(
     recipients: list[str] | None,
 ) -> dict[str, object]:
     try:
-        from app.core.config import get_settings
         from app.core.db import SessionLocal
-        from app.integrations.resend.client import ResendClient
+        from app.integrations.msgraph_mail.client import abrir_mail_client
         from app.modules.dp_sesmt.aso_alerts import dispatch_aso_alerts as svc
     except ImportError as exc:  # pragma: no cover
         return {"error": f"API package not available in worker: {exc}"}
-
-    settings = get_settings()
-    if not settings.resend_api_key:
-        return {"error": "RESEND_API_KEY not configured; skipping aso alerts"}
 
     if recipients is None:
         env_val = os.getenv("ASO_ALERT_EMAILS", "").strip()
@@ -158,12 +153,10 @@ async def _run_aso_alerts(
     if not recipients:
         return {"error": "ASO_ALERT_EMAILS not configured; nothing to send"}
 
-    async with SessionLocal() as db:
-        resend = ResendClient(api_key=settings.resend_api_key)
-        try:
-            summary = await svc(db, resend, recipients=recipients)
-        finally:
-            await resend.aclose()
+    # Notificacao na plataforma sempre; e-mail (Microsoft 365) so quando
+    # configurado -- a falta de e-mail nao pula mais o alerta.
+    async with SessionLocal() as db, abrir_mail_client() as mailer:
+        summary = await svc(db, recipients=recipients, mailer=mailer)
     return {
         "total_employees": summary.total_employees,
         "sent": summary.sent,
@@ -192,20 +185,13 @@ async def _run_afastamento_alerts(
     recipients: list[str] | None,
 ) -> dict[str, object]:
     try:
-        from app.core.config import get_settings
         from app.core.db import SessionLocal
-        from app.integrations.resend.client import ResendClient
+        from app.integrations.msgraph_mail.client import abrir_mail_client
         from app.modules.dp_sesmt.afastamentos import (
             dispatch_afastamento_alerts as svc,
         )
     except ImportError as exc:  # pragma: no cover
         return {"error": f"API package not available in worker: {exc}"}
-
-    settings = get_settings()
-    if not settings.resend_api_key:
-        return {
-            "error": "RESEND_API_KEY not configured; skipping inss alerts"
-        }
 
     if recipients is None:
         env_val = os.getenv("INSS_ALERT_EMAILS", "").strip()
@@ -215,12 +201,8 @@ async def _run_afastamento_alerts(
             "error": "INSS_ALERT_EMAILS not configured; nothing to send"
         }
 
-    async with SessionLocal() as db:
-        resend = ResendClient(api_key=settings.resend_api_key)
-        try:
-            summary = await svc(db, resend, recipients=recipients)
-        finally:
-            await resend.aclose()
+    async with SessionLocal() as db, abrir_mail_client() as mailer:
+        summary = await svc(db, recipients=recipients, mailer=mailer)
     return {
         "total_afastamentos": summary.total_afastamentos,
         "sent": summary.sent,

@@ -41,9 +41,9 @@ MS_GRAPH_CLIENT_SECRET=...
 MS_GRAPH_DRIVE_ID=...
 MS_GRAPH_ROOT_FOLDER=MotorCentral/editais
 
-# Email outbound (alertas + boletins)
-RESEND_API_KEY=re_...
-RESEND_FROM_EMAIL=Motor Central <alertas@suaempresa.com.br>
+# Alertas: sempre notificacao na plataforma; e-mail opcional pelo
+# Microsoft 365 (mesmo app do Entra do MS_GRAPH_*). Ver docs/integrations.md.
+MAIL_SENDER=sistemas@primorsolucoes.srv.br
 
 # Integrações pagas (todas opcionais — caem em mock se vazias)
 INFOSIMPLES_TOKEN=...                  # Detran SP/MG/GO + CREA
@@ -241,7 +241,7 @@ fly launch --no-deploy --copy-config
 fly volumes create pgdata --size 10 --region gru
 fly secrets set DATABASE_URL=... REDIS_URL=... SECRET_KEY=... \
   MS_GRAPH_TENANT_ID=... MS_GRAPH_CLIENT_ID=... MS_GRAPH_CLIENT_SECRET=... \
-  MS_GRAPH_DRIVE_ID=... STORAGE_BACKEND=onedrive RESEND_API_KEY=... \
+  MS_GRAPH_DRIVE_ID=... STORAGE_BACKEND=onedrive MAIL_SENDER=... \
   ENVIRONMENT=production
 fly deploy
 ```

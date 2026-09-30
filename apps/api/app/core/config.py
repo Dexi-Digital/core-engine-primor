@@ -50,10 +50,13 @@ class Settings(BaseSettings):
     s3_secret_key: str = Field(default="minio123")
     s3_bucket: str = Field(default="primor-docs")
 
-    # Outbound email (Resend). When resend_api_key is unset, the adapter
-    # raises instead of silently dropping -- avoids losing boletins in prod.
-    resend_api_key: str | None = Field(default=None)
-    resend_from_email: str = Field(default="Motor Central <boletins@motorcentral.dev>")
+    # E-mail dos alertas via Microsoft 365 (Graph sendMail), usando o
+    # mesmo app do Entra do SharePoint (`ms_graph_*`). `mail_sender` e a
+    # caixa de sistema da Primor de onde o e-mail sai. Sem ela (ou sem
+    # as credenciais Graph) os alertas continuam chegando como
+    # notificacao na plataforma -- o e-mail e canal adicional. Ver
+    # app/integrations/msgraph_mail.
+    mail_sender: str | None = Field(default=None)
     public_base_url: str = Field(default="http://localhost:3000")
 
     # Edital storage root (D.4). Local filesystem em dev, volume montado
