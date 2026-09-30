@@ -454,10 +454,13 @@ async def listar_processos(
     status: str | None = None,
     area: str | None = None,
     busca: str | None = None,
+    obra_id: int | None = None,
     limite: int = 50,
     offset: int = 0,
 ) -> tuple[list[Processo], int]:
     q = select(Processo)
+    if obra_id is not None:
+        q = q.where(Processo.obra_id == obra_id)
     if status:
         q = q.where(Processo.status == status)
     if area:
