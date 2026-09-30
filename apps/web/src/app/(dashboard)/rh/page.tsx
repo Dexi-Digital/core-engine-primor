@@ -161,9 +161,14 @@ export default async function RHPage() {
             nota: "Quando o cadastro não informa a divisão dos períodos, assume 45+45 — regra a confirmar com o DP.",
           },
           {
-            label: "Dossiê de admissão (CEP, CNPJ, CPF).",
-            status: "parcial",
-            nota: "CEP (ViaCEP) e CNPJ (BrasilAPI) estão disponíveis; CPF usa DirectData e aguarda credencial. A organização dos documentos no OneDrive é outra frente: o diagnóstico compara arquivos com uma convenção configurada, cuja aderência às pastas reais ainda precisa ser validada.",
+            label: "Dossiê de admissão: consulta de CEP (ViaCEP) e CNPJ (BrasilAPI).",
+            status: "pronto",
+            nota: "Fontes públicas, sem credencial. Toda consulta fica registrada na auditoria com quem consultou.",
+          },
+          {
+            label: "Dossiê de admissão: consulta de CPF (DirectData).",
+            status: "bloqueado",
+            nota: "Código pronto; aguarda a Primor contratar o DirectData (custo por consulta). Exige justificativa (LGPD) a cada consulta.",
           },
           {
             label: "Pull de ASO, EPI e treinamentos da OnSafety.",
@@ -178,7 +183,7 @@ export default async function RHPage() {
           {
             label: "Varredura documental OCR do OneDrive (ASOs e docs faltantes).",
             status: "bloqueado",
-            nota: "A task é stub. Depende da credencial do Document AI e da liberação dos sites do SharePoint. O resultado equivalente hoje já vem do pull da OnSafety + diagnóstico documental, então isto é redundância de fonte, não lacuna de função.",
+            nota: "A leitura por OCR ainda não foi construída. Depende de dois acessos da TI da Primor: leitura do site do SharePoint onde ficam os documentos de RH/DP (hoje negado) e o recurso de OCR da Microsoft (Azure AI Document Intelligence, após aprovação do custo). Enquanto isso, ASOs vêm do pull da OnSafety e o % de atendimento documental já sai no Diagnóstico.",
           },
         ]}
       />

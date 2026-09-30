@@ -92,9 +92,16 @@ celery_app.conf.beat_schedule = {
     # Resultados e atas alimentam os dashboards de Inteligencia
     # comercial. Semanal, nao diario: homologacao e evento raro e a
     # carga e pesada -- rodar todo dia gastaria muito para mexer pouco.
+    #
+    # Ate 30/09/2026 rodava com os defaults da task (30 dias, Brasil
+    # inteiro, 200 licitacoes): licitacao de menos de 30 dias quase
+    # nunca esta homologada, e as 200 mais recentes do pais deixavam
+    # pouco ou nada de MG -- que e a UF que a tela filtra por padrao.
+    # Resultado: carga "SUCCESS" com painel vazio.
     "licitacoes-resultados-semanal": {
         "task": "worker.tasks.licitacoes.ingest_resultados",
         "schedule": crontab(hour="4", minute="0", day_of_week="1"),
+        "kwargs": {"dias": 180, "uf": "MG", "max_licitacoes": 500},
     },
     "licitacoes-atas-semanal": {
         "task": "worker.tasks.licitacoes.ingest_atas",
