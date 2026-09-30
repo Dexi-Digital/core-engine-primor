@@ -269,7 +269,7 @@ class EasyjurClient(IntegrationClient):
         so para armar o filtro.
         """
         await self.login()
-        for tentativa in range(1, 3):
+        for tentativa in range(1, _EXPORT_TENTATIVAS + 1):
             logger.info("easyjur.andamentos.search_start tentativa=%s", tentativa)
             try:
                 r = await self._client.post(
@@ -290,24 +290,37 @@ class EasyjurClient(IntegrationClient):
                 self._verificar_sessao(r)
                 logger.info("easyjur.andamentos.csv_done bytes=%s", len(r.content))
                 return r.content
-            except httpx.ReadError as exc:
-                if tentativa == 1:
-                    logger.warning(
-                        "easyjur.andamentos.csv_read_error retrying=%s",
-                        type(exc).__name__,
-                    )
-                    await asyncio.sleep(1)
-                    continue
-                raise EasyjurError(
-                    "EasyJur export de andamentos falhou após 2 leituras: "
-                    f"{type(exc).__name__}: {exc}"
-                ) from exc
             except httpx.HTTPError as exc:
-                raise EasyjurError(
-                    f"EasyJur export de andamentos: {type(exc).__name__}: {exc}"
-                ) from exc
+                if not _transitorio(exc):
+                    raise EasyjurError(
+                        f"EasyJur export de andamentos: {type(exc).__name__}: {exc}"
+                    ) from exc
+                if tentativa == _EXPORT_TENTATIVAS:
+                    raise EasyjurError(
+                        f"EasyJur export de andamentos falhou após {tentativa} "
+                        f"tentativas: {type(exc).__name__}: {exc}"
+                    ) from exc
+                logger.warning(
+                    "easyjur.andamentos.csv_transient_error tentativa=%s erro=%s",
+                    tentativa,
+                    type(exc).__name__,
+                )
+                await asyncio.sleep(_EXPORT_ESPERA_S * tentativa)
 
         raise AssertionError("loop de retry do CSV terminou sem resposta")
+
+
+# O export (~6 MB) leva minutos e a conexao cai de varios jeitos: leitura
+# interrompida, timeout, servidor fechando sem resposta, 502/503 do proxy.
+# Tudo isso passa numa nova tentativa; 4xx (sessao, permissao) nao passa.
+_EXPORT_TENTATIVAS = 3
+_EXPORT_ESPERA_S = 2.0
+
+
+def _transitorio(exc: httpx.HTTPError) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code >= 500
+    return isinstance(exc, httpx.TransportError)
 
 
 def _extrair_tentativas(erros: dict[str, Any]) -> int | None:
