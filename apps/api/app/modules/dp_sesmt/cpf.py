@@ -6,6 +6,6 @@ Este modulo permanece para compatibilidade dos imports existentes.
 """
 from __future__ import annotations
 
-from app.core.cpf import format_cpf, is_valid_cpf, normalize_cpf
+from app.core.cpf import format_cpf, is_valid_cpf, mask_cpf, normalize_cpf
 
-__all__ = ["format_cpf", "is_valid_cpf", "normalize_cpf"]
+__all__ = ["format_cpf", "is_valid_cpf", "mask_cpf", "normalize_cpf"]

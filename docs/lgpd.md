@@ -25,6 +25,19 @@ entrada em `audit_log`:
 
 Retenção mínima: **5 anos** após o término do vínculo.
 
+Onde isso já está implementado (além dos CRUDs de funcionário/documentos):
+
+- **Dossiê** (`GET /dp-sesmt/dossie/{cep,cnpj,cpf}`): toda consulta grava
+  `audit_log` (`resource=dp_sesmt.dossie`, `action=consulta_cpf|cep|cnpj`)
+  com o usuário logado. Consulta de CPF exige `justificativa` (mín. 10
+  caracteres, senão 422) e o CPF vai **mascarado** (`***.456.789-**`) no
+  metadata. CEP/CNPJ são dados públicos: justificativa opcional.
+- **Pull OnSafety**: além do resumo do run (`dp_sesmt.onsafety_pull`), cada
+  ASO alterado (`dp_sesmt.employee`) e cada documento EPI/NR criado ou
+  alterado (`dp_sesmt.employee_document`) ganha uma row com só os campos
+  que mudaram (`{"changed": {campo: {"from", "to"}}}`). Re-pull com o mesmo
+  dado não gera row.
+
 ## Acesso
 
 - RBAC estrito por módulo (RH não acessa dados financeiros e vice-versa).

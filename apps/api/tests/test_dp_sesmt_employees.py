@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.audit.models import AuditLog
 from app.integrations.brasilapi.client import BrasilAPIClient
 from app.integrations.directdata.client import DirectDataClient
 from app.integrations.viacep.client import ViaCEPClient
@@ -346,7 +349,11 @@ def _override_directdata():
 
 
 @pytest.mark.asyncio
-async def test_dossie_cep_ok(api_client: AsyncClient, db_session: AsyncSession) -> None:
+async def test_dossie_cep_ok(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    auth_headers: dict[str, str],
+) -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -361,7 +368,9 @@ async def test_dossie_cep_ok(api_client: AsyncClient, db_session: AsyncSession) 
 
     app.dependency_overrides[_get_viacep] = _override_viacep(handler)
     try:
-        r = await api_client.get("/api/v1/dp-sesmt/dossie/cep/01310100")
+        r = await api_client.get(
+            "/api/v1/dp-sesmt/dossie/cep/01310100", headers=auth_headers
+        )
         assert r.status_code == 200
         body = r.json()
         assert body["cidade"] == "Sao Paulo"
@@ -377,20 +386,28 @@ async def test_dossie_cep_ok(api_client: AsyncClient, db_session: AsyncSession) 
 
 
 @pytest.mark.asyncio
-async def test_dossie_cep_404(api_client: AsyncClient) -> None:
+async def test_dossie_cep_404(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"erro": True})
 
     app.dependency_overrides[_get_viacep] = _override_viacep(handler)
     try:
-        r = await api_client.get("/api/v1/dp-sesmt/dossie/cep/99999999")
+        r = await api_client.get(
+            "/api/v1/dp-sesmt/dossie/cep/99999999", headers=auth_headers
+        )
         assert r.status_code == 404
     finally:
         app.dependency_overrides.pop(_get_viacep, None)
 
 
 @pytest.mark.asyncio
-async def test_dossie_cnpj_ok(api_client: AsyncClient) -> None:
+async def test_dossie_cnpj_ok(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    auth_headers: dict[str, str],
+) -> None:
     def handler(req: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,
@@ -403,18 +420,35 @@ async def test_dossie_cnpj_ok(api_client: AsyncClient) -> None:
 
     app.dependency_overrides[_get_brasilapi] = _override_brasilapi(handler)
     try:
-        r = await api_client.get("/api/v1/dp-sesmt/dossie/cnpj/00000000000191")
+        r = await api_client.get(
+            "/api/v1/dp-sesmt/dossie/cnpj/00000000000191", headers=auth_headers
+        )
         assert r.status_code == 200
         assert r.json()["razao_social"] == "Banco do Brasil"
     finally:
         app.dependency_overrides.pop(_get_brasilapi, None)
 
+    # CNPJ e publico: sem justificativa, mas o actor vai para o audit.
+    audits = await _audits_dossie(db_session)
+    assert len(audits) == 1
+    assert audits[0].action == "consulta_cnpj"
+    assert audits[0].actor == _ADMIN_EMAIL
+    meta = json.loads(audits[0].metadata_json)
+    assert meta["cnpj"] == "00000000000191"
+    assert "justificativa" not in meta
+
 
 @pytest.mark.asyncio
-async def test_dossie_cpf_modo_mock(api_client: AsyncClient) -> None:
+async def test_dossie_cpf_modo_mock(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
     app.dependency_overrides[_get_directdata] = _override_directdata()
     try:
-        r = await api_client.get(f"/api/v1/dp-sesmt/dossie/cpf/{VALID_CPF_1}")
+        r = await api_client.get(
+            f"/api/v1/dp-sesmt/dossie/cpf/{VALID_CPF_1}",
+            params={"justificativa": _JUSTIFICATIVA},
+            headers=auth_headers,
+        )
         assert r.status_code == 200
         body = r.json()
         assert body["source"] == "directdata_mock"
@@ -424,13 +458,176 @@ async def test_dossie_cpf_modo_mock(api_client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_dossie_cpf_invalido_400(api_client: AsyncClient) -> None:
+async def test_dossie_cpf_invalido_400(
+    api_client: AsyncClient, auth_headers: dict[str, str]
+) -> None:
     app.dependency_overrides[_get_directdata] = _override_directdata()
     try:
-        r = await api_client.get("/api/v1/dp-sesmt/dossie/cpf/12345678901")
+        r = await api_client.get(
+            "/api/v1/dp-sesmt/dossie/cpf/12345678901",
+            params={"justificativa": _JUSTIFICATIVA},
+            headers=auth_headers,
+        )
         assert r.status_code == 400
     finally:
         app.dependency_overrides.pop(_get_directdata, None)
+
+
+# --- LGPD: audit + justificativa do dossie ----------------------------------
+
+_JUSTIFICATIVA = "Conferencia de dados na admissao do funcionario"
+
+
+# Mesmo admin criado pela fixture `auth_headers` (conftest).
+_ADMIN_EMAIL = "test-admin@primor.com"
+
+
+async def _audits_dossie(db: AsyncSession) -> list[AuditLog]:
+    from sqlalchemy import select
+
+    return list(
+        (
+            await db.execute(
+                select(AuditLog)
+                .where(AuditLog.resource == "dp_sesmt.dossie")
+                .order_by(AuditLog.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
+
+@pytest.mark.asyncio
+async def test_dossie_exige_auth(api_client: AsyncClient) -> None:
+    for path in (
+        "/api/v1/dp-sesmt/dossie/cep/01310100",
+        "/api/v1/dp-sesmt/dossie/cnpj/00000000000191",
+        f"/api/v1/dp-sesmt/dossie/cpf/{VALID_CPF_1}?justificativa=x",
+    ):
+        r = await api_client.get(path)
+        assert r.status_code == 401, path
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("justificativa", [None, "", "          ", "curta"])
+async def test_dossie_cpf_sem_justificativa_422(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    auth_headers: dict[str, str],
+    justificativa: str | None,
+) -> None:
+    app.dependency_overrides[_get_directdata] = _override_directdata()
+    try:
+        params = {} if justificativa is None else {"justificativa": justificativa}
+        r = await api_client.get(
+            f"/api/v1/dp-sesmt/dossie/cpf/{VALID_CPF_1}",
+            params=params,
+            headers=auth_headers,
+        )
+        assert r.status_code == 422, r.text
+    finally:
+        app.dependency_overrides.pop(_get_directdata, None)
+    # Consulta nem chegou ao provedor: nada logado.
+    assert await _audits_dossie(db_session) == []
+
+
+@pytest.mark.asyncio
+async def test_dossie_cpf_grava_audit_com_actor_justificativa_e_cpf_mascarado(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    auth_headers: dict[str, str],
+) -> None:
+    app.dependency_overrides[_get_directdata] = _override_directdata()
+    try:
+        r = await api_client.get(
+            f"/api/v1/dp-sesmt/dossie/cpf/{VALID_CPF_1}",
+            params={"justificativa": f"  {_JUSTIFICATIVA}  ", "employee_id": 42},
+            headers=auth_headers,
+        )
+        assert r.status_code == 200, r.text
+    finally:
+        app.dependency_overrides.pop(_get_directdata, None)
+
+    audits = await _audits_dossie(db_session)
+    assert len(audits) == 1
+    audit = audits[0]
+    assert audit.action == "consulta_cpf"
+    assert audit.actor == _ADMIN_EMAIL
+    assert audit.resource_id == "42"
+    meta = json.loads(audit.metadata_json)
+    assert meta["justificativa"] == _JUSTIFICATIVA
+    assert meta["cpf"] == "***.444.777-**"
+    assert meta["sucesso"] is True
+    assert meta["employee_id"] == 42
+    # CPF nunca em claro no audit (nem formatado).
+    assert VALID_CPF_1 not in audit.metadata_json
+    assert "111.444.777-35" not in audit.metadata_json
+
+
+@pytest.mark.asyncio
+async def test_dossie_cpf_invalido_tambem_e_auditado(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    auth_headers: dict[str, str],
+) -> None:
+    app.dependency_overrides[_get_directdata] = _override_directdata()
+    try:
+        r = await api_client.get(
+            "/api/v1/dp-sesmt/dossie/cpf/12345678901",
+            params={"justificativa": _JUSTIFICATIVA},
+            headers=auth_headers,
+        )
+        assert r.status_code == 400
+    finally:
+        app.dependency_overrides.pop(_get_directdata, None)
+    audits = await _audits_dossie(db_session)
+    assert len(audits) == 1
+    meta = json.loads(audits[0].metadata_json)
+    assert meta["sucesso"] is False
+    assert meta["cpf"] == "***.456.789-**"
+    assert "12345678901" not in audits[0].metadata_json
+
+
+@pytest.mark.asyncio
+async def test_dossie_cep_audita_actor_e_justificativa_opcional(
+    api_client: AsyncClient,
+    db_session: AsyncSession,
+    auth_headers: dict[str, str],
+) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200, json={"cep": "01310-100", "localidade": "Sao Paulo", "uf": "SP"}
+        )
+
+    app.dependency_overrides[_get_viacep] = _override_viacep(handler)
+    try:
+        r1 = await api_client.get(
+            "/api/v1/dp-sesmt/dossie/cep/01310100", headers=auth_headers
+        )
+        r2 = await api_client.get(
+            "/api/v1/dp-sesmt/dossie/cep/01310100",
+            params={"justificativa": "Endereco para ficha de registro"},
+            headers=auth_headers,
+        )
+        assert r1.status_code == 200 and r2.status_code == 200
+    finally:
+        app.dependency_overrides.pop(_get_viacep, None)
+
+    audits = await _audits_dossie(db_session)
+    assert [a.action for a in audits] == ["consulta_cep", "consulta_cep"]
+    assert all(a.actor == _ADMIN_EMAIL for a in audits)
+    m1, m2 = (json.loads(a.metadata_json) for a in audits)
+    assert m1["cep"] == "01310100" and "justificativa" not in m1
+    assert m2["justificativa"] == "Endereco para ficha de registro"
+
+
+def test_mask_cpf() -> None:
+    from app.core.cpf import mask_cpf
+
+    assert mask_cpf("111.444.777-35") == "***.444.777-**"
+    assert mask_cpf("123") == "***"
+    assert mask_cpf("") == "***"
 
 
 # --- Regressões de bugs flagados em review ----------------------------------

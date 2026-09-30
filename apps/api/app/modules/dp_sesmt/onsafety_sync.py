@@ -26,7 +26,13 @@ Regras de protecao:
   Dado manual mais novo nao e sobrescrito por pull atrasado.
 - **LGPD**: cada funcionario tocado ganha uma row em
   `dp_dossie_consultas` (fonte `onsafety_aso`/`onsafety_epi`) -- ASO e
-  dado de saude. Resumo do run vai para `audit_log`.
+  dado de saude. Resumo do run vai para `audit_log` e, alem dele, uma
+  row por registro que MUDOU de fato (`_AuditBuffer`): ASO do
+  funcionario (`dp_sesmt.employee`, action `update`) e documento
+  EPI/NR (`dp_sesmt.employee_document`, `create`/`update`), com so os
+  campos alterados em `{"changed": {campo: {"from", "to"}}}`. Re-run
+  com o mesmo dado nao gera row nenhuma. As rows vao num unico
+  `add_all` antes do commit de cada etapa (mesma transacao do dado).
 - Erros de upstream (OnsafetyError) NAO propagam: o summary volta com
   `error` preenchido e o que ja foi processado fica commitado.
 """
@@ -35,7 +41,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import date, timedelta
 from typing import Any
 
@@ -63,6 +69,11 @@ from app.modules.obras.models import Obra
 logger = logging.getLogger(__name__)
 
 _AUDIT_RESOURCE = "dp_sesmt.onsafety_pull"
+# Rows por registro usam o MESMO resource das mutacoes manuais, para a
+# trilha de um funcionario/documento ficar completa numa unica consulta.
+_AUDIT_RESOURCE_EMPLOYEE = "dp_sesmt.employee"
+_AUDIT_RESOURCE_DOCUMENT = "dp_sesmt.employee_document"
+_ASO_CAMPOS = ("aso_data", "aso_validade", "aso_resultado")
 _PAGE_SIZE = 200
 
 # `resultadoAso` e int32 SEM enum nem description no spec OpenAPI.
@@ -136,6 +147,8 @@ class PullSummary:
     datas_invalidas: int = 0
     error: str | None = None
     consultas_logadas: int = 0
+    # rows de audit por registro alterado (ASO/documento) neste run
+    audit_registros: int = 0
 
 
 def _parse_date(value: Any) -> date | None:
@@ -196,6 +209,146 @@ async def _log_consulta(
         )
     )
     return True
+
+
+@dataclass
+class _AuditPendente:
+    resource: str
+    action: str
+    alvo: Any  # Employee | EmployeeDocument (id resolvido no flush)
+    changed: dict[str, dict[str, Any]]
+    extra: dict[str, Any]
+
+
+@dataclass
+class _AuditBuffer:
+    """Acumula rows de audit por registro e grava todas de uma vez.
+
+    Chaveado por (resource, id do objeto Python): se o mesmo funcionario
+    recebe dois ASOs no mesmo run, as mudancas sao mescladas (primeiro
+    `from`, ultimo `to`) e campos que voltaram ao valor original saem.
+    """
+
+    actor: str = _AUDIT_ACTOR_SYSTEM
+    pendentes: dict[tuple[str, int], _AuditPendente] = field(
+        default_factory=dict
+    )
+
+    def registrar(
+        self,
+        *,
+        resource: str,
+        action: str,
+        alvo: Any,
+        changed: dict[str, dict[str, Any]],
+        extra: dict[str, Any] | None = None,
+    ) -> None:
+        if not changed:
+            return
+        key = (resource, id(alvo))
+        atual = self.pendentes.get(key)
+        if atual is None:
+            self.pendentes[key] = _AuditPendente(
+                resource=resource,
+                action=action,
+                alvo=alvo,
+                changed=dict(changed),
+                extra=dict(extra or {}),
+            )
+            return
+        for campo, diff in changed.items():
+            if campo in atual.changed:
+                atual.changed[campo]["to"] = diff["to"]
+            else:
+                atual.changed[campo] = dict(diff)
+
+    async def flush(self, db: AsyncSession) -> int:
+        """Materializa as rows pendentes (um flush p/ ids + um add_all).
+        Nao commita -- o caller commita junto com o dado."""
+        if not self.pendentes:
+            return 0
+        await db.flush()  # ids de documentos recem-criados
+        rows = []
+        for p in self.pendentes.values():
+            changed = {
+                k: v for k, v in p.changed.items() if v["from"] != v["to"]
+            }
+            if not changed:
+                continue
+            rows.append(
+                AuditLog(
+                    actor=self.actor,
+                    action=p.action,
+                    resource=p.resource,
+                    resource_id=str(p.alvo.id),
+                    metadata_json=json.dumps(
+                        {"source": "onsafety", **p.extra, "changed": changed},
+                        default=str,
+                    ),
+                )
+            )
+        db.add_all(rows)
+        self.pendentes.clear()
+        return len(rows)
+
+
+def _diff(obj: Any, fields: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Campos de `fields` cujo valor difere do atual em `obj`."""
+    return {
+        k: {"from": getattr(obj, k, None), "to": v}
+        for k, v in fields.items()
+        if getattr(obj, k, None) != v
+    }
+
+
+def _aplicar_documento(
+    indices: _Indices,
+    db: AsyncSession,
+    audit: _AuditBuffer,
+    external_id: str,
+    fields: dict[str, Any],
+) -> bool:
+    """Cria ou atualiza o doc espelho da OnSafety. Devolve True se criou.
+
+    Atualiza so os campos que mudaram e audita so esses -- re-pull do
+    mesmo dado nao toca a row nem gera audit.
+    """
+    doc = indices.docs.get(external_id)
+    extra = {
+        "onsafety_external_id": external_id,
+        "employee_id": fields.get("employee_id"),
+        "tipo": fields.get("tipo"),
+    }
+    if doc is None:
+        novo = EmployeeDocument(**fields)
+        db.add(novo)
+        indices.docs[external_id] = novo
+        audit.registrar(
+            resource=_AUDIT_RESOURCE_DOCUMENT,
+            action="create",
+            alvo=novo,
+            changed={
+                k: {"from": None, "to": v}
+                for k, v in fields.items()
+                if v is not None
+            },
+            extra=extra,
+        )
+        return True
+    # Docs do sync sao espelho da OnSafety -- atualizamos in place (rows
+    # manuais, source="manual", nunca sao tocadas porque nao tem
+    # onsafety_external_id).
+    changed = _diff(doc, fields)
+    for k in changed:
+        setattr(doc, k, fields[k])
+    audit.registrar(
+        resource=_AUDIT_RESOURCE_DOCUMENT,
+        action="update",
+        alvo=doc,
+        changed=changed,
+        extra=extra,
+    )
+    return False
 
 
 @dataclass
@@ -307,7 +460,9 @@ async def pull_asos(
     summary: PullSummary,
     ja_logados: set[tuple[int, str]],
     indices: _Indices,
+    audit: _AuditBuffer | None = None,
 ) -> None:
+    audit = audit if audit is not None else _AuditBuffer()
     exames = await _iter_paginado(client.list_exames_ocupacionais)
     summary.exames_total = len(exames)
     for exame in exames:
@@ -343,12 +498,24 @@ async def pull_asos(
             summary.aso_resultado_desconhecido += 1
             resultado = str(resultado_raw)[:16]
 
-        employee.aso_data = data_aso
-        employee.aso_validade = _parse_date_counted(
-            exame.get("data_vencimento_aso"), summary
+        novos = {
+            "aso_data": data_aso,
+            "aso_validade": _parse_date_counted(
+                exame.get("data_vencimento_aso"), summary
+            ),
+            "aso_resultado": resultado,
+        }
+        changed = _diff(employee, novos)
+        for campo in _ASO_CAMPOS:
+            setattr(employee, campo, novos[campo])
+        audit.registrar(
+            resource=_AUDIT_RESOURCE_EMPLOYEE,
+            action="update",
+            alvo=employee,
+            changed=changed,
         )
-        employee.aso_resultado = resultado
         summary.aso_updated += 1
+    summary.audit_registros += await audit.flush(db)
     await db.commit()
 
 
@@ -358,7 +525,9 @@ async def pull_epis(
     summary: PullSummary,
     ja_logados: set[tuple[int, str]],
     indices: _Indices,
+    audit: _AuditBuffer | None = None,
 ) -> None:
+    audit = audit if audit is not None else _AuditBuffer()
     controles = await _iter_paginado(client.list_controles_epi)
     summary.epis_total = len(controles)
     for controle in controles:
@@ -379,7 +548,6 @@ async def pull_epis(
             summary.consultas_logadas += 1
 
         external_id = str(controle.get("id"))
-        doc = indices.docs.get(external_id)
 
         ca = controle.get("ca")
         quantidade = controle.get("quantidade")
@@ -404,18 +572,11 @@ async def pull_epis(
                 indices, controle.get("projeto"), summary
             ),
         }
-        if doc is None:
-            novo = EmployeeDocument(**fields)
-            db.add(novo)
-            indices.docs[external_id] = novo
+        if _aplicar_documento(indices, db, audit, external_id, fields):
             summary.epis_created += 1
         else:
-            # Docs do sync sao espelho da OnSafety -- atualizamos in
-            # place (rows manuais, source="manual", nunca sao tocadas
-            # porque nao tem onsafety_external_id).
-            for k, v in fields.items():
-                setattr(doc, k, v)
             summary.epis_updated += 1
+    summary.audit_registros += await audit.flush(db)
     await db.commit()
 
 
@@ -425,6 +586,7 @@ async def pull_treinamentos(
     summary: PullSummary,
     ja_logados: set[tuple[int, str]],
     indices: _Indices,
+    audit: _AuditBuffer | None = None,
 ) -> None:
     """Treinamentos de NR -> documentos `NR06`/`NR10`/`NR12`/`NR18`/`NR35`.
 
@@ -449,6 +611,7 @@ async def pull_treinamentos(
     comprovante sem ser marcada como obrigatoria para todos; aplicabilidade
     precisa seguir a matriz SST por funcao/atividade.
     """
+    audit = audit if audit is not None else _AuditBuffer()
     treinos = await _iter_paginado(client.list_treinamentos_realizados)
     summary.treinos_total = len(treinos)
     for treino in treinos:
@@ -490,7 +653,6 @@ async def pull_treinamentos(
                 tipo_documento = DOC_EMP_TREINAMENTO_SST
 
             external_id = str(participante.get("id"))
-            doc = indices.docs.get(external_id)
             certificado = participante.get("certificado_id")
             fields = {
                 "employee_id": employee.id,
@@ -507,15 +669,11 @@ async def pull_treinamentos(
                 "onsafety_external_id": external_id,
                 "obra_id": obra_id,
             }
-            if doc is None:
-                novo_doc = EmployeeDocument(**fields)
-                db.add(novo_doc)
-                indices.docs[external_id] = novo_doc
+            if _aplicar_documento(indices, db, audit, external_id, fields):
                 summary.treinos_created += 1
             else:
-                for k, v in fields.items():
-                    setattr(doc, k, v)
                 summary.treinos_updated += 1
+    summary.audit_registros += await audit.flush(db)
     await db.commit()
 
 
@@ -647,14 +805,19 @@ async def pull_onsafety(
     summary = PullSummary()
     ja_logados: set[tuple[int, str]] = set()
     indices = await carregar_indices(db)
+    audit = _AuditBuffer(actor=actor)
     try:
-        await pull_asos(db, client, summary, ja_logados, indices)
-        await pull_epis(db, client, summary, ja_logados, indices)
-        await pull_treinamentos(db, client, summary, ja_logados, indices)
+        await pull_asos(db, client, summary, ja_logados, indices, audit)
+        await pull_epis(db, client, summary, ja_logados, indices, audit)
+        await pull_treinamentos(
+            db, client, summary, ja_logados, indices, audit
+        )
     except OnsafetyError as exc:
         logger.warning("pull onsafety interrompido: %s", exc)
         summary.error = str(exc)[:500]
-        await db.commit()  # preserva o que ja foi processado
+        # preserva o que ja foi processado -- e o audit do que mudou
+        summary.audit_registros += await audit.flush(db)
+        await db.commit()
 
     db.add(
         AuditLog(

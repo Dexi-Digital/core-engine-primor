@@ -28,7 +28,7 @@ from app.integrations.viacep.client import (
     ViaCEPError,
     ViaCEPNotFoundError,
 )
-from app.modules.dp_sesmt.cpf import is_valid_cpf, normalize_cpf
+from app.modules.dp_sesmt.cpf import is_valid_cpf, mask_cpf, normalize_cpf
 from app.modules.dp_sesmt.models import (
     DossieConsultaLog,
     Employee,
@@ -279,6 +279,8 @@ async def delete_employee(
 
 # --- Dossie helpers ---------------------------------------------------------
 
+_AUDIT_RESOURCE_DOSSIE = "dp_sesmt.dossie"
+
 
 async def _log_consulta(
     db: AsyncSession,
@@ -288,9 +290,29 @@ async def _log_consulta(
     sucesso: bool,
     error: str | None = None,
     employee_id: int | None = None,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
+    action: str,
+    chave_audit: dict[str, Any],
+    justificativa: str | None = None,
 ) -> None:
     """LGPD: registra toda consulta a API externa que envolva dado
-    pessoal/empresarial. Falhar ao gravar log nao bloqueia a consulta."""
+    pessoal/empresarial em `dp_dossie_consultas` E em `audit_log`
+    (quem consultou, o que, por que). Mesmo commit -- as duas trilhas
+    nao divergem. Falhar ao gravar log nao bloqueia a consulta.
+
+    `chave_audit` e o que vai para o metadata do audit: o caller e
+    responsavel por mascarar dado pessoal (CPF nunca entra em claro).
+    """
+    metadata: dict[str, Any] = {
+        "fonte": fonte,
+        **chave_audit,
+        "employee_id": employee_id,
+        "sucesso": sucesso,
+    }
+    if justificativa:
+        metadata["justificativa"] = justificativa
+    if not sucesso and error:
+        metadata["error"] = error[:500]
     try:
         db.add(
             DossieConsultaLog(
@@ -299,6 +321,15 @@ async def _log_consulta(
                 chave_consulta=chave,
                 sucesso=sucesso,
                 error_message=(error or None) if not sucesso else None,
+            )
+        )
+        db.add(
+            AuditLog(
+                actor=actor,
+                action=action,
+                resource=_AUDIT_RESOURCE_DOSSIE,
+                resource_id=str(employee_id) if employee_id is not None else None,
+                metadata_json=json.dumps(metadata, default=str),
             )
         )
         await db.commit()
@@ -313,27 +344,26 @@ async def lookup_cep(
     *,
     viacep: ViaCEPClient,
     employee_id: int | None = None,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
+    justificativa: str | None = None,
 ) -> dict[str, Any]:
-    """Consulta CEP no ViaCEP, registrando log."""
+    """Consulta CEP no ViaCEP, registrando log. CEP e dado publico:
+    justificativa opcional, mas o actor sempre vai para o audit."""
+    log = {
+        "fonte": "viacep",
+        "chave": cep,
+        "employee_id": employee_id,
+        "actor": actor,
+        "action": "consulta_cep",
+        "chave_audit": {"cep": cep},
+        "justificativa": justificativa,
+    }
     try:
         result = await viacep.get_endereco(cep)
-        await _log_consulta(
-            db,
-            fonte="viacep",
-            chave=cep,
-            sucesso=True,
-            employee_id=employee_id,
-        )
+        await _log_consulta(db, sucesso=True, **log)
         return result
     except (ViaCEPNotFoundError, ViaCEPError, ValueError) as exc:
-        await _log_consulta(
-            db,
-            fonte="viacep",
-            chave=cep,
-            sucesso=False,
-            error=str(exc),
-            employee_id=employee_id,
-        )
+        await _log_consulta(db, sucesso=False, error=str(exc), **log)
         raise
 
 
@@ -343,26 +373,25 @@ async def lookup_cnpj(
     *,
     brasilapi: BrasilAPIClient,
     employee_id: int | None = None,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
+    justificativa: str | None = None,
 ) -> dict[str, Any]:
+    """CNPJ e dado publico: justificativa opcional, actor sempre auditado."""
+    log = {
+        "fonte": "brasilapi_cnpj",
+        "chave": cnpj,
+        "employee_id": employee_id,
+        "actor": actor,
+        "action": "consulta_cnpj",
+        "chave_audit": {"cnpj": cnpj},
+        "justificativa": justificativa,
+    }
     try:
         result = await brasilapi.get_cnpj(cnpj)
-        await _log_consulta(
-            db,
-            fonte="brasilapi_cnpj",
-            chave=cnpj,
-            sucesso=True,
-            employee_id=employee_id,
-        )
+        await _log_consulta(db, sucesso=True, **log)
         return result
     except (BrasilAPINotFoundError, BrasilAPIError, ValueError) as exc:
-        await _log_consulta(
-            db,
-            fonte="brasilapi_cnpj",
-            chave=cnpj,
-            sucesso=False,
-            error=str(exc),
-            employee_id=employee_id,
-        )
+        await _log_consulta(db, sucesso=False, error=str(exc), **log)
         raise
 
 
@@ -371,36 +400,41 @@ async def lookup_cpf(
     cpf: str,
     *,
     directdata: DirectDataClient,
+    justificativa: str,
     employee_id: int | None = None,
+    actor: str = _AUDIT_ACTOR_PLACEHOLDER,
 ) -> dict[str, Any]:
+    """Consulta CPF (dado pessoal). `justificativa` e obrigatoria
+    (docs/lgpd.md) e vai para o audit junto com o CPF mascarado."""
+    justificativa = (justificativa or "").strip()
+    if not justificativa:
+        raise ValueError("justificativa obrigatoria para consulta de CPF")
     cpf_norm = normalize_cpf(cpf)
+    log = {
+        "chave": cpf_norm,
+        "employee_id": employee_id,
+        "actor": actor,
+        "action": "consulta_cpf",
+        "chave_audit": {"cpf": mask_cpf(cpf_norm)},
+        "justificativa": justificativa,
+    }
     if not is_valid_cpf(cpf_norm):
         await _log_consulta(
             db,
             fonte="directdata",
-            chave=cpf_norm,
             sucesso=False,
             error="CPF invalido (digitos verificadores)",
-            employee_id=employee_id,
+            **log,
         )
         raise ValueError("CPF invalido")
     try:
         result = await directdata.consultar_cpf(cpf_norm)
         await _log_consulta(
-            db,
-            fonte=result.get("source", "directdata"),
-            chave=cpf_norm,
-            sucesso=True,
-            employee_id=employee_id,
+            db, fonte=result.get("source", "directdata"), sucesso=True, **log
         )
         return result
     except (DirectDataError, ValueError) as exc:
         await _log_consulta(
-            db,
-            fonte="directdata",
-            chave=cpf_norm,
-            sucesso=False,
-            error=str(exc),
-            employee_id=employee_id,
+            db, fonte="directdata", sucesso=False, error=str(exc), **log
         )
         raise
