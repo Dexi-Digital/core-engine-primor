@@ -33,6 +33,7 @@ from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.dp_sesmt import admissao as admissao_svc
 from app.modules.dp_sesmt import afastamentos as afastamentos_svc
+from app.modules.dp_sesmt import experiencia as experiencia_svc
 from app.modules.dp_sesmt import onboarding as onboarding_svc
 from app.modules.dp_sesmt import service
 from app.modules.dp_sesmt.afastamentos import (
@@ -63,6 +64,7 @@ from app.modules.dp_sesmt.schemas import (
     EmployeeUpdate,
     ModuleStatus,
     OnboardingSyncRead,
+    PrazoExperienciaRead,
 )
 
 logger = logging.getLogger(__name__)
@@ -201,6 +203,63 @@ async def dispatch_aso_alerts_endpoint(
         summary = await dispatch_aso_alerts(db, resend, recipients=recipients)
     finally:
         await resend.aclose()
+    return {
+        "total_employees": summary.total_employees,
+        "sent": summary.sent,
+        "skipped": summary.skipped,
+        "failed": summary.failed,
+    }
+
+
+# --- contrato de experiencia (demanda #2) -----------------------------------
+
+
+@router.get(
+    "/experiencia/prazos", response_model=list[PrazoExperienciaRead]
+)
+async def list_prazos_experiencia_endpoint(
+    horizonte_dias: int | None = Query(
+        None,
+        ge=0,
+        le=90,
+        description="So marcos em ate N dias. Vazio = todos em experiencia.",
+    ),
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> list[PrazoExperienciaRead]:
+    """Proximos marcos de contrato de experiencia (prorrogacao/efetivacao).
+
+    Regra e premissas (45+45 quando nao informado) em
+    `app/modules/dp_sesmt/experiencia.py`.
+    """
+    prazos = await experiencia_svc.list_prazos_experiencia(
+        db, horizonte_dias=horizonte_dias
+    )
+    return [PrazoExperienciaRead.model_validate(p) for p in prazos]
+
+
+@router.post("/experiencia/alerts/dispatch", response_model=dict)
+async def dispatch_experiencia_alerts_endpoint(
+    recipients: list[str] | None = None,
+    db: AsyncSession = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> dict:
+    """Dispara manualmente o cron de alertas de experiencia (in-app).
+
+    Sem `recipients`, usa `EXPERIENCIA_ALERT_EMAILS` (fallback
+    `ASO_ALERT_EMAILS`). Idempotente: repetir no mesmo dia nao duplica.
+    """
+    if not recipients:
+        recipients = experiencia_svc.recipients_from_env()
+    if not recipients:
+        raise HTTPException(
+            422,
+            "Nenhum destinatario informado e EXPERIENCIA_ALERT_EMAILS / "
+            "ASO_ALERT_EMAILS vazias",
+        )
+    summary = await experiencia_svc.dispatch_experiencia_alerts(
+        db, recipients=recipients
+    )
     return {
         "total_employees": summary.total_employees,
         "sent": summary.sent,

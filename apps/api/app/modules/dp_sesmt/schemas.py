@@ -432,3 +432,32 @@ class AdmissaoLoteSummary(BaseModel):
     incluidas: int
     ignoradas: list[dict] = Field(default_factory=list)
     kit_path: str | None = None
+
+
+# --- Contrato de experiencia (demanda #2) ----------------------------------
+
+
+class PrazoExperienciaRead(BaseModel):
+    """Proximo marco do contrato de experiencia de um funcionario.
+
+    `periodos_assumidos=True` quando o cadastro nao informa a divisao e
+    a API assumiu 45+45 (premissa a confirmar com o cliente).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    employee_id: int
+    nome_completo: str
+    cargo: str | None
+    obra: str | None
+    tipo_contrato: str | None
+    data_admissao: date
+    primeiro_periodo_dias: int
+    segundo_periodo_dias: int
+    periodos_assumidos: bool
+    fim_primeiro_periodo: date
+    fim_experiencia: date
+    origem: str
+    proximo_marco: str | None
+    data_proximo_marco: date | None
+    dias_restantes: int | None

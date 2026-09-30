@@ -60,6 +60,66 @@ type OneDriveSyncRun = {
   summary_json: { errors?: Array<{ path: string; reason: string }> } | null;
 };
 
+// Relatorio de % de atendimento (demanda #1). Regra na API:
+// (ok + vencendo) / total exigido -- vencendo atende mas esta em alerta.
+type AtendimentoContagem = {
+  total: number;
+  ok: number;
+  vencendo: number;
+  vencido: number;
+  ausente: number;
+  atendidos: number;
+  pendentes: number;
+  pct_atendimento: number | null;
+  pct_em_dia: number | null;
+};
+
+type AtendimentoReport = {
+  run_id: number;
+  criterio: string;
+  geral: AtendimentoContagem;
+  por_area: Array<AtendimentoContagem & { area: string }>;
+  por_tipo_entidade: Array<AtendimentoContagem & { entity_type: string }>;
+  por_entidade: Array<
+    AtendimentoContagem & {
+      entity_type: string;
+      entity_id: number | null;
+      entity_label: string;
+      areas: string[];
+    }
+  >;
+};
+
+const ENTITY_LABELS: Record<string, string> = {
+  employee: "Funcionários",
+  veiculo: "Veículos",
+  obra: "Obras",
+  empresa: "Empresas (CNPJ)",
+};
+
+const ENTIDADES_NA_TELA = 15;
+
+function fmtPct(v: number | null): string {
+  return v === null ? "—" : `${v.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}%`;
+}
+
+function pctTone(v: number | null): string {
+  if (v === null) return "text-slate-500";
+  if (v >= 90) return "text-emerald-700";
+  if (v >= 70) return "text-amber-700";
+  return "text-red-700";
+}
+
+async function fetchAtendimento(runId: number): Promise<AtendimentoReport | null> {
+  try {
+    return await apiFetch<AtendimentoReport>(
+      `/api/v1/diagnostico/runs/${runId}/atendimento`,
+    );
+  } catch {
+    return null;
+  }
+}
+
 async function fetchRuns(): Promise<DiagnosticoRun[]> {
   try {
     return await apiFetch<DiagnosticoRun[]>("/api/v1/diagnostico/runs?limit=20");
@@ -144,6 +204,10 @@ export default async function DiagnosticoPage(props: {
   ]);
   const lastRun = runs[0];
   const lastOneDriveRun = oneDriveRuns[0];
+  const atendimento =
+    lastRun && lastRun.status === "done"
+      ? await fetchAtendimento(lastRun.id)
+      : null;
 
   return (
     <div className="flex flex-col gap-8">
@@ -156,7 +220,7 @@ export default async function DiagnosticoPage(props: {
       {okAcao && lastRun && (
         <div className="rounded-lg border border-emerald-300 bg-emerald-50 p-4 text-sm text-emerald-900">
           Diagnóstico executado às {formatDateTime(lastRun.finished_at ?? lastRun.started_at)} —{" "}
-          {lastRun.total_findings} verificação(ões), {pctConformidade(lastRun)}% em conformidade.
+          {lastRun.total_findings} verificação(ões), {pctConformidade(lastRun)}% em dia.
         </div>
       )}
       {versao && versao.em_sincronia === false ? (
@@ -226,7 +290,7 @@ export default async function DiagnosticoPage(props: {
         <section className="rounded-lg border border-slate-200 bg-white p-6">
           <header className="mb-4 flex items-baseline justify-between">
             <h2 className="text-lg font-semibold">
-              Run #{lastRun.id} — {pctConformidade(lastRun)}% conformidade
+              Run #{lastRun.id} — {pctConformidade(lastRun)}% em dia
             </h2>
             <span className="text-xs text-slate-500">
               {formatDateTime(lastRun.started_at)} ·{" "}
@@ -270,7 +334,7 @@ export default async function DiagnosticoPage(props: {
                   <th className="py-2 text-right">Vencendo</th>
                   <th className="py-2 text-right">Vencido</th>
                   <th className="py-2 text-right">Ausente</th>
-                  <th className="py-2 text-right">% conf.</th>
+                  <th className="py-2 text-right">% em dia</th>
                 </tr>
               </thead>
               <tbody>
@@ -316,6 +380,133 @@ export default async function DiagnosticoPage(props: {
               Exportar CSV
             </a>
           </div>
+        </section>
+      )}
+
+      {lastRun && atendimento && (
+        <section
+          className="rounded-lg border border-slate-200 bg-white p-6"
+          data-testid="atendimento-card"
+        >
+          <header className="mb-4 flex items-baseline justify-between gap-4">
+            <div>
+              <h2 className="text-lg font-semibold">
+                Atendimento documental — {fmtPct(atendimento.geral.pct_atendimento)}
+              </h2>
+              <p className="mt-1 text-xs text-slate-600">
+                % de documentos exigidos que estão válidos hoje (run #
+                {atendimento.run_id}). <strong>Vencendo</strong> conta como
+                atendido, mas em alerta; <strong>vencido</strong> e{" "}
+                <strong>ausente</strong> não atendem. &quot;% em dia&quot;
+                desconsidera também os que estão vencendo.
+              </p>
+            </div>
+            <a
+              href={`/api/v1/diagnostico/runs/${atendimento.run_id}/atendimento.csv`}
+              className="shrink-0 rounded-md border border-slate-300 px-3 py-1.5 text-sm hover:bg-slate-50"
+            >
+              Exportar relatório (CSV)
+            </a>
+          </header>
+
+          <div className="grid gap-6 lg:grid-cols-2">
+            <table className="w-full text-sm">
+              <thead className="border-b border-slate-200 text-left text-xs uppercase tracking-wider text-slate-500">
+                <tr>
+                  <th className="py-2">Área / perfil</th>
+                  <th className="py-2 text-right">Exigidos</th>
+                  <th className="py-2 text-right">Atendidos</th>
+                  <th className="py-2 text-right">% atend.</th>
+                  <th className="py-2 text-right">% em dia</th>
+                </tr>
+              </thead>
+              <tbody>
+                {atendimento.por_area.map((a) => (
+                  <tr key={a.area} className="border-b border-slate-100">
+                    <td className="py-2 font-medium">{AREA_LABELS[a.area] ?? a.area}</td>
+                    <td className="py-2 text-right">{a.total}</td>
+                    <td className="py-2 text-right">{a.atendidos}</td>
+                    <td className={`py-2 text-right font-semibold ${pctTone(a.pct_atendimento)}`}>
+                      {fmtPct(a.pct_atendimento)}
+                    </td>
+                    <td className="py-2 text-right text-slate-600">{fmtPct(a.pct_em_dia)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <table className="w-full text-sm">
+              <thead className="border-b border-slate-200 text-left text-xs uppercase tracking-wider text-slate-500">
+                <tr>
+                  <th className="py-2">Tipo de entidade</th>
+                  <th className="py-2 text-right">Exigidos</th>
+                  <th className="py-2 text-right">Atendidos</th>
+                  <th className="py-2 text-right">% atend.</th>
+                  <th className="py-2 text-right">% em dia</th>
+                </tr>
+              </thead>
+              <tbody>
+                {atendimento.por_tipo_entidade.map((t) => (
+                  <tr key={t.entity_type} className="border-b border-slate-100">
+                    <td className="py-2 font-medium">
+                      {ENTITY_LABELS[t.entity_type] ?? t.entity_type}
+                    </td>
+                    <td className="py-2 text-right">{t.total}</td>
+                    <td className="py-2 text-right">{t.atendidos}</td>
+                    <td className={`py-2 text-right font-semibold ${pctTone(t.pct_atendimento)}`}>
+                      {fmtPct(t.pct_atendimento)}
+                    </td>
+                    <td className="py-2 text-right text-slate-600">{fmtPct(t.pct_em_dia)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {atendimento.por_entidade.length > 0 && (
+            <div className="mt-6">
+              <h3 className="text-sm font-semibold">
+                Menor atendimento por entidade
+                <span className="ml-2 text-xs font-normal text-slate-500">
+                  {Math.min(ENTIDADES_NA_TELA, atendimento.por_entidade.length)} de{" "}
+                  {atendimento.por_entidade.length} — lista completa no CSV
+                </span>
+              </h3>
+              <table className="mt-2 w-full text-sm">
+                <thead className="border-b border-slate-200 text-left text-xs uppercase tracking-wider text-slate-500">
+                  <tr>
+                    <th className="py-2">Entidade</th>
+                    <th className="py-2">Tipo</th>
+                    <th className="py-2 text-right">Vencido</th>
+                    <th className="py-2 text-right">Ausente</th>
+                    <th className="py-2 text-right">Vencendo</th>
+                    <th className="py-2 text-right">% atend.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {atendimento.por_entidade.slice(0, ENTIDADES_NA_TELA).map((e) => (
+                    <tr
+                      key={`${e.entity_type}-${e.entity_id ?? e.entity_label}`}
+                      className="border-b border-slate-100"
+                    >
+                      <td className="max-w-[320px] truncate py-2" title={e.entity_label}>
+                        {e.entity_label}
+                      </td>
+                      <td className="py-2 text-xs text-slate-600">
+                        {ENTITY_LABELS[e.entity_type] ?? e.entity_type}
+                      </td>
+                      <td className="py-2 text-right text-red-700">{e.vencido}</td>
+                      <td className="py-2 text-right text-slate-700">{e.ausente}</td>
+                      <td className="py-2 text-right text-amber-700">{e.vencendo}</td>
+                      <td className={`py-2 text-right font-semibold ${pctTone(e.pct_atendimento)}`}>
+                        {fmtPct(e.pct_atendimento)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </section>
       )}
 
@@ -481,7 +672,7 @@ export default async function DiagnosticoPage(props: {
                 <th className="py-2">Escopo</th>
                 <th className="py-2">Por</th>
                 <th className="py-2 text-right">Findings</th>
-                <th className="py-2 text-right">% conf.</th>
+                <th className="py-2 text-right">% em dia</th>
                 <th className="py-2">Status</th>
                 <th className="py-2"></th>
               </tr>
