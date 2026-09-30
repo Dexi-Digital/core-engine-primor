@@ -75,6 +75,7 @@ async def listar_processos(
     status: str | None = Query(None, max_length=64),
     area: str | None = Query(None, max_length=64),
     busca: str | None = Query(None, max_length=128),
+    obra_id: int | None = Query(None),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
@@ -85,6 +86,7 @@ async def listar_processos(
         status=status,
         area=area,
         busca=busca,
+        obra_id=obra_id,
         limite=page_size,
         offset=(page - 1) * page_size,
     )

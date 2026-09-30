@@ -85,9 +85,13 @@ async def list_obras(
     *,
     status: str | None = None,
     uf: str | None = None,
+    busca: str | None = None,
     limit: int = 200,
 ) -> list[Obra]:
     stmt = select(Obra)
+    if busca and busca.strip():
+        termo = f"%{busca.strip()}%"
+        stmt = stmt.where(Obra.codigo.ilike(termo) | Obra.nome.ilike(termo))
     if status:
         stmt = stmt.where(Obra.status == status)
     if uf:

@@ -108,11 +108,13 @@ async def listar_locais_endpoint(
     db: AsyncSession = Depends(get_db),
     _: User = Depends(get_current_user),
     apenas_pendentes: bool = False,
+    obra_id: int | None = None,
 ) -> list[dict[str, Any]]:
     """Locais de trabalho e a obra ligada a cada um.
 
     `apenas_pendentes=true` filtra os que tem codigo de obra mas nao
     acharam a obra no cadastro -- a fila de trabalho humano.
+    `obra_id` filtra os locais ligados a uma obra (tela de detalhe).
     """
     stmt = (
         select(PontoLocalTrabalho, Obra)
@@ -124,6 +126,8 @@ async def listar_locais_endpoint(
             PontoLocalTrabalho.codigo_obra.is_not(None),
             PontoLocalTrabalho.obra_id.is_(None),
         )
+    if obra_id is not None:
+        stmt = stmt.where(PontoLocalTrabalho.obra_id == obra_id)
     linhas = (await db.execute(stmt)).all()
     return [
         {

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
@@ -20,6 +21,15 @@ from app.modules.obras.schemas import (
 router = APIRouter(prefix="/api/v1/obras", tags=["obras"])
 
 
+def _codigo_duplicado(codigo: str | None) -> HTTPException:
+    # `codigo` e unico (uq_obras_obra_codigo). Sem isso o IntegrityError
+    # virava 500 e a tela nao sabia dizer o que houve.
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=f"Ja existe uma obra com o codigo {codigo}",
+    )
+
+
 # --- Obra CRUD ------------------------------------------------------------
 
 
@@ -29,7 +39,11 @@ async def create_obra_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ObraRead:
-    obra = await service.create_obra(db, payload, actor=current_user.email)
+    try:
+        obra = await service.create_obra(db, payload, actor=current_user.email)
+    except IntegrityError:
+        await db.rollback()
+        raise _codigo_duplicado(payload.codigo) from None
     return ObraRead.model_validate(obra)
 
 
@@ -38,9 +52,12 @@ async def list_obras_endpoint(
     db: AsyncSession = Depends(get_db),
     obra_status: str | None = None,
     uf: str | None = None,
+    busca: str | None = None,
     limit: int = 200,
 ) -> list[ObraRead]:
-    rows = await service.list_obras(db, status=obra_status, uf=uf, limit=limit)
+    rows = await service.list_obras(
+        db, status=obra_status, uf=uf, busca=busca, limit=limit
+    )
     return [ObraRead.model_validate(r) for r in rows]
 
 
@@ -61,9 +78,13 @@ async def update_obra_endpoint(
     db: AsyncSession = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> ObraRead:
-    obra = await service.update_obra(
-        db, obra_id, payload, actor=current_user.email
-    )
+    try:
+        obra = await service.update_obra(
+            db, obra_id, payload, actor=current_user.email
+        )
+    except IntegrityError:
+        await db.rollback()
+        raise _codigo_duplicado(payload.codigo) from None
     if obra is None:
         raise HTTPException(status_code=404, detail="Obra nao encontrada")
     return ObraRead.model_validate(obra)
