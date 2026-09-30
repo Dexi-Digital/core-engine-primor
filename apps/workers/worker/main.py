@@ -148,6 +148,13 @@ celery_app.conf.beat_schedule = {
         "task": "worker.tasks.dp_sesmt.dispatch_afastamento_alerts",
         "schedule": crontab(hour="8", minute="10"),
     },
+    # Demanda #2: fim de contrato de experiencia 1x/dia (08h20) -- fim do
+    # 1o periodo (prorrogar?) e da experiencia (efetivar?). Notificacao
+    # in-app; idempotente pela `chave_idempotencia` da notificacao.
+    "experiencia-alerts-daily": {
+        "task": "worker.tasks.dp_sesmt.dispatch_experiencia_alerts",
+        "schedule": crontab(hour="8", minute="20"),
+    },
     # Squad 5: alertas de vencimento de contratos 1x/dia (08h15).
     # 5min apos afastamentos (08h10) para escalonar o burst no Resend.
     # Idempotente via `contratos_alertas_log` (uniq contrato_id + janela).

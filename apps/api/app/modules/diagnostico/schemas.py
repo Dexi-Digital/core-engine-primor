@@ -50,3 +50,42 @@ class DiagnosticoRunDetail(BaseModel):
 
 class DiagnosticoRunRequest(BaseModel):
     scope: str = "all"
+
+
+class AtendimentoContagem(BaseModel):
+    """Contagens + percentuais de um agrupamento (ver `atendimento.py`)."""
+
+    total: int
+    ok: int
+    vencendo: int
+    vencido: int
+    ausente: int
+    atendidos: int
+    pendentes: int
+    # None quando total == 0 (nada exigido).
+    pct_atendimento: float | None
+    pct_em_dia: float | None
+
+
+class AtendimentoPorArea(AtendimentoContagem):
+    area: str
+
+
+class AtendimentoPorTipo(AtendimentoContagem):
+    entity_type: str
+
+
+class AtendimentoPorEntidade(AtendimentoContagem):
+    entity_type: str
+    entity_id: int | None
+    entity_label: str
+    areas: list[str]
+
+
+class AtendimentoReport(BaseModel):
+    run_id: int
+    criterio: str
+    geral: AtendimentoContagem
+    por_area: list[AtendimentoPorArea]
+    por_tipo_entidade: list[AtendimentoPorTipo]
+    por_entidade: list[AtendimentoPorEntidade]

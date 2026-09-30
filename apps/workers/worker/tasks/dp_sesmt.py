@@ -229,6 +229,50 @@ async def _run_afastamento_alerts(
     }
 
 
+@celery_app.task(name="worker.tasks.dp_sesmt.dispatch_experiencia_alerts")
+def dispatch_experiencia_alerts(
+    recipients: list[str] | None = None,
+) -> dict[str, object]:
+    """Alertas de fim de contrato de experiencia (demanda #2).
+
+    Roda 1x/dia (Celery beat 08h20). Janelas 15/7/0 dias antes do fim do
+    1o periodo (prorrogar?) e do fim da experiencia (efetivar?). Entrega
+    so IN-APP (notificacoes) -- nao depende do Resend. Destinatarios em
+    `EXPERIENCIA_ALERT_EMAILS` (CSV), fallback `ASO_ALERT_EMAILS`.
+    """
+    return asyncio.run(_run_experiencia_alerts(recipients))
+
+
+async def _run_experiencia_alerts(
+    recipients: list[str] | None,
+) -> dict[str, object]:
+    try:
+        from app.core.db import SessionLocal
+        from app.modules.dp_sesmt.experiencia import (
+            dispatch_experiencia_alerts as svc,
+        )
+        from app.modules.dp_sesmt.experiencia import recipients_from_env
+    except ImportError as exc:  # pragma: no cover
+        return {"error": f"API package not available in worker: {exc}"}
+
+    if recipients is None:
+        recipients = recipients_from_env()
+    if not recipients:
+        return {
+            "error": "EXPERIENCIA_ALERT_EMAILS/ASO_ALERT_EMAILS not "
+            "configured; nothing to send"
+        }
+
+    async with SessionLocal() as db:
+        summary = await svc(db, recipients=recipients)
+    return {
+        "total_employees": summary.total_employees,
+        "sent": summary.sent,
+        "skipped": summary.skipped,
+        "failed": summary.failed,
+    }
+
+
 @celery_app.task(name="worker.tasks.dp_sesmt.pull_ponto")
 def pull_ponto(
     desde: str | None = None, ate: str | None = None, source: str = "beat"

@@ -28,7 +28,53 @@ type EmployeeListResponse = {
   total: number;
 };
 
+// Demanda #2: marcos do contrato de experiencia (GET /experiencia/prazos).
+type PrazoExperiencia = {
+  employee_id: number;
+  nome_completo: string;
+  cargo: string | null;
+  obra: string | null;
+  tipo_contrato: string | null;
+  data_admissao: string;
+  primeiro_periodo_dias: number;
+  segundo_periodo_dias: number;
+  periodos_assumidos: boolean;
+  fim_primeiro_periodo: string;
+  fim_experiencia: string;
+  origem: string;
+  proximo_marco: "prorrogacao" | "efetivacao" | null;
+  data_proximo_marco: string | null;
+  dias_restantes: number | null;
+};
+
+// Mesmo horizonte da maior janela de alerta (15 dias) com folga para o
+// RH se programar.
+const EXPERIENCIA_HORIZONTE_DIAS = 30;
+
 export const dynamic = "force-dynamic";
+
+async function fetchPrazosExperiencia(): Promise<PrazoExperiencia[] | null> {
+  try {
+    return await apiFetch<PrazoExperiencia[]>(
+      `/api/v1/dp-sesmt/experiencia/prazos?horizonte_dias=${EXPERIENCIA_HORIZONTE_DIAS}`,
+    );
+  } catch {
+    return null;
+  }
+}
+
+function formatDate(iso: string | null): string {
+  if (!iso) return "—";
+  // Data pura (YYYY-MM-DD): evita o deslocamento de fuso do `new Date`.
+  const [y, m, d] = iso.split("-");
+  return `${d}/${m}/${y}`;
+}
+
+function prazoTone(dias: number | null): "danger" | "warning" | "info" {
+  if (dias === null || dias <= 7) return "danger";
+  if (dias <= 15) return "warning";
+  return "info";
+}
 
 // Mesma ordem do organograma do dossie usada em /rh/equipe-administrativa.
 const SETOR_ORDER = [
@@ -71,7 +117,10 @@ function countBySetor(items: Employee[]): Array<[string, Employee[]]> {
 }
 
 export default async function RHPage() {
-  const adminsResp = await fetchAdmins();
+  const [adminsResp, prazosExperiencia] = await Promise.all([
+    fetchAdmins(),
+    fetchPrazosExperiencia(),
+  ]);
   const admins = adminsResp?.items ?? [];
   const adminGroups = countBySetor(admins);
   const totalAdmins = adminsResp?.total ?? admins.length;
@@ -106,6 +155,12 @@ export default async function RHPage() {
             status: "pronto",
           },
           {
+            label:
+              "Alerta de fim de contrato de experiência (fim do 1º período e fim dos 90 dias), com notificação no sino.",
+            status: "pronto",
+            nota: "Quando o cadastro não informa a divisão dos períodos, assume 45+45 — regra a confirmar com o DP.",
+          },
+          {
             label: "Dossiê de admissão (CEP, CNPJ, CPF).",
             status: "parcial",
             nota: "CEP (ViaCEP) e CNPJ (BrasilAPI) estão disponíveis; CPF usa DirectData e aguarda credencial. A organização dos documentos no OneDrive é outra frente: o diagnóstico compara arquivos com uma convenção configurada, cuja aderência às pastas reais ainda precisa ser validada.",
@@ -127,6 +182,77 @@ export default async function RHPage() {
           },
         ]}
       />
+
+      <Section
+        title={`Contratos de experiência — marcos nos próximos ${EXPERIENCIA_HORIZONTE_DIAS} dias`}
+      >
+        {prazosExperiencia === null ? (
+          <p className="text-sm" style={{ color: "var(--fg-muted)" }}>
+            Nao foi possivel conectar a API.
+          </p>
+        ) : prazosExperiencia.length === 0 ? (
+          <p className="text-sm" style={{ color: "var(--fg-muted)" }}>
+            Nenhum contrato de experiência com prazo nos próximos{" "}
+            {EXPERIENCIA_HORIZONTE_DIAS} dias.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="min-w-full text-left text-sm">
+              <thead
+                className="border-b text-[11px] uppercase tracking-[0.1em]"
+                style={{ borderColor: "var(--border)", color: "var(--fg-muted)" }}
+              >
+                <tr>
+                  <th className="py-2 pr-3">Funcionário</th>
+                  <th className="py-2 pr-3">Admissão</th>
+                  <th className="py-2 pr-3">Decisão</th>
+                  <th className="py-2 pr-3">Data</th>
+                  <th className="py-2 pr-3 text-right">Prazo</th>
+                </tr>
+              </thead>
+              <tbody>
+                {prazosExperiencia.map((p) => (
+                  <tr
+                    key={p.employee_id}
+                    className="border-b"
+                    style={{ borderColor: "var(--border)" }}
+                  >
+                    <td className="py-2 pr-3">
+                      <Link
+                        href={`/rh/funcionarios/${p.employee_id}`}
+                        className="hover:underline"
+                        style={{ color: "var(--fg)" }}
+                      >
+                        {p.nome_completo}
+                      </Link>
+                      <div className="text-[11px]" style={{ color: "var(--fg-muted)" }}>
+                        {p.cargo ?? "—"} · {p.obra ?? "sem obra"}
+                      </div>
+                    </td>
+                    <td className="py-2 pr-3">{formatDate(p.data_admissao)}</td>
+                    <td className="py-2 pr-3">
+                      {p.proximo_marco === "prorrogacao"
+                        ? `Prorrogar? (fim do 1º período, ${p.primeiro_periodo_dias}d)`
+                        : `Efetivar ou desligar (fim dos ${p.primeiro_periodo_dias + p.segundo_periodo_dias}d)`}
+                      {p.periodos_assumidos ? (
+                        <div className="text-[11px]" style={{ color: "var(--fg-muted)" }}>
+                          45+45 assumido — períodos não informados no cadastro
+                        </div>
+                      ) : null}
+                    </td>
+                    <td className="py-2 pr-3">{formatDate(p.data_proximo_marco)}</td>
+                    <td className="py-2 pr-3 text-right">
+                      <StatusBadge tone={prazoTone(p.dias_restantes)}>
+                        {p.dias_restantes === 0 ? "hoje" : `${p.dias_restantes} dia(s)`}
+                      </StatusBadge>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Section>
 
       <Section
         title="Equipe administrativa (organograma do dossie)"

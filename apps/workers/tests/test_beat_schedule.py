@@ -130,3 +130,11 @@ def test_toda_fila_roteada_e_consumida_pelo_worker() -> None:
     consumidas = set(re.search(r'"-Q",\s*"([^"]+)"', dockerfile).group(1).split(","))
     roteadas = {r["queue"] for r in celery_app.conf.task_routes.values()}
     assert roteadas <= consumidas, f"filas sem consumidor: {roteadas - consumidas}"
+
+
+def test_alerta_de_experiencia_agendado_apos_afastamentos() -> None:
+    """Demanda #2: roda diariamente 08h20, depois do bloco ASO/INSS."""
+    cfg = celery_app.conf.beat_schedule["experiencia-alerts-daily"]
+    assert cfg["task"] == "worker.tasks.dp_sesmt.dispatch_experiencia_alerts"
+    assert cfg["schedule"].hour == {8}
+    assert cfg["schedule"].minute == {20}
