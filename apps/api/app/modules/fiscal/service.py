@@ -616,7 +616,8 @@ def get_dominio_client(settings: Any) -> Any:
     pelos testes (`dependency_overrides`), e renomear so geraria ruido.
 
     Sem credencial, cai no mock deterministico -- mesma estrategia de
-    DirectData/LLM. O envio REAL ainda depende de `ONVIO_ALLOW_SEND`,
+    DirectData/LLM --, exceto em producao, onde o envio simulado e
+    recusado (status "bloqueado") em vez de marcar a nota como enviada. O envio REAL ainda depende de `ONVIO_ALLOW_SEND`,
     porque e escrita no Dominio de PRODUCAO do escritorio contabil.
     """
     from app.integrations.onvio.client import OnvioClient
@@ -627,6 +628,9 @@ def get_dominio_client(settings: Any) -> Any:
         integration_key=settings.onvio_integration_key,
         audience=settings.onvio_audience,
         allow_send=settings.onvio_allow_send,
+        # Mock responde "enviado" sem enviar nada: aceitavel em dev/staging,
+        # nunca em producao.
+        allow_mock_send=settings.environment != "production",
     )
 
 

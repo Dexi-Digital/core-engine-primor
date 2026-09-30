@@ -16,6 +16,7 @@ from app.modules.auth.models import User
 from app.modules.diagnostico.models import DiagnosticoFinding, DiagnosticoRun
 from app.modules.dp_sesmt.models import Afastamento, Employee
 from app.modules.financeiro_totvs.models import TotvsSyncLog
+from app.modules.fiscal.models import DocumentoFiscal
 from app.modules.licitacoes.models import (
     CertidaoEmpresa,
     Edital,
@@ -255,6 +256,45 @@ async def get_home(
     totvs_configurado = bool(
         settings.totvs_base_url and settings.totvs_username and settings.totvs_password
     )
+    # "Configurado" sai das credenciais, nunca de um True fixo: sem elas
+    # o adapter cai em mock e o painel diria "ok" sobre dado simulado.
+    onedrive_configurado = bool(
+        settings.ms_graph_tenant_id
+        and settings.ms_graph_client_id
+        and settings.ms_graph_client_secret
+        and settings.ms_graph_drive_id
+    )
+    documentai_configurado = bool(
+        settings.google_documentai_credentials_json
+        and settings.gcp_project_id
+        and settings.documentai_processor_id
+    )
+    resend_configurado = bool(settings.resend_api_key)
+    onvio_configurado = bool(
+        settings.onvio_client_id
+        and settings.onvio_client_secret
+        and settings.onvio_integration_key
+    )
+    # Lote `mock-...` e envio simulado; nao conta como nota entregue.
+    nfs_enviadas = int(
+        (
+            await db.execute(
+                select(func.count(DocumentoFiscal.id)).where(
+                    DocumentoFiscal.status_envio == "enviado",
+                    ~DocumentoFiscal.protocolo_dominio.startswith("mock-"),
+                )
+            )
+        ).scalar()
+        or 0
+    )
+    if not onvio_configurado:
+        onvio_status, onvio_evento = "pending", "Credenciais Onvio ausentes; envio em modo mock"
+    elif not settings.onvio_allow_send:
+        onvio_status, onvio_evento = "idle", "Credencial configurada; envio desligado (ONVIO_ALLOW_SEND)"
+    elif nfs_enviadas:
+        onvio_status, onvio_evento = "ok", f"{nfs_enviadas} NF-e enviadas à contabilidade"
+    else:
+        onvio_status, onvio_evento = "idle", "Envio habilitado; nenhuma NF-e enviada ainda"
     integrations: list[dict[str, Any]] = [
         {
             "key": "pncp",
@@ -298,43 +338,57 @@ async def get_home(
             "key": "onedrive",
             "label": "OneDrive",
             "descr": "Sincronização de documentos (Microsoft Graph)",
-            "status": "ok" if last_od else "idle",
+            "status": (
+                "pending" if not onedrive_configurado else "ok" if last_od else "idle"
+            ),
             "last_event": (
-                f"Última sync: {last_od.started_at.isoformat()} "
+                "Credenciais Microsoft Graph ausentes; storage em modo mock"
+                if not onedrive_configurado
+                else f"Última sync: {last_od.started_at.isoformat()} "
                 f"({last_od.files_scanned or 0} arquivos)"
                 if last_od
                 else "Nunca sincronizado"
             ),
-            "configured": True,
+            "configured": onedrive_configurado,
         },
         {
             "key": "documentai",
             "label": "Document AI",
             "descr": "OCR Google Cloud Document AI",
-            "status": "ok" if partes_total else "idle",
-            "last_event": f"{partes_total} partes diárias processadas",
-            "configured": True,
+            "status": (
+                "pending" if not documentai_configurado else "ok" if partes_total else "idle"
+            ),
+            "last_event": (
+                f"{partes_total} partes diárias processadas"
+                if documentai_configurado
+                else "Credenciais Google ausentes; OCR em modo mock"
+            ),
+            "configured": documentai_configurado,
         },
         {
             "key": "resend",
             "label": "Resend",
-            "descr": "Alertas e boletins por email",
-            "status": "ok",
-            "last_event": f"{total_queries} queries de boletim ativas",
-            "configured": True,
+            "descr": "Alertas por email (ASO, INSS, contratos, certidões)",
+            "status": "ok" if resend_configurado else "pending",
+            "last_event": (
+                "Envio de alertas configurado"
+                if resend_configurado
+                else "RESEND_API_KEY ausente; alertas por email não são enviados"
+            ),
+            "configured": resend_configurado,
         },
         {
             "key": "dominio",
             "label": "Domínio / Onvio",
-            "descr": "ERP folha de pagamento (Thomson Reuters)",
-            "status": "pending",
-            "last_event": "Aguardando credencial",
-            "configured": False,
+            "descr": "Envio de NF-e à contabilidade (Thomson Reuters)",
+            "status": onvio_status,
+            "last_event": onvio_evento,
+            "configured": onvio_configurado,
         },
         {
             "key": "totvs",
             "label": "TOTVS",
-            "descr": "ERP Protheus — financeiro / contratos",
+            "descr": "ERP RM — lançamentos financeiros (FLAN)",
             "status": (
                 "ok"
                 if ultimo_totvs and ultimo_totvs.status == "ok"

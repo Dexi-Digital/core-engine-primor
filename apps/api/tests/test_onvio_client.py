@@ -296,3 +296,11 @@ async def test_campo_query_usa_boxeFile_e_nao_boxe_barra_File():
 
     assert '"boxeFile"' in enviado["body"], enviado["body"][:300]
     assert "boxe/File" not in enviado["body"]
+
+
+@pytest.mark.asyncio
+async def test_mock_send_recusado_quando_nao_permitido():
+    # Producao sem credencial: nada de "enviado" com lote mock-...
+    c = OnvioClient(allow_mock_send=False)
+    with pytest.raises(OnvioSendBlockedError, match="credenciais Onvio ausentes"):
+        await c.send_nfe_xml(filename="nf.xml", content=XML)
