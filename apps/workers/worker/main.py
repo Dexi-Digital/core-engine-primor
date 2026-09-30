@@ -134,14 +134,14 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour="7", minute="30"),
     },
     # A.2: alertas de vencimento de ASO uma vez por dia (08h05 America/Sao_Paulo).
-    # 5min apos certidoes para distribuir carga do SMTP do Resend.
+    # 5min apos certidoes para escalonar o burst de notificacoes/e-mail.
     # Idempotente via `dp_aso_alertas_log` (uniq employee_id + janela).
     "aso-alerts-daily": {
         "task": "worker.tasks.dp_sesmt.dispatch_aso_alerts",
         "schedule": crontab(hour="8", minute="5"),
     },
     # D.4: alertas de DCB / pericia de afastamentos INSS uma vez por dia
-    # (08h10). 5min apos ASO para escalonar burst no Resend.
+    # (08h10). 5min apos ASO para escalonar o burst de notificacoes/e-mail.
     # Idempotente via `dp_afastamentos_alertas_log`
     # (uniq afastamento_id + kind + janela).
     "afastamento-alerts-daily": {
@@ -156,7 +156,7 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(hour="8", minute="20"),
     },
     # Squad 5: alertas de vencimento de contratos 1x/dia (08h15).
-    # 5min apos afastamentos (08h10) para escalonar o burst no Resend.
+    # 5min apos afastamentos (08h10) para escalonar o burst.
     # Idempotente via `contratos_alertas_log` (uniq contrato_id + janela).
     "contrato-alerts-daily": {
         "task": "worker.tasks.financeiro.dispatch_contrato_alerts",

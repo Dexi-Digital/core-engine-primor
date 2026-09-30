@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
 from app.core.db import get_db
+from app.integrations.msgraph_mail.client import mail_configurado
 from app.modules.auth.dependencies import get_current_user
 from app.modules.auth.models import User
 from app.modules.diagnostico.models import DiagnosticoFinding, DiagnosticoRun
@@ -269,7 +270,7 @@ async def get_home(
         and settings.gcp_project_id
         and settings.documentai_processor_id
     )
-    resend_configurado = bool(settings.resend_api_key)
+    email_configurado = mail_configurado(settings)
     onvio_configurado = bool(
         settings.onvio_client_id
         and settings.onvio_client_secret
@@ -366,16 +367,21 @@ async def get_home(
             "configured": documentai_configurado,
         },
         {
-            "key": "resend",
-            "label": "Resend",
-            "descr": "Alertas por email (ASO, INSS, contratos, certidões)",
-            "status": "ok" if resend_configurado else "pending",
+            "key": "email_m365",
+            "label": "E-mail (Microsoft 365)",
+            "descr": "Cópia por e-mail dos alertas (ASO, INSS, contratos, certidões)",
+            # Nao ha "ok" medido: o Graph so revela a permissao Mail.Send
+            # no primeiro envio. Configurado = credencial + caixa remetente.
+            "status": "idle" if email_configurado else "pending",
             "last_event": (
-                "Envio de alertas configurado"
-                if resend_configurado
-                else "RESEND_API_KEY ausente; alertas por email não são enviados"
+                f"Envio pela caixa {settings.mail_sender}; alertas também "
+                "chegam como notificação na plataforma"
+                if email_configurado
+                else "E-mail não configurado (permissão Mail.Send da caixa de "
+                "sistema pendente no Microsoft 365); alertas chegam como "
+                "notificação na plataforma"
             ),
-            "configured": resend_configurado,
+            "configured": email_configurado,
         },
         {
             "key": "dominio",

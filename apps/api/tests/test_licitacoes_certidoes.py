@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
 
 import httpx
 import pytest
 from httpx import AsyncClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.integrations.resend.client import ResendClient
 from app.modules.licitacoes.certidoes import (
     JANELAS_ALERTA,
     compute_status,
@@ -20,6 +21,8 @@ from app.modules.licitacoes.certidoes import (
     render_alerta_html,
 )
 from app.modules.licitacoes.models import CertidaoAlertaLog, CertidaoEmpresa
+from app.modules.notificacoes.models import Notificacao
+from tests.fixtures.graph_mail.mock import SENDER, mock_graph_mailer
 
 # --- pure helpers (no DB) ----------------------------------------------------
 
@@ -172,30 +175,19 @@ async def test_list_certidoes_filters_by_status(db_session: AsyncSession) -> Non
     assert {r.tipo for r in sem_val} == {"ATESTADO_CAT"}
 
 
-# --- dispatch (mock Resend via httpx.MockTransport) ---------------------------
+# --- dispatch: notificacao sempre + e-mail Graph opcional --------------------
 
 
-def _mock_resend_client(captured: list[httpx.Request], message_id: str = "msg_xyz") -> ResendClient:
-    """Build a ResendClient pointing at a mock transport (no real HTTP)."""
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        captured.append(request)
-        return httpx.Response(200, json={"id": message_id})
-
-    return ResendClient(
-        api_key="re_test",
-        client=httpx.AsyncClient(
-            base_url="https://mock.resend",
-            transport=httpx.MockTransport(handler),
-            headers={"Authorization": "Bearer re_test"},
-        ),
-    )
+async def _notificacoes(db: AsyncSession) -> list[Notificacao]:
+    return list((await db.execute(select(Notificacao))).scalars().all())
 
 
 @pytest.mark.asyncio
-async def test_dispatch_sends_for_certidao_in_window(
+async def test_dispatch_sem_email_cria_notificacao_por_destinatario(
     db_session: AsyncSession,
 ) -> None:
+    """Sem nenhuma config de e-mail o alerta vale: 1 notificacao por
+    destinatario, log `sent` com email_status=nao_configurado."""
     today = date(2026, 4, 25)
     await create_certidao(
         db_session,
@@ -204,31 +196,101 @@ async def test_dispatch_sends_for_certidao_in_window(
         validade=today + timedelta(days=10),  # janela 15d
     )
 
-    captured: list[httpx.Request] = []
-    resend = _mock_resend_client(captured)
     summary = await dispatch_expiration_alerts(
         db_session,
-        resend,
-        recipients=["lic@primor.example"],
+        recipients=["lic@primor.example", "Dir@Primor.example"],
         today=today,
     )
-    await resend.aclose()
 
     assert summary.sent == 1
-    assert summary.skipped == 0
     assert summary.failed == 0
+    assert summary.results[0].email_status == "nao_configurado"
+    notifs = await _notificacoes(db_session)
+    assert sorted(n.destinatario for n in notifs) == [
+        "dir@primor.example",
+        "lic@primor.example",
+    ]
+    n = notifs[0]
+    assert n.categoria == "certidoes"
+    assert n.link == "/licitacoes/certidoes"
+    # Dias REAIS (10), nao a janela (15).
+    assert "vence em 10 dia" in n.titulo.lower()
+    assert "vence em 15 dia" not in n.titulo.lower()
+    log = (await db_session.execute(select(CertidaoAlertaLog))).scalar_one()
+    assert log.status == "sent"
+    assert log.email_status == "nao_configurado"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_com_email_configurado_envia_pelo_graph(
+    db_session: AsyncSession,
+) -> None:
+    today = date(2026, 4, 25)
+    await create_certidao(
+        db_session,
+        empresa_cnpj="44229813000123",
+        tipo="CND_FEDERAL",
+        validade=today + timedelta(days=10),
+    )
+
+    captured: list[httpx.Request] = []
+    mailer = mock_graph_mailer(captured)
+    summary = await dispatch_expiration_alerts(
+        db_session, recipients=["lic@primor.example"], mailer=mailer, today=today
+    )
+    await mailer.aclose()
+
+    assert summary.sent == 1
+    assert summary.results[0].email_status == "enviado"
     assert len(captured) == 1
-    body = captured[0].read().decode()
-    assert "primor.example" in body
-    # Subject e corpo devem refletir os 10 dias REAIS, nao a janela 15.
-    # (regressao -- antes do fix `dias_restantes` o email mostrava "15 dias"
-    # para uma certidao com 10 dias restantes).
-    assert "10 dia" in body  # "10 dia(s)" na urgencia + subject
-    assert "vence em 10 dia" in body.lower()  # subject
-    assert "vence em 15 dia" not in body.lower()  # nao deve usar janela
-    # Logged in DB
-    log = (await db_session.execute(CertidaoAlertaLog.__table__.select())).first()
-    assert log is not None
+    req = captured[0]
+    assert req.url.path == f"/v1.0/users/{SENDER}/sendMail"
+    body = json.loads(req.read())
+    assert body["saveToSentItems"] is True
+    assert body["message"]["toRecipients"] == [
+        {"emailAddress": {"address": "lic@primor.example"}}
+    ]
+    assert "vence em 10 dia" in body["message"]["subject"].lower()
+    assert len(await _notificacoes(db_session)) == 1
+
+
+@pytest.mark.asyncio
+async def test_dispatch_graph_403_mantem_notificacao_e_registra_falha(
+    db_session: AsyncSession,
+) -> None:
+    """Permissao Mail.Send ainda nao concedida: o alerta conta como
+    despachado (notificacao existe) e a falha do e-mail fica no log."""
+    today = date(2026, 4, 25)
+    await create_certidao(
+        db_session,
+        empresa_cnpj="X",
+        tipo="FGTS",
+        validade=today + timedelta(days=5),
+    )
+
+    captured: list[httpx.Request] = []
+    mailer = mock_graph_mailer(captured, status=403)
+    summary = await dispatch_expiration_alerts(
+        db_session, recipients=["x@y.com"], mailer=mailer, today=today
+    )
+    await mailer.aclose()
+
+    assert summary.sent == 1
+    assert summary.failed == 0
+    assert summary.results[0].email_status == "falhou"
+    assert "Mail.Send" in (summary.results[0].email_error or "")
+    assert len(await _notificacoes(db_session)) == 1
+    log = (await db_session.execute(select(CertidaoAlertaLog))).scalar_one()
+    assert log.status == "sent"
+    assert log.email_status == "falhou"
+    assert "403" in (log.email_error or "")
+
+    # Proximo cron nao reenvia: o alerta ja foi despachado.
+    summary2 = await dispatch_expiration_alerts(
+        db_session, recipients=["x@y.com"], today=today
+    )
+    assert summary2.skipped == 1
+    assert len(await _notificacoes(db_session)) == 1
 
 
 @pytest.mark.asyncio
@@ -244,26 +306,21 @@ async def test_dispatch_is_idempotent_for_same_window(
     )
 
     captured: list[httpx.Request] = []
-    resend = _mock_resend_client(captured)
+    mailer = mock_graph_mailer(captured)
 
     summary1 = await dispatch_expiration_alerts(
-        db_session,
-        resend,
-        recipients=["x@y.com"],
-        today=today,
+        db_session, recipients=["x@y.com"], mailer=mailer, today=today
     )
     summary2 = await dispatch_expiration_alerts(
-        db_session,
-        resend,
-        recipients=["x@y.com"],
-        today=today,
+        db_session, recipients=["x@y.com"], mailer=mailer, today=today
     )
-    await resend.aclose()
+    await mailer.aclose()
 
     assert summary1.sent == 1
     assert summary2.sent == 0
     assert summary2.skipped == 1
     assert len(captured) == 1, "Email enviado uma so vez (idempotente)"
+    assert len(await _notificacoes(db_session)) == 1
 
 
 @pytest.mark.asyncio
@@ -276,24 +333,24 @@ async def test_dispatch_skips_when_no_validade(db_session: AsyncSession) -> None
         validade=None,
     )
 
-    captured: list[httpx.Request] = []
-    resend = _mock_resend_client(captured)
     summary = await dispatch_expiration_alerts(
-        db_session, resend, recipients=["x@y.com"], today=today
+        db_session, recipients=["x@y.com"], today=today
     )
-    await resend.aclose()
     assert summary.sent == 0
     assert summary.skipped == 1
-    assert len(captured) == 0
+    assert await _notificacoes(db_session) == []
 
 
 @pytest.mark.asyncio
 async def test_dispatch_retries_after_failure_without_unique_violation(
     db_session: AsyncSession,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Regressao: 1a tentativa falha grava log status=failed; 2a tentativa
-    deve atualizar in-place (UPDATE), nao tentar INSERT que violaria a
-    UniqueConstraint(certidao_id, janela)."""
+    """Regressao: 1a tentativa falha (erro ao criar a notificacao) grava
+    log status=failed; 2a tentativa deve atualizar in-place (UPDATE), nao
+    tentar INSERT que violaria a UniqueConstraint(certidao_id, janela)."""
+    import app.modules.licitacoes.certidoes as certidoes_mod
+
     today = date(2026, 4, 25)
     await create_certidao(
         db_session,
@@ -302,59 +359,38 @@ async def test_dispatch_retries_after_failure_without_unique_violation(
         validade=today + timedelta(days=10),  # janela 15d
     )
 
-    fail_count = {"n": 0}
+    real_despachar = certidoes_mod.despachar_alerta
 
-    def fail_handler(request: httpx.Request) -> httpx.Response:
-        fail_count["n"] += 1
-        return httpx.Response(500, json={"message": "boom"})
+    async def boom(*args, **kwargs):
+        raise RuntimeError("banco indisponivel")
 
-    fail_resend = ResendClient(
-        api_key="re_test",
-        client=httpx.AsyncClient(
-            base_url="https://mock.resend",
-            transport=httpx.MockTransport(fail_handler),
-            headers={"Authorization": "Bearer re_test"},
-        ),
-    )
+    monkeypatch.setattr(certidoes_mod, "despachar_alerta", boom)
     summary1 = await dispatch_expiration_alerts(
-        db_session, fail_resend, recipients=["x@y.com"], today=today
+        db_session, recipients=["x@y.com"], today=today
     )
-    await fail_resend.aclose()
     assert summary1.failed == 1
     assert summary1.sent == 0
-
-    # Confirma que existe exatamente 1 log com status=failed.
     logs = (await db_session.execute(CertidaoAlertaLog.__table__.select())).all()
     assert len(logs) == 1
 
     # Segunda rodada: ainda falha. Sem o fix, isto crasharia com IntegrityError.
-    fail_resend2 = ResendClient(
-        api_key="re_test",
-        client=httpx.AsyncClient(
-            base_url="https://mock.resend",
-            transport=httpx.MockTransport(fail_handler),
-            headers={"Authorization": "Bearer re_test"},
-        ),
-    )
     summary2 = await dispatch_expiration_alerts(
-        db_session, fail_resend2, recipients=["x@y.com"], today=today
+        db_session, recipients=["x@y.com"], today=today
     )
-    await fail_resend2.aclose()
     assert summary2.failed == 1
     logs = (await db_session.execute(CertidaoAlertaLog.__table__.select())).all()
     assert len(logs) == 1, "log deve ter sido atualizado in-place, nao duplicado"
 
-    # Terceira rodada: agora o Resend volta. O log failed deve virar sent.
-    captured: list[httpx.Request] = []
-    ok_resend = _mock_resend_client(captured)
+    # Terceira rodada: volta a funcionar. O log failed deve virar sent.
+    monkeypatch.setattr(certidoes_mod, "despachar_alerta", real_despachar)
     summary3 = await dispatch_expiration_alerts(
-        db_session, ok_resend, recipients=["x@y.com"], today=today
+        db_session, recipients=["x@y.com"], today=today
     )
-    await ok_resend.aclose()
     assert summary3.sent == 1
     assert summary3.failed == 0
-    logs = (await db_session.execute(CertidaoAlertaLog.__table__.select())).all()
-    assert len(logs) == 1, "ainda 1 log, agora promovido a sent"
+    log = (await db_session.execute(select(CertidaoAlertaLog))).scalar_one()
+    assert log.status == "sent"
+    assert log.error_message is None
 
 
 @pytest.mark.asyncio
@@ -384,16 +420,19 @@ async def test_update_certidao_can_clear_validade_to_null(
 async def test_dispatch_skips_with_empty_recipients(
     db_session: AsyncSession,
 ) -> None:
-    """Sem destinatarios -> early return, nem tenta hit no Resend."""
+    """Sem destinatarios -> early return, nem notificacao nem e-mail."""
     today = date(2026, 4, 25)
     await create_certidao(db_session, empresa_cnpj="X", tipo="FGTS", validade=today)
     captured: list[httpx.Request] = []
-    resend = _mock_resend_client(captured)
-    summary = await dispatch_expiration_alerts(db_session, resend, recipients=[], today=today)
-    await resend.aclose()
+    mailer = mock_graph_mailer(captured)
+    summary = await dispatch_expiration_alerts(
+        db_session, recipients=[], mailer=mailer, today=today
+    )
+    await mailer.aclose()
     assert summary.total_certidoes == 0
     assert summary.sent == 0
     assert len(captured) == 0
+    assert await _notificacoes(db_session) == []
 
 
 # --- Router endpoints --------------------------------------------------------
@@ -560,21 +599,30 @@ async def test_delete_certidao_storage_failure_is_best_effort(
 
 
 @pytest.mark.asyncio
-async def test_dispatch_alerts_endpoint_503_without_resend(
+async def test_dispatch_alerts_endpoint_sem_email_nao_da_503(
     api_client: AsyncClient,
     auth_headers: dict[str, str],
+    db_session: AsyncSession,
 ) -> None:
-    """Sem RESEND_API_KEY -> 503 (igual ao dispatch de boletins)."""
-    from app.core.config import get_settings
-
-    get_settings.cache_clear()
+    """Sem e-mail configurado o endpoint responde 200 e cria notificacao
+    (antes: 503 sem chave do provedor de e-mail)."""
+    await create_certidao(
+        db_session,
+        empresa_cnpj="X",
+        tipo="FGTS",
+        validade=date.today() + timedelta(days=5),
+    )
     r = await api_client.post(
         "/api/v1/licitacoes/certidoes/dispatch-alerts",
         json={"recipients": ["x@y.com"]},
         headers=auth_headers,
     )
-    assert r.status_code == 503
-    assert "RESEND_API_KEY" in r.json()["detail"]
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["sent"] == 1
+    assert body["results"][0]["email_status"] == "nao_configurado"
+    assert "resend_message_id" not in body["results"][0]
+    assert len(await _notificacoes(db_session)) == 1
 
 
 def test_janelas_alerta_constant_is_descending() -> None:

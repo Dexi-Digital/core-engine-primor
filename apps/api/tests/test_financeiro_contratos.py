@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -13,7 +14,6 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.integrations.resend.client import ResendClient
 from app.modules.financeiro_contratos.alerts import (
     dispatch_contrato_alerts,
     render_alerta_contrato_html,
@@ -32,6 +32,8 @@ from app.modules.financeiro_contratos.service import (
     list_contratos,
     update_contrato,
 )
+from app.modules.notificacoes.models import Notificacao
+from tests.fixtures.graph_mail.mock import mock_graph_mailer
 
 
 @pytest.mark.asyncio
@@ -450,25 +452,19 @@ async def test_delete_contrato_arquivo_path_inexistente_nao_falha(
 # --- alertas de vencimento (Task 5) ---------------------------------------
 
 
-def _fake_resend(sent: list[dict]) -> ResendClient:
-    """ResendClient com transporte mockado (mesma tecnica de
-    test_licitacoes_certidoes.py: `client=` no construtor, nao overwrite
-    de `_client` apos instanciar)."""
+def _fake_mailer(sent: list[dict]):
+    """GraphMailClient com transporte mockado; `sent` recebe o JSON de
+    cada sendMail."""
+    captured: list[httpx.Request] = []
+    mailer = mock_graph_mailer(captured)
+    original = mailer.send_mail
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        import json as _json
+    async def _send(**kwargs):
+        await original(**kwargs)
+        sent.append(json.loads(captured[-1].content))
 
-        sent.append(_json.loads(request.content))
-        return httpx.Response(200, json={"id": f"msg_{len(sent)}"})
-
-    return ResendClient(
-        api_key="test-key",
-        client=httpx.AsyncClient(
-            base_url="https://api.resend.com",
-            transport=httpx.MockTransport(handler),
-            headers={"Authorization": "Bearer test-key"},
-        ),
-    )
+    mailer.send_mail = _send  # type: ignore[method-assign]
+    return mailer
 
 
 def test_render_alerta_contrato_html_essentials() -> None:
@@ -510,30 +506,36 @@ async def test_dispatch_contrato_alerts_idempotente(
     )
 
     sent: list[dict] = []
-    resend = _fake_resend(sent)
+    mailer = _fake_mailer(sent)
     try:
         summary = await dispatch_contrato_alerts(
-            db_session, resend, recipients=["fin@primor.com"], today=today,
+            db_session, mailer=mailer, recipients=["fin@primor.com"], today=today,
             public_base_url="https://motor.example",
         )
     finally:
-        await resend.aclose()
+        await mailer.aclose()
     assert summary.sent == 1
     assert summary.skipped == 2
     assert summary.failed == 0
     assert len(sent) == 1
-    assert "Vence em 10d" in sent[0]["html"]
+    assert "Vence em 10d" in sent[0]["message"]["body"]["content"]
+    enviado = next(r for r in summary.results if r.status == "sent")
+    assert enviado.email_status == "enviado"
+    notifs = (await db_session.execute(select(Notificacao))).scalars().all()
+    assert [(n.destinatario, n.categoria, n.link) for n in notifs] == [
+        ("fin@primor.com", "financeiro", "/financeiro/contratos")
+    ]
 
     # segunda rodada no mesmo dia: nada novo (janela 15d ja logada)
     sent2: list[dict] = []
-    resend2 = _fake_resend(sent2)
+    mailer2 = _fake_mailer(sent2)
     try:
         summary2 = await dispatch_contrato_alerts(
-            db_session, resend2, recipients=["fin@primor.com"], today=today,
+            db_session, mailer=mailer2, recipients=["fin@primor.com"], today=today,
             public_base_url="https://motor.example",
         )
     finally:
-        await resend2.aclose()
+        await mailer2.aclose()
     assert summary2.sent == 0
     assert len(sent2) == 0
     # e o log existe para o contrato vigente
@@ -559,10 +561,56 @@ async def test_dispatch_alerts_rota_estatica_resolve_antes_do_dinamico(
         json={"recipients": ["fin@primor.com"]},
         headers=auth_headers,
     )
-    # Sem RESEND_API_KEY configurada no ambiente de teste -> 503 (nao 422).
-    # 422 indicaria que a rota dinamica `/contratos/{contrato_id}` capturou
-    # "dispatch-alerts" tentando converte-lo para int.
-    assert resp.status_code == 503, resp.text
+    # Sem e-mail configurado o dispatch roda assim mesmo (notificacao na
+    # plataforma) -> 200. 422 indicaria que a rota dinamica
+    # `/contratos/{contrato_id}` capturou "dispatch-alerts" tentando
+    # converte-lo para int.
+    assert resp.status_code == 200, resp.text
+
+
+@pytest.mark.asyncio
+async def test_dispatch_contrato_sem_email_cria_notificacao_por_destinatario(
+    db_session: AsyncSession,
+) -> None:
+    today = date(2026, 8, 4)
+    await create_contrato(
+        db_session, titulo="Vence em 3d", contraparte_nome="A", tipo="fornecedor",
+        data_inicio=today, data_fim=today + timedelta(days=3), status="vigente",
+    )
+    summary = await dispatch_contrato_alerts(
+        db_session, recipients=["fin@primor.com", "dir@primor.com"], today=today
+    )
+    assert summary.sent == 1
+    assert summary.results[0].email_status == "nao_configurado"
+    notifs = (await db_session.execute(select(Notificacao))).scalars().all()
+    assert sorted(n.destinatario for n in notifs) == ["dir@primor.com", "fin@primor.com"]
+    log = (await db_session.execute(select(ContratoAlertaLog))).scalar_one()
+    assert log.status == "sent"
+    assert log.email_status == "nao_configurado"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_contrato_graph_403_mantem_notificacao(
+    db_session: AsyncSession,
+) -> None:
+    today = date(2026, 8, 4)
+    await create_contrato(
+        db_session, titulo="Vence em 3d", contraparte_nome="A", tipo="fornecedor",
+        data_inicio=today, data_fim=today + timedelta(days=3), status="vigente",
+    )
+    captured: list[httpx.Request] = []
+    mailer = mock_graph_mailer(captured, status=403)
+    summary = await dispatch_contrato_alerts(
+        db_session, mailer=mailer, recipients=["fin@primor.com"], today=today
+    )
+    await mailer.aclose()
+    assert summary.sent == 1
+    assert summary.failed == 0
+    assert summary.results[0].email_status == "falhou"
+    assert len((await db_session.execute(select(Notificacao))).scalars().all()) == 1
+    log = (await db_session.execute(select(ContratoAlertaLog))).scalar_one()
+    assert log.email_status == "falhou"
+    assert "403" in (log.email_error or "")
 
 
 @pytest.mark.asyncio
@@ -571,7 +619,7 @@ async def test_dispatch_alerts_recipients_email_invalido_da_422(
 ) -> None:
     """Review final: `recipients` agora eh `list[EmailStr]` (paridade
     D.6) -- email mal formado deve ser rejeitado antes de qualquer
-    chamada ao Resend, independente de RESEND_API_KEY estar setada."""
+    notificacao ou e-mail."""
     resp = await api_client.post(
         "/api/v1/financeiro/contratos/dispatch-alerts",
         json={"recipients": ["nao-e-um-email"]},

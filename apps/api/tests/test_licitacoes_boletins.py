@@ -1,4 +1,4 @@
-"""Tests for the boletins por email dispatcher (D.3)."""
+"""Tests for the boletins dispatcher (D.3) -- notificacao na plataforma."""
 
 from __future__ import annotations
 
@@ -10,7 +10,6 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.integrations.resend.client import ResendClient, ResendError
 from app.modules.licitacoes.boletins import (
     create_saved_query,
     dispatch_boletins,
@@ -130,7 +129,7 @@ async def test_dispatch_sends_email_and_advances_cursor(
                 "body": request.content.decode() if request.content else "",
             }
         )
-        return httpx.Response(200, json={"id": "resend-msg-abc", "to": ["tester@primor.com"]})
+        return httpx.Response(200, json={"id": "msg-abc", "to": ["tester@primor.com"]})
 
     summary = await dispatch_boletins(
         db_session,
@@ -223,32 +222,6 @@ async def test_dispatch_isolates_failures_and_does_not_advance_cursor(
     assert log.last_licitacao_id is None
 
 
-@pytest.mark.asyncio
-async def test_resend_raises_on_empty_recipients() -> None:
-    resend = ResendClient(api_key="re_test")
-    with pytest.raises(ValueError):
-        await resend.send_email(to=[], subject="x", html="<p>hi</p>", from_="x@y.com")
-    await resend.aclose()
-
-
-@pytest.mark.asyncio
-async def test_resend_reraises_non_recoverable_as_resend_error() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(422, json={"message": "invalid"})
-
-    resend = ResendClient(
-        api_key="re_test",
-        client=httpx.AsyncClient(
-            base_url="https://mock.resend",
-            transport=httpx.MockTransport(handler),
-            headers={"Authorization": "Bearer re_test"},
-        ),
-    )
-    with pytest.raises(ResendError):
-        await resend.send_email(to=["x@y.com"], subject="x", html="<p>h</p>", from_="x@y.com")
-    await resend.aclose()
-
-
 # --- Router CRUD ---
 
 
@@ -294,14 +267,14 @@ async def test_dispatch_funciona_sem_chave_de_email(
     monkeypatch: pytest.MonkeyPatch,
     auth_headers: dict[str, str],
 ) -> None:
-    """Sem RESEND_API_KEY o despacho tem de funcionar igual.
+    """Sem chave de e-mail o despacho tem de funcionar igual.
 
     Este teste afirmava o CONTRARIO (503 sem a chave) ate 21/09/2026.
     Com o boletim virando notificacao na plataforma, exigir chave de
     email deixaria o despacho indisponivel por causa de uma
     dependencia que nao e mais usada.
     """
-    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    monkeypatch.delenv("MAIL_SENDER", raising=False)
     from app.core.config import get_settings
 
     get_settings.cache_clear()
@@ -369,10 +342,10 @@ async def test_dispatch_cria_notificacao_para_cada_destinatario(
 
 
 @pytest.mark.asyncio
-async def test_dispatch_nao_chama_resend(db_session: AsyncSession) -> None:
+async def test_dispatch_nao_envia_email(db_session: AsyncSession) -> None:
     """A garantia central do pedido: nenhum email sai daqui.
 
-    `dispatch_boletins` nem recebe mais um ResendClient -- passar um
+    `dispatch_boletins` nem recebe um cliente de e-mail -- passar um
     seria TypeError, o que torna impossivel religar o email sem mexer
     na assinatura de proposito.
     """
@@ -381,7 +354,7 @@ async def test_dispatch_nao_chama_resend(db_session: AsyncSession) -> None:
     from app.modules.licitacoes import boletins
 
     params = inspect.signature(boletins.dispatch_boletins).parameters
-    assert "resend" not in params
+    assert "mailer" not in params
 
 
 @pytest.mark.asyncio

@@ -5,8 +5,9 @@ Cobre:
 - CRUD do registro de afastamento (`Afastamento`) com `audit_log` em
   toda mutacao (LGPD/AGENTS.md). HTTP routers passam
   `actor=current_user.email`; workers/cron usam o default `system`.
-- Cron diario `dispatch_afastamento_alerts` que dispara emails para
-  o RH em duas categorias:
+- Cron diario `dispatch_afastamento_alerts` que dispara alertas para
+  o RH (notificacao na plataforma sempre; e-mail pelo Microsoft 365
+  quando configurado -- ver `notificacoes.alertas`) em duas categorias:
   - **DCB** (Data de Cessacao do Beneficio): janelas 30/15/7/0 dias.
     Se a empresa nao pedir prorrogacao antes do DCB, o INSS encerra
     o beneficio e o funcionario *deveria* voltar -- precisa de ASO
@@ -41,13 +42,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.audit.actors import SYSTEM as _AUDIT_ACTOR_SYSTEM
 from app.audit.models import AuditLog
 from app.core.config import get_settings
-from app.integrations.resend.client import ResendClient, ResendError
+from app.integrations.msgraph_mail.client import GraphMailClient
 from app.modules.dp_sesmt.models import (
     AFASTAMENTO_EM_ANDAMENTO,
     Afastamento,
     AfastamentoAlertaLog,
     Employee,
 )
+from app.modules.notificacoes.alertas import despachar_alerta
+from app.modules.notificacoes.models import CATEGORIA_DP
 
 logger = structlog.get_logger(__name__)
 
@@ -278,8 +281,9 @@ class AfastamentoAlertaResult:
     janela: str
     status: str  # "sent" | "skipped_already_sent" | "skipped_no_data" | "failed"
     recipients: list[str]
-    resend_message_id: str | None = None
     error_message: str | None = None
+    email_status: str | None = None  # enviado | falhou | nao_configurado
+    email_error: str | None = None
 
 
 @dataclass(slots=True)
@@ -354,9 +358,9 @@ def _render_alert_html(
     beneficio = escape(snapshot.beneficio_tipo or "-")
     nb = escape(snapshot.numero_beneficio or "-")
     target_str = target_date.strftime("%d/%m/%Y") if target_date else "-"
-    dashboard_url = (
-        f"{public_base_url.rstrip('/')}/rh/afastamentos/{snapshot.id}"
-    )
+    # Nao existe tela de detalhe por afastamento no web; a lista e o
+    # destino (o link antigo `/rh/afastamentos/{id}` dava 404).
+    dashboard_url = f"{public_base_url.rstrip('/')}/rh/afastamentos"
 
     return f"""
     <div style="font-family: Inter, Arial, sans-serif; color: #0f172a; max-width: 560px;">
@@ -403,14 +407,13 @@ def _render_alert_html(
 
 async def _send_one_alert(
     db: AsyncSession,
-    resend: ResendClient,
+    mailer: GraphMailClient | None,
     snapshot: _AfastamentoSnapshot,
     *,
     kind: str,
     janela: int,
     recipients: Sequence[str],
     public_base_url: str,
-    from_email: str,
     today: _date,
 ) -> AfastamentoAlertaResult:
     janela_str = f"{janela}d"
@@ -435,8 +438,8 @@ async def _send_one_alert(
         )
 
     target_label = "DCB" if kind == "dcb" else "Pericia"
-    subject = (
-        f"[INSS] {target_label} de {snapshot.employee_nome or 'colaborador'} "
+    titulo = (
+        f"{target_label} de {snapshot.employee_nome or 'colaborador'} "
         f"em {dias_restantes} dia(s)"
     )
     html = _render_alert_html(
@@ -446,15 +449,31 @@ async def _send_one_alert(
         public_base_url=public_base_url,
         dias_restantes=dias_restantes,
     )
+    # Sem CPF no corpo da notificacao (gravado por destinatario; o link
+    # leva a tela de afastamentos) -- LGPD, minimo necessario.
+    corpo = (
+        f"Afastamento INSS de {snapshot.employee_nome or 'colaborador'} "
+        f"({snapshot.beneficio_tipo or '-'}): "
+        f"{'DCB' if kind == 'dcb' else 'pericia medica'} em "
+        f"{target.strftime('%d/%m/%Y')}."
+    )
 
     try:
-        send_result = await resend.send_email(
-            from_=from_email,
-            to=list(recipients),
-            subject=subject,
-            html=html,
+        despacho = await despachar_alerta(
+            db,
+            recipients=recipients,
+            categoria=CATEGORIA_DP,
+            titulo=titulo,
+            corpo=corpo,
+            link="/rh/afastamentos",
+            chave_idempotencia=f"afastamento:{snapshot.id}:{kind}:{janela_str}",
+            email_subject=f"[INSS] {titulo}",
+            email_html=html,
+            mailer=mailer,
         )
-        message_id = send_result.get("id")
+        # Rele o log: `criar_notificacao` comita, e o objeto lido antes
+        # pode estar stale.
+        existing = await _get_existing_log(db, snapshot.id, kind, janela_str)
         log = existing or AfastamentoAlertaLog(
             afastamento_id=snapshot.id,
             kind=kind,
@@ -462,9 +481,10 @@ async def _send_one_alert(
             recipients=list(recipients),
         )
         log.recipients = list(recipients)
-        log.resend_message_id = message_id
         log.status = "sent"
         log.error_message = None
+        log.email_status = despacho.email_status
+        log.email_error = despacho.email_error
         if existing is None:
             db.add(log)
         await db.commit()
@@ -474,9 +494,10 @@ async def _send_one_alert(
             janela=janela_str,
             status="sent",
             recipients=list(recipients),
-            resend_message_id=message_id,
+            email_status=despacho.email_status,
+            email_error=despacho.email_error,
         )
-    except ResendError as exc:
+    except Exception as exc:  # noqa: BLE001
         await db.rollback()
         # Re-fetch existing log fora da sessao expirada -- pode estar stale.
         existing = await _get_existing_log(db, snapshot.id, kind, janela_str)
@@ -512,25 +533,24 @@ async def _send_one_alert(
 
 async def dispatch_afastamento_alerts(
     db: AsyncSession,
-    resend: ResendClient,
     *,
     recipients: Sequence[str],
+    mailer: GraphMailClient | None = None,
     public_base_url: str | None = None,
-    from_email: str | None = None,
     today: _date | None = None,
 ) -> AfastamentoAlertaSummary:
     """Itera afastamentos em andamento e dispara alertas de DCB / pericia.
 
     Filtra `status == em_andamento` no SQL. Para cada afastamento:
     - Calcula janela ativa de DCB e de pericia (se aplicavel).
-    - Pula se ja foi enviado para essa (afastamento, kind, janela).
-    - Envia email + grava log.
+    - Pula se ja foi despachado para essa (afastamento, kind, janela).
+    - Cria notificacao na plataforma (sempre) + e-mail pelo Microsoft
+      365 quando `mailer` vier configurado, e grava log.
 
-    Falhas isoladas: 1 envio com erro nao aborta os demais.
+    Falhas isoladas: 1 despacho com erro nao aborta os demais.
     """
     settings = get_settings()
     public_base_url = public_base_url or settings.public_base_url
-    from_email = from_email or settings.resend_from_email
     today = today or _date.today()
 
     if not recipients:
@@ -579,13 +599,12 @@ async def dispatch_afastamento_alerts(
         if janela is not None:
             r = await _send_one_alert(
                 db,
-                resend,
+                mailer,
                 snap,
                 kind="dcb",
                 janela=janela,
                 recipients=recipients,
                 public_base_url=public_base_url,
-                from_email=from_email,
                 today=today,
             )
             results.append(r)
@@ -601,13 +620,12 @@ async def dispatch_afastamento_alerts(
         if janela is not None:
             r = await _send_one_alert(
                 db,
-                resend,
+                mailer,
                 snap,
                 kind="pericia",
                 janela=janela,
                 recipients=recipients,
                 public_base_url=public_base_url,
-                from_email=from_email,
                 today=today,
             )
             results.append(r)

@@ -138,7 +138,6 @@ class BoletimLog(Base):
     )
     licitacoes_count: Mapped[int] = mapped_column(Integer)
     last_licitacao_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    resend_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="sent")
     error_message: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
@@ -340,11 +339,11 @@ class CertidaoEmpresa(Base):
 
 
 class CertidaoAlertaLog(Base):
-    """Registro de alertas enviados por janela (30d/15d/7d/0d).
+    """Registro de alertas despachados por janela (30d/15d/7d/0d).
 
-    Garante idempotencia: o cron de alertas diario nao reenvia o mesmo
-    email para a mesma janela da mesma certidao -- o UniqueConstraint
-    (certidao_id, janela) impoe isso no banco.
+    Garante idempotencia: o cron de alertas diario nao redespacha o
+    mesmo alerta para a mesma janela da mesma certidao -- o
+    UniqueConstraint (certidao_id, janela) impoe isso no banco.
     """
 
     __tablename__ = "certidoes_alertas_log"
@@ -360,9 +359,13 @@ class CertidaoAlertaLog(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     recipients: Mapped[list[str]] = mapped_column(JSON)
-    resend_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="sent")
     error_message: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # Canal adicional (Microsoft 365). `status` acima diz se o alerta foi
+    # despachado (notificacao criada); estes dois dizem so do e-mail:
+    # enviado | falhou | nao_configurado.
+    email_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    email_error: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("certidao_id", "janela", name="uq_certidao_alerta_janela"),

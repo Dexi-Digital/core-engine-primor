@@ -226,9 +226,12 @@ class EmployeeAsoAlertaLog(Base):
     a serializacao usada no service de certidoes.
 
     Status:
-    - `sent`: email entregue ao Resend (resend_message_id presente)
-    - `failed`: erro ao enviar (error_message presente). Cron tenta
-      novamente na proxima execucao -- a row e atualizada in-place.
+    - `sent`: alerta despachado -- notificacao criada na plataforma para
+      cada destinatario. O resultado do e-mail (canal adicional) fica em
+      `email_status`/`email_error` e NAO muda este status.
+    - `failed`: erro ao criar a notificacao (error_message presente).
+      Cron tenta novamente na proxima execucao -- a row e atualizada
+      in-place.
     """
 
     __tablename__ = "dp_aso_alertas_log"
@@ -244,11 +247,14 @@ class EmployeeAsoAlertaLog(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     recipients: Mapped[list[str]] = mapped_column(JSON)
-    resend_message_id: Mapped[str | None] = mapped_column(
-        String(128), nullable=True
-    )
     status: Mapped[str] = mapped_column(String(32), default="sent")
     error_message: Mapped[str | None] = mapped_column(
+        String(1024), nullable=True
+    )
+    # Canal adicional (Microsoft 365): enviado | falhou | nao_configurado.
+    # `status` acima e o do alerta (notificacao criada), nao do e-mail.
+    email_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    email_error: Mapped[str | None] = mapped_column(
         String(1024), nullable=True
     )
 
@@ -352,11 +358,14 @@ class AfastamentoAlertaLog(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     recipients: Mapped[list[str]] = mapped_column(JSON)
-    resend_message_id: Mapped[str | None] = mapped_column(
-        String(128), nullable=True
-    )
     status: Mapped[str] = mapped_column(String(32), default="sent")
     error_message: Mapped[str | None] = mapped_column(
+        String(1024), nullable=True
+    )
+    # Canal adicional (Microsoft 365): enviado | falhou | nao_configurado.
+    # `status` acima e o do alerta (notificacao criada), nao do e-mail.
+    email_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    email_error: Mapped[str | None] = mapped_column(
         String(1024), nullable=True
     )
 

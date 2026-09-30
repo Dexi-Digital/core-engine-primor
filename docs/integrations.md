@@ -18,7 +18,7 @@ Chaves de acesso vivem em variáveis de ambiente; **nunca no código**.
 | `comprasnet`    | ComprasNet (SIASG legacy)         | Scraping HTML| D (fallback) |
 | `licitacoes_e`  | Licitações-e (Banco do Brasil)    | Scraping+SSO | D (fallback) |
 | `conlicitacao`  | Conlicitação + Diários Oficiais   | Scraping     | D |
-| `resend`        | Resend (email transacional)       | API          | D |
+| `msgraph_mail`  | E-mail Microsoft 365 (Graph sendMail) | Graph API | A, C, D (alertas) |
 | `llm/anthropic` | Anthropic Messages (tool_use)     | API          | D (análise edital) |
 | `llm/openai`    | OpenAI Chat Completions (json_schema) | API      | D (análise edital) |
 | `whatsapp`      | WhatsApp Business API             | API          | A, E |
@@ -133,33 +133,72 @@ prevendo um flow Playwright futuro, mas qualquer operação real levanta
 `LicitacoesECredentialsRequired`. Callers devem fazer fallback para
 PNCP enquanto o flow não estiver implementado.
 
-## Resend (implementado)
+## Alertas: notificação na plataforma + e-mail Microsoft 365 (implementado)
 
-Base URL: `https://api.resend.com`. Usado pelo Módulo D para disparar
-**boletins por email 3x/dia** (ver `app/modules/licitacoes/boletins.py`).
+O Resend foi **cortado em 30/09/2026**. Os quatro alertas de vencimento
+passam por um caminho único, `app/modules/notificacoes/alertas.py`
+(`despachar_alerta`):
 
-Env vars:
+1. **Sempre** cria uma notificação na plataforma (`notificacoes`) para
+   cada destinatário. Não depende de serviço externo — os alertas
+   funcionam hoje, sem nenhuma permissão de e-mail.
+2. **Adicionalmente** envia e-mail pelo Microsoft 365 da Primor quando o
+   envio está configurado (`MAIL_SENDER` + credenciais Graph).
+3. Falha de e-mail **não** derruba o alerta: ele conta como despachado
+   assim que a notificação existe. O resultado do e-mail fica nas colunas
+   `email_status` (`enviado` | `falhou` | `nao_configurado`) e
+   `email_error` do log de cada fluxo (`certidoes_alertas_log`,
+   `dp_aso_alertas_log`, `dp_afastamentos_alertas_log`,
+   `contratos_alertas_log`) e aparece em `results[].email_status` dos
+   endpoints de disparo manual.
 
-| Variável              | Obrigatória | Descrição                                    |
-|-----------------------|-------------|----------------------------------------------|
-| `RESEND_API_KEY`      | sim         | Chave `re_…` emitida em https://resend.com/api-keys |
-| `RESEND_FROM_EMAIL`   | não         | Default: `Motor Central <boletins@motorcentral.dev>` (domínio precisa estar verificado na Resend). |
-| `PUBLIC_BASE_URL`     | não         | Default: `http://localhost:3000`. URL pública do dashboard (usada no link "Abrir no Motor Central" no digest). |
+A idempotência continua a de cada fluxo (log com status `sent` por
+janela); a notificação ainda usa `chave_idempotencia`
+(`certidao:{id}:{janela}`, `aso:{employee_id}:{janela}`,
+`afastamento:{id}:{kind}:{janela}`, `contrato:{id}:{janela}`) para um
+reprocessamento não duplicar o aviso no sino. Os boletins de licitação
+já eram só notificação desde 21/09/2026 e não mandam e-mail.
 
-Endpoint usado:
-- `POST /emails` — envia um email transacional (`from`, `to[]`, `subject`, `html`).
+Destinatários (CSV, por alerta): `CERTIDOES_ALERT_EMAILS`,
+`ASO_ALERT_EMAILS`, `INSS_ALERT_EMAILS`, `CONTRATOS_ALERT_EMAILS`. A
+notificação é gravada por e-mail (`destinatario`); o usuário a vê no
+sino quando loga com o mesmo e-mail.
 
-O cliente faz retry com backoff exponencial em 429/5xx (tenacity, 4 tentativas,
-max 8s) e levanta `ResendError` em 4xx não-recuperáveis (ex: domínio não
-verificado). Chamada feita dentro de `ResendClient.send_email(...)`.
+### E-mail: `app/integrations/msgraph_mail/client.py`
 
-Cadência: `worker/main.py` configura `celery_app.conf.beat_schedule` para
-disparar os jobs abaixo via Resend (America/Sao_Paulo). Horários
-escalonados de propósito para distribuir o burst no provedor:
+`GraphMailClient` faz `POST https://graph.microsoft.com/v1.0/users/{MAIL_SENDER}/sendMail`
+com `saveToSentItems: true`, autenticando com o **mesmo app do Entra do
+SharePoint** (client_credentials). Não existe mock que finge enviar: sem
+configuração, `build_mail_client` devolve `None` e nenhum envio é tentado.
+
+| Variável                 | Obrigatória | Descrição |
+|--------------------------|-------------|-----------|
+| `MS_GRAPH_TENANT_ID`     | sim (p/ e-mail) | Mesmo tenant do OneDrive/SharePoint. |
+| `MS_GRAPH_CLIENT_ID`     | sim (p/ e-mail) | Mesmo app do Entra. |
+| `MS_GRAPH_CLIENT_SECRET` | sim (p/ e-mail) | Mesmo segredo. |
+| `MAIL_SENDER`            | sim (p/ e-mail) | Caixa de sistema remetente: `sistemas@primorsolucoes.srv.br`. Vazio = sem e-mail. |
+| `PUBLIC_BASE_URL`        | não | URL pública do web, usada nos links do e-mail. |
+
+**Pendência do TI da Primor (Wanderson) — ainda não concedida:** atribuir
+ao app do Entra a role RBAC do Exchange **"Application Mail.Send"** com
+escopo **restrito à caixa `sistemas@primorsolucoes.srv.br`** (RBAC for
+Applications no Exchange Online: service principal + management scope
+que filtra só essa caixa + `New-ManagementRoleAssignment -Role
+"Application Mail.Send"`). **Não** conceder a permissão de aplicação
+`Mail.Send` no Entra (API permissions): ela vale para todas as caixas do
+tenant e permitiria ao app enviar como qualquer pessoa.
+
+Enquanto a role não existir, o Graph responde **403** e o client levanta
+`GraphMailPermissaoNegada` com mensagem explícita; o alerta segue valendo
+como notificação e o log grava `email_status=falhou`. O painel de
+integrações da home mostra "E-mail (Microsoft 365)" como pendente quando
+`MAIL_SENDER`/credenciais não estão configurados.
+
+Cadência (`worker/main.py`, America/Sao_Paulo):
 
 | Job                          | Task Celery                                          | Horário            |
 |-------------------------------|-------------------------------------------------------|---------------------|
-| Boletins de licitação          | `worker.tasks.licitacoes.dispatch_boletins`            | 07h, 13h, 19h        |
+| Boletins de licitação (só notificação) | `worker.tasks.licitacoes.dispatch_boletins`  | 07h, 13h, 19h        |
 | Alertas de vencimento de certidões (D.6) | `worker.tasks.licitacoes.dispatch_certidao_alerts` | 08h00               |
 | Alertas de vencimento de ASO (A.2) | `worker.tasks.dp_sesmt.dispatch_aso_alerts`         | 08h05               |
 | Alertas de DCB/perícia de afastamentos (D.4) | `worker.tasks.dp_sesmt.dispatch_afastamento_alerts` | 08h10          |

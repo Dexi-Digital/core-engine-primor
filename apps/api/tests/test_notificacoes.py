@@ -1,6 +1,6 @@
 """Notificacoes na plataforma -- substituem o email dos boletins.
 
-Ate 21/09/2026 todo aviso do sistema saia por email (Resend): boletins
+Ate 21/09/2026 todo aviso do sistema saia por email: boletins
 de licitacao, alertas de certidao, ASO e afastamento. O cliente pediu
 que o boletim parasse de mandar email e virasse notificacao dentro da
 plataforma -- e nao havia nenhuma peca de notificacao no projeto.

@@ -32,18 +32,13 @@ async def _run_contrato_alerts(
     recipients: list[str] | None,
 ) -> dict[str, object]:
     try:
-        from app.core.config import get_settings
         from app.core.db import SessionLocal
-        from app.integrations.resend.client import ResendClient
+        from app.integrations.msgraph_mail.client import abrir_mail_client
         from app.modules.financeiro_contratos.alerts import (
             dispatch_contrato_alerts as _dispatch,
         )
     except ImportError as exc:  # pragma: no cover
         return {"error": f"API package not available in worker: {exc}"}
-
-    settings = get_settings()
-    if not settings.resend_api_key:
-        return {"error": "RESEND_API_KEY not configured; skipping contrato alerts"}
 
     if recipients is None:
         env_val = os.getenv("CONTRATOS_ALERT_EMAILS", "").strip()
@@ -51,12 +46,10 @@ async def _run_contrato_alerts(
     if not recipients:
         return {"error": "CONTRATOS_ALERT_EMAILS not configured; nothing to send"}
 
-    async with SessionLocal() as db:
-        resend = ResendClient(api_key=settings.resend_api_key)
-        try:
-            summary = await _dispatch(db, resend, recipients=recipients)
-        finally:
-            await resend.aclose()
+    # Notificacao na plataforma sempre; e-mail (Microsoft 365) so quando
+    # configurado -- a falta de e-mail nao pula mais o alerta.
+    async with SessionLocal() as db, abrir_mail_client() as mailer:
+        summary = await _dispatch(db, recipients=recipients, mailer=mailer)
     return {
         "total_contratos": summary.total_contratos,
         "sent": summary.sent,

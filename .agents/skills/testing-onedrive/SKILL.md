@@ -125,7 +125,7 @@ Expect 204; subsequent GET returns 404 with `error.code=itemNotFound`.
 - **MFA forced on first login**: tenant requires Microsoft Authenticator
   push. Setup is a one-time human-in-the-loop. After client_credentials
   flow is working, no MFA prompts ever again.
-- **`.env` parsing**: if `RESEND_FROM_EMAIL` contains spaces/angle brackets,
+- **`.env` parsing**: if any value contains spaces/angle brackets,
   `source apps/api/.env` will fail. Export only what you need.
 - **`CORS_ORIGINS`**: must be valid JSON for Pydantic settings
   (`'["http://localhost:3000"]'`).

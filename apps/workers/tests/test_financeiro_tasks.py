@@ -35,7 +35,6 @@ def test_sem_env_retorna_erro_explicativo(monkeypatch) -> None:
     """
     pytest.importorskip("app", reason="apps/api nao esta no PYTHONPATH neste runner")
     monkeypatch.delenv("CONTRATOS_ALERT_EMAILS", raising=False)
-    monkeypatch.setenv("RESEND_API_KEY", "test-key")
     from worker.tasks.financeiro import dispatch_contrato_alerts
 
     result = dispatch_contrato_alerts.run()

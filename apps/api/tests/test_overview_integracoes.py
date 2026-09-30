@@ -1,6 +1,6 @@
 """Painel de integracoes da home: "configurado" vem das credenciais.
 
-Ate 29/09/2026 OneDrive, Document AI e Resend eram `configured: True`
+Ate 29/09/2026 OneDrive, Document AI e o e-mail eram `configured: True`
 fixo, o Onvio era "Aguardando credencial" fixo e o TOTVS aparecia como
 Protheus (o ERP e RM). O painel afirmava o que nao sabia.
 """
@@ -21,7 +21,7 @@ CREDENCIAIS = (
     "GOOGLE_DOCUMENTAI_CREDENTIALS_JSON",
     "GCP_PROJECT_ID",
     "DOCUMENTAI_PROCESSOR_ID",
-    "RESEND_API_KEY",
+    "MAIL_SENDER",
     "ONVIO_CLIENT_ID",
     "ONVIO_CLIENT_SECRET",
     "ONVIO_INTEGRATION_KEY",
@@ -48,7 +48,7 @@ async def test_sem_credencial_nada_aparece_configurado(
     api_client: AsyncClient, auth_headers: dict, sem_credenciais
 ) -> None:
     painel = await _painel(api_client, auth_headers)
-    for key in ("onedrive", "documentai", "resend", "dominio"):
+    for key in ("onedrive", "documentai", "email_m365", "dominio"):
         assert painel[key]["configured"] is False, key
         assert painel[key]["status"] == "pending", key
     assert "Protheus" not in painel["totvs"]["descr"]
@@ -64,3 +64,32 @@ async def test_onvio_com_credencial_mas_envio_desligado(
     assert onvio["configured"] is True
     assert onvio["status"] == "idle"
     assert "ONVIO_ALLOW_SEND" in onvio["last_event"]
+
+
+async def test_email_m365_pendente_explica_que_alertas_viram_notificacao(
+    api_client: AsyncClient, auth_headers: dict, sem_credenciais
+) -> None:
+    painel = await _painel(api_client, auth_headers)
+    assert "resend" not in painel
+    email = painel["email_m365"]
+    assert email["label"] == "E-mail (Microsoft 365)"
+    assert email["status"] == "pending"
+    assert email["configured"] is False
+    assert "notificação na plataforma" in email["last_event"]
+
+
+async def test_email_m365_configurado_com_graph_e_caixa_remetente(
+    api_client: AsyncClient, auth_headers: dict, sem_credenciais
+) -> None:
+    for nome in ("MS_GRAPH_TENANT_ID", "MS_GRAPH_CLIENT_ID", "MS_GRAPH_CLIENT_SECRET"):
+        sem_credenciais.setenv(nome, "x")
+    # So credencial Graph (sem caixa remetente) ainda nao e "configurado".
+    get_settings.cache_clear()
+    assert (await _painel(api_client, auth_headers))["email_m365"]["configured"] is False
+
+    sem_credenciais.setenv("MAIL_SENDER", "sistemas@primor.example")
+    get_settings.cache_clear()
+    email = (await _painel(api_client, auth_headers))["email_m365"]
+    assert email["configured"] is True
+    assert email["status"] == "idle"
+    assert "sistemas@primor.example" in email["last_event"]

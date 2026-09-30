@@ -8,11 +8,13 @@ Domınio operacional:
   expirar, o pregao e perdido.
 - Este modulo registra cada documento (`CertidaoEmpresa`), expoe CRUD,
   calcula o status atual (vigente / vencendo / vencido) e dispara
-  alertas por email (Resend) em janelas pre-definidas (30/15/7/0 dias).
+  alertas em janelas pre-definidas (30/15/7/0 dias): notificacao na
+  plataforma sempre, e-mail pelo Microsoft 365 quando configurado
+  (`app.modules.notificacoes.alertas`).
 
 Os alertas sao idempotentes: a tabela `CertidaoAlertaLog` tem unique
 constraint `(certidao_id, janela)` -- o cron diario do worker nunca
-manda o mesmo email duas vezes.
+despacha o mesmo alerta duas vezes.
 
 Atestados CAT *podem* nao ter validade (sao perenes); nesse caso
 `validade=None` e o cron os ignora.
@@ -33,9 +35,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.audit.actors import SYSTEM as _AUDIT_ACTOR_SYSTEM
 from app.audit.models import AuditLog
 from app.core.config import get_settings
-from app.integrations.resend.client import ResendClient, ResendError
+from app.integrations.msgraph_mail.client import GraphMailClient
 from app.modules.licitacoes.models import CertidaoAlertaLog, CertidaoEmpresa
 from app.modules.licitacoes.storage import EditaisStorage
+from app.modules.notificacoes.alertas import despachar_alerta
+from app.modules.notificacoes.models import CATEGORIA_CERTIDOES
 
 logger = logging.getLogger(__name__)
 
@@ -149,8 +153,9 @@ class AlertaResult:
     janela: str
     status: str  # "sent" | "skipped_already_sent" | "skipped_no_validade" | "failed"
     recipients: list[str]
-    resend_message_id: str | None = None
     error_message: str | None = None
+    email_status: str | None = None  # enviado | falhou | nao_configurado
+    email_error: str | None = None
 
 
 @dataclass(slots=True)
@@ -437,11 +442,10 @@ def render_alerta_html(
 
 async def dispatch_expiration_alerts(
     db: AsyncSession,
-    resend: ResendClient,
     *,
     recipients: Sequence[str],
+    mailer: GraphMailClient | None = None,
     public_base_url: str | None = None,
-    from_email: str | None = None,
     today: _date | None = None,
 ) -> AlertaSummary:
     """Itera todas as certidoes e dispara alertas de vencimento.
@@ -449,15 +453,18 @@ async def dispatch_expiration_alerts(
     Para cada certidao:
     - Calcula `janela` ativa (None se ja vencida, sem validade, ou ainda
       muito longe da janela mais larga (30d)).
-    - Verifica se ja foi enviado para essa (certidao_id, janela). Se sim,
-      pula (idempotente).
-    - Se houver janela ativa e nao houver log, envia o email e registra.
+    - Verifica se ja foi despachado para essa (certidao_id, janela). Se
+      sim, pula (idempotente).
+    - Se houver janela ativa e nao houver log `sent`, cria notificacao
+      na plataforma para cada destinatario (sempre) e manda e-mail pelo
+      Microsoft 365 se `mailer` vier configurado. O alerta conta como
+      despachado assim que a notificacao existe; falha de e-mail fica em
+      `email_status`/`email_error` do log. Ver `notificacoes.alertas`.
 
-    Falhas isoladas: 1 envio que falha nao aborta os demais.
+    Falhas isoladas: 1 despacho que falha nao aborta os demais.
     """
     settings = get_settings()
     public_base_url = public_base_url or settings.public_base_url
-    from_email = from_email or settings.resend_from_email
     today = today or _date.today()
 
     if not recipients:
@@ -537,26 +544,33 @@ async def dispatch_expiration_alerts(
         tipo_label = dict(TIPOS_CERTIDAO).get(certidao.tipo, certidao.tipo)
         validade_str = certidao.validade.strftime("%d/%m/%Y")
         if dias_restantes == 0:
-            subject = f"[Motor Central] VENCIDA hoje: {tipo_label} ({validade_str})"
+            titulo = f"VENCIDA hoje: {tipo_label} ({validade_str})"
         else:
-            subject = (
-                f"[Motor Central] Certidao vence em {dias_restantes} dia(s): "
+            titulo = (
+                f"Certidao vence em {dias_restantes} dia(s): "
                 f"{tipo_label} ({validade_str})"
             )
-
-        # Carrega log existente uma unica vez antes de enviar -- usado tanto
-        # no branch de erro (UPDATE para nao violar UniqueConstraint) quanto
-        # no branch de sucesso (UPDATE failed -> sent).
-        existing_log = await _get_existing_log(db, certidao.id, janela_str)
+        corpo = (
+            f"{tipo_label} -- CNPJ {certidao.empresa_cnpj}, "
+            f"numero {certidao.numero or '-'}, "
+            f"orgao emissor {certidao.orgao_emissor or '-'}. "
+            f"Validade: {validade_str}."
+        )
 
         try:
-            resp = await resend.send_email(
-                to=list(recipients),
-                subject=subject,
-                html=html,
-                from_=from_email,
+            despacho = await despachar_alerta(
+                db,
+                recipients=recipients,
+                categoria=CATEGORIA_CERTIDOES,
+                titulo=titulo,
+                corpo=corpo,
+                link="/licitacoes/certidoes",
+                chave_idempotencia=f"certidao:{certidao.id}:{janela_str}",
+                email_subject=f"[Motor Central] {titulo}",
+                email_html=html,
+                mailer=mailer,
             )
-        except (ResendError, Exception) as exc:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "alerta certidao=%s janela=%s falhou: %s",
                 certidao.id,
@@ -565,6 +579,8 @@ async def dispatch_expiration_alerts(
                 exc_info=False,
             )
             error_msg = str(exc)[:1024]
+            await db.rollback()
+            existing_log = await _get_existing_log(db, certidao.id, janela_str)
             if existing_log is None:
                 db.add(
                     CertidaoAlertaLog(
@@ -582,7 +598,7 @@ async def dispatch_expiration_alerts(
                 existing_log.status = "failed"
                 existing_log.error_message = error_msg
             # Commit per-certidao para que 1 falha em uma certidao nao
-            # rollback as ja enviadas com sucesso nesta rodada.
+            # rollback as ja despachadas com sucesso nesta rodada.
             try:
                 await db.commit()
             except Exception:  # noqa: BLE001
@@ -604,23 +620,25 @@ async def dispatch_expiration_alerts(
             )
             continue
 
-        message_id = resp.get("id") if isinstance(resp, dict) else None
+        existing_log = await _get_existing_log(db, certidao.id, janela_str)
         if existing_log is None:
             db.add(
                 CertidaoAlertaLog(
                     certidao_id=certidao.id,
                     janela=janela_str,
                     recipients=list(recipients),
-                    resend_message_id=message_id,
                     status="sent",
+                    email_status=despacho.email_status,
+                    email_error=despacho.email_error,
                 )
             )
         else:
             # Retry bem-sucedido apos falha previa -- promove o log para sent.
             existing_log.recipients = list(recipients)
-            existing_log.resend_message_id = message_id
             existing_log.status = "sent"
             existing_log.error_message = None
+            existing_log.email_status = despacho.email_status
+            existing_log.email_error = despacho.email_error
         try:
             await db.commit()
         except Exception:  # noqa: BLE001
@@ -648,7 +666,8 @@ async def dispatch_expiration_alerts(
                 janela=janela_str,
                 status="sent",
                 recipients=list(recipients),
-                resend_message_id=message_id,
+                email_status=despacho.email_status,
+                email_error=despacho.email_error,
             )
         )
 

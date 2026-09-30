@@ -65,8 +65,10 @@ class ContratoAlertaResult(BaseModel):
     janela: str
     status: str
     recipients: list[str]
-    resend_message_id: str | None = None
     error_message: str | None = None
+    # Canal adicional (Microsoft 365): enviado | falhou | nao_configurado.
+    email_status: str | None = None
+    email_error: str | None = None
 
 
 class ContratoAlertaSummary(BaseModel):

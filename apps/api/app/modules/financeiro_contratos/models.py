@@ -119,9 +119,13 @@ class ContratoAlertaLog(Base):
         DateTime(timezone=True), server_default=func.now()
     )
     recipients: Mapped[list[str]] = mapped_column(JSON)
-    resend_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     status: Mapped[str] = mapped_column(String(32), default="sent")
     error_message: Mapped[str | None] = mapped_column(String(1024), nullable=True)
+    # Canal adicional (Microsoft 365). `status` acima diz se o alerta foi
+    # despachado (notificacao criada); estes dois dizem so do e-mail:
+    # enviado | falhou | nao_configurado.
+    email_status: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    email_error: Mapped[str | None] = mapped_column(String(1024), nullable=True)
 
     __table_args__ = (
         UniqueConstraint("contrato_id", "janela", name="uq_contrato_alerta_janela"),
