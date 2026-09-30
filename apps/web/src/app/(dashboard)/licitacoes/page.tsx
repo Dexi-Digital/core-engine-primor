@@ -75,7 +75,7 @@ async function iniciarRecargaPncp(formData: FormData): Promise<void> {
 async function iniciarCargaResultados(formData: FormData): Promise<void> {
   "use server";
   const dias = Number(formData.get("dias") ?? 180);
-  const max = Number(formData.get("max_licitacoes") ?? 200);
+  const max = Number(formData.get("max_licitacoes") ?? 500);
   const uf = String(formData.get("uf_resultados") ?? "").trim().toUpperCase();
   const params = new URLSearchParams({ dias: String(dias), max_licitacoes: String(max) });
   if (uf) params.set("uf", uf);
@@ -201,17 +201,17 @@ export default async function LicitacoesPage(props: {
         <form action={iniciarCargaResultados} className="space-y-3 rounded-xl border border-slate-200 bg-white p-4">
           <div>
             <h2 className="text-sm font-semibold">Popular inteligência comercial</h2>
-            <p className="mt-1 text-xs text-slate-500">Alimenta concorrentes e geotargeting nos painéis. Consulta somente licitações já captadas — por padrão, até 200 publicadas nos últimos 180 dias. Eficiência depende de registrar decisões na triagem.</p>
+            <p className="mt-1 text-xs text-slate-500">Alimenta concorrentes e geotargeting nos painéis. Consulta somente licitações já captadas — por padrão, até 500 de MG publicadas nos últimos 180 dias (a UF precisa ser a mesma filtrada nos painéis). Eficiência depende de registrar decisões na triagem.</p>
           </div>
           <div className="flex flex-wrap items-end gap-3">
             <label className="flex flex-col text-xs text-slate-600">Publicações dos últimos dias
               <input type="number" name="dias" min={1} max={365} defaultValue={180} required className="mt-1 w-24 rounded border border-slate-300 px-2 py-1.5" />
             </label>
             <label className="flex flex-col text-xs text-slate-600">Limite de licitações
-              <input type="number" name="max_licitacoes" min={1} max={5000} defaultValue={200} required className="mt-1 w-24 rounded border border-slate-300 px-2 py-1.5" />
+              <input type="number" name="max_licitacoes" min={1} max={5000} defaultValue={500} required className="mt-1 w-24 rounded border border-slate-300 px-2 py-1.5" />
             </label>
-            <label className="flex flex-col text-xs text-slate-600">UF (opcional)
-              <input name="uf_resultados" maxLength={2} placeholder="Todas" className="mt-1 w-20 rounded border border-slate-300 px-2 py-1.5 uppercase" />
+            <label className="flex flex-col text-xs text-slate-600">UF (vazio = todas)
+              <input name="uf_resultados" maxLength={2} defaultValue="MG" placeholder="Todas" className="mt-1 w-20 rounded border border-slate-300 px-2 py-1.5 uppercase" />
             </label>
             <button type="submit" className="rounded bg-slate-900 px-3 py-1.5 text-xs font-medium text-white hover:bg-slate-700">Enfileirar análise</button>
           </div>

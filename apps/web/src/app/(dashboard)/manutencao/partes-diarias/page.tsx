@@ -179,8 +179,10 @@ export default async function PartesDiariasPage({
       <header>
         <h1 className="text-xl font-semibold">Partes diárias (OCR)</h1>
         <p className="text-sm text-slate-500">
-          Upload de PDF/foto da parte diária → OCR via Google Document AI →
-          extração de operador, obra, equipamento, horímetros e KM.
+          Upload de PDF/foto da parte diária → leitura automática (OCR) →
+          extração de operador, obra, equipamento, horímetros e KM. Enquanto
+          o OCR da Microsoft não é liberado, a leitura roda em modo simulado:
+          revise os campos antes de aprovar.
         </p>
       </header>
 

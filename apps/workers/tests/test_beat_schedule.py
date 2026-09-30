@@ -138,3 +138,14 @@ def test_alerta_de_experiencia_agendado_apos_afastamentos() -> None:
     assert cfg["task"] == "worker.tasks.dp_sesmt.dispatch_experiencia_alerts"
     assert cfg["schedule"].hour == {8}
     assert cfg["schedule"].minute == {20}
+
+
+def test_resultados_semanal_cobre_a_uf_e_a_janela_dos_paineis():
+    """Com os defaults da task (30 dias, Brasil, 200) a carga terminava em
+    SUCCESS e o painel de MG seguia vazio: licitacao recente quase nunca
+    esta homologada, e as 200 mais recentes do pais quase nao sao de MG."""
+    from worker.main import celery_app
+
+    kwargs = celery_app.conf.beat_schedule["licitacoes-resultados-semanal"]["kwargs"]
+    assert kwargs["uf"] == "MG"
+    assert kwargs["dias"] >= 180

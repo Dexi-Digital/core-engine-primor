@@ -263,8 +263,8 @@ export default async function ManutencaoPage() {
           },
           {
             label: "Leitura automática de partes diárias manuscritas (fotos).",
-            status: "mock",
-            nota: "Acessos de manutenção/frota informados como concedidos em 26/09. Validar se incluem Document AI e configurar o OCR neste ambiente.",
+            status: "bloqueado",
+            nota: "Upload, revisão e cálculo de consumo funcionam; a leitura automática ainda roda em modo simulado. Decisão de 30/09: usar o OCR da Microsoft (Azure AI Document Intelligence) no lugar do Google. Depende da aprovação do custo e de a TI da Primor criar o recurso; o adaptador Microsoft será feito em seguida.",
           },
           {
             label: "Consulta de IPVA, CRLV e multas.",
@@ -274,7 +274,7 @@ export default async function ManutencaoPage() {
           {
             label: "Cruzamento do abastecimento apontado × nota fiscal.",
             status: "nao_iniciado",
-            nota: "Os apontamentos existem, mas a leitura das notas no SharePoint e o vínculo com equipamento ainda não foram implementados. Próximo passo: validar pastas, arquivos e campos disponíveis nos acessos concedidos; depois construir e testar o cruzamento.",
+            nota: "Acesso ao SharePoint de Manutenção confirmado em 30/09: a planilha em uso é \"Controle de Combustivel - 00M\" (pasta Controle de Abastecimento). Para começar faltam: confirmação da equipe de frota de que ela é a oficial e a definição da fonte das notas de combustível (XML de NF-e ou lançamentos do TOTVS).",
           },
           {
             label: "Sistema 90 para manutenção e frota.",

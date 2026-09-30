@@ -215,7 +215,7 @@ export default async function FinanceiroPage() {
           {
             label: "OCR de notas fiscais em PDF escaneado.",
             status: "nao_iniciado",
-            nota: "Não há ainda um fluxo de OCR financeiro implementado. O Google Document AI usado em partes diárias não configura, por si só, a leitura de notas fiscais; validar credencial, processador e se esta entrega consta no orçamento.",
+            nota: "Não há ainda um fluxo de OCR financeiro implementado. O OCR previsto para partes diárias (Microsoft Azure) não configura, por si só, a leitura de notas fiscais; validar credencial, processador e se esta entrega consta no orçamento.",
           },
           {
             label: "Cruzamento combustível × alimentação × aluguel × descontos em medição.",
