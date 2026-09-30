@@ -22,6 +22,11 @@ from celery.signals import (
     worker_ready,
 )
 
+# Precisa vir antes de qualquer import de `app.core.db` (as tasks importam
+# dentro da funcao): cada task usa `asyncio.run`, e conexao de pool nao
+# sobrevive a troca de event loop. Ver comentario em `app/core/db.py`.
+os.environ.setdefault("DB_NULLPOOL", "1")
+
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 
 celery_app = Celery(

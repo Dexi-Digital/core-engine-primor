@@ -32,6 +32,14 @@ _engine_kwargs: dict[str, object] = {"echo": False, "future": True}
 if os.getenv("VERCEL"):
     _engine_kwargs["poolclass"] = NullPool
     _engine_kwargs["connect_args"] = {"statement_cache_size": 0}
+# O worker Celery roda cada task com `asyncio.run`, ou seja, um event
+# loop novo por task no mesmo processo. Conexao asyncpg devolvida ao
+# QueuePool fica presa ao loop que a abriu: a task SEGUINTE no mesmo
+# processo quebra com "attached to a different loop" / "another
+# operation is in progress". Sem pool, cada sessao abre e fecha a sua.
+# `worker.main` liga isto antes de qualquer import de `app`.
+elif os.getenv("DB_NULLPOOL"):
+    _engine_kwargs["poolclass"] = NullPool
 
 engine = create_async_engine(_database_url, **_engine_kwargs)
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
